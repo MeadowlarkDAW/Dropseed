@@ -1,22 +1,27 @@
 use std::cell::UnsafeCell;
 use std::marker::PhantomPinned;
 use std::os::raw::{c_char, c_void};
+use std::path::PathBuf;
 use std::ptr::{self, NonNull};
 use std::sync::Arc;
-use std::{error::Error, path::PathBuf};
 
 use basedrop::Shared;
 use clap_sys::host::clap_host;
 use clap_sys::plugin::clap_plugin;
+use clap_sys::process::clap_process;
 use clap_sys::version::CLAP_VERSION;
 use raw_window_handle::RawWindowHandle;
 use rusty_daw_core::SampleRate;
+use smallvec::SmallVec;
 
+use crate::audio_buffer::ClapAudioBuffer;
 use crate::engine::RustyDAWEngine;
+use crate::error::{ClapPluginActivationError, ClapPluginThreadError};
 use crate::info::HostInfo;
+use crate::process::{ClapAudioPorts, ProcessStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum PluginState {
+pub enum PluginState {
     // The plugin is inactive, only the main thread uses it
     Inactive,
 
@@ -38,7 +43,7 @@ enum PluginState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum ThreadType {
+pub enum ThreadState {
     Unknown,
     MainThread,
     AudioThread,
@@ -89,8 +94,11 @@ impl ClapPluginInstanceShared {
                 is_gui_visible: false,
                 schedule_process: false,
                 schedule_restart: false,
+                schedule_deactivate: false,
                 state: PluginState::Inactive,
                 raw_plugin: None,
+                audio_ports: ClapAudioPorts::new(SmallVec::new(), SmallVec::new()),
+                thread_state: ThreadState::MainThread,
                 _phantom_pinned: PhantomPinned::default(),
             }),
         );
@@ -109,11 +117,29 @@ impl ClapPluginInstanceShared {
         Self { shared }
     }
 
-    pub fn borrow(&self) -> &ClapPluginInstance {
+    pub fn as_main_thread<'a>(
+        &'a mut self,
+    ) -> Result<ClapPluginMainThread<'a>, ClapPluginThreadError> {
+        let plugin = self.borrow_mut();
+        plugin.check_for_main_thread()?;
+
+        Ok(ClapPluginMainThread { plugin })
+    }
+
+    pub fn as_audio_thread<'a>(
+        &'a mut self,
+    ) -> Result<ClapPluginAudioThread<'a>, ClapPluginThreadError> {
+        let plugin = self.borrow_mut();
+        plugin.check_for_audio_thread()?;
+
+        Ok(ClapPluginAudioThread { plugin })
+    }
+
+    fn borrow(&self) -> &ClapPluginInstance {
         unsafe { &*(self.shared.get()) }
     }
 
-    pub fn borrow_mut(&mut self) -> &mut ClapPluginInstance {
+    fn borrow_mut(&mut self) -> &mut ClapPluginInstance {
         unsafe { &mut *(self.shared.get()) }
     }
 }
@@ -128,58 +154,86 @@ struct ClapPluginInstance {
     is_gui_visible: bool,
     schedule_process: bool,
     schedule_restart: bool,
+    schedule_deactivate: bool,
 
     state: PluginState,
 
     raw_plugin: Option<NonNull<clap_plugin>>,
 
+    audio_ports: ClapAudioPorts,
+
+    thread_state: ThreadState,
+
     _phantom_pinned: PhantomPinned,
+}
+
+impl ClapPluginInstance {
+    fn is_main_thread(&self) -> bool {
+        self.thread_state == ThreadState::MainThread
+    }
+
+    fn is_audio_thread(&self) -> bool {
+        self.thread_state == ThreadState::AudioThread
+    }
+
+    fn check_for_main_thread(&self) -> Result<(), ClapPluginThreadError> {
+        if self.thread_state != ThreadState::MainThread {
+            Err(ClapPluginThreadError {
+                requested_state: ThreadState::MainThread,
+                actual_state: self.thread_state,
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_for_audio_thread(&self) -> Result<(), ClapPluginThreadError> {
+        if self.thread_state != ThreadState::AudioThread {
+            Err(ClapPluginThreadError {
+                requested_state: ThreadState::AudioThread,
+                actual_state: self.thread_state,
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    #[inline]
+    fn is_plugin_active(&self) -> bool {
+        match self.state {
+            PluginState::Inactive => false,
+            PluginState::InactiveWithError => false,
+            _ => true,
+        }
+    }
 }
 
 unsafe impl Send for ClapPluginInstance {}
 unsafe impl Sync for ClapPluginInstance {}
 
-pub(crate) struct ClapPluginMainThread {
-    shared: ClapPluginInstanceShared,
+pub(crate) struct ClapPluginMainThread<'a> {
+    plugin: &'a mut ClapPluginInstance,
 }
 
-impl ClapPluginMainThread {
-    pub fn new(
-        info: Arc<HostInfo>,
-        coll_handle: &basedrop::Handle,
-    ) -> (ClapPluginMainThread, ClapPluginAudioThread) {
-        let shared = ClapPluginInstanceShared::new(info, coll_handle);
-
-        (
-            ClapPluginMainThread {
-                shared: shared.clone(),
-            },
-            ClapPluginAudioThread { shared },
-        )
-    }
-
+impl<'a> ClapPluginMainThread<'a> {
     pub fn load<P: Into<PathBuf>>(&mut self, path: P) -> Result<(), ()> {
-        let plugin = self.shared.borrow_mut();
-
-        if plugin.is_loaded {
+        if self.plugin.is_loaded {
             self.unload();
         }
 
         todo!()
     }
 
-    pub fn unload(&mut self) {
-        let plugin = self.shared.borrow_mut();
-
-        if !plugin.is_loaded {
-            return;
+    pub fn unload(&mut self) -> Result<(), ()> {
+        if !self.plugin.is_loaded {
+            return Ok(());
         }
 
-        if plugin.is_gui_created {
+        if self.plugin.is_gui_created {
             // TODO: Destory plugin window
 
-            plugin.is_gui_created = false;
-            plugin.is_gui_visible = false;
+            self.plugin.is_gui_created = false;
+            self.plugin.is_gui_visible = false;
         }
 
         self.deactivate();
@@ -190,27 +244,28 @@ impl ClapPluginMainThread {
     }
 
     pub fn can_activate(&self, engine: &RustyDAWEngine) -> bool {
-        let plugin = self.shared.borrow();
-
         if !engine.is_running() {
             false
-        } else if self.is_plugin_active() {
+        } else if self.plugin.is_plugin_active() {
             false
-        } else if plugin.schedule_restart {
+        } else if self.plugin.schedule_restart {
             false
         } else {
             true
         }
     }
 
-    pub fn activate(&mut self, sample_rate: SampleRate, min_block_size: u32, max_block_size: u32) {
-        assert!(!self.is_plugin_active());
+    pub fn activate(
+        &mut self,
+        sample_rate: SampleRate,
+        min_block_size: u32,
+        max_block_size: u32,
+    ) -> Result<(), ClapPluginActivationError> {
+        if self.plugin.is_plugin_active() {
+            return Err(ClapPluginActivationError::PluginAlreadyActivated);
+        }
 
-        let plugin = self.shared.borrow_mut();
-
-        assert!(plugin.raw_plugin.is_some());
-
-        if let Some(raw_plugin) = plugin.raw_plugin {
+        if let Some(raw_plugin) = self.plugin.raw_plugin {
             unsafe {
                 let raw_plugin = raw_plugin.as_ref();
 
@@ -220,74 +275,143 @@ impl ClapPluginMainThread {
                     min_block_size,
                     max_block_size,
                 ) {
-                    self.set_plugin_state(PluginState::InactiveWithError);
-                    return;
+                    self.plugin.state = PluginState::InactiveWithError;
+                    return Err(ClapPluginActivationError::PluginFailure);
                 }
             }
+        } else {
+            return Err(ClapPluginActivationError::PluginNotLoaded);
         }
 
-        plugin.schedule_process = true;
-        self.set_plugin_state(PluginState::ActiveAndSleeping);
+        self.plugin.schedule_process = true;
+        self.plugin.state = PluginState::ActiveAndSleeping;
+
+        Ok(())
     }
 
     pub fn deactivate(&mut self) {
-        if !self.is_plugin_active() {
+        if !self.plugin.is_plugin_active() {
             return;
         }
 
         todo!()
     }
 
-    pub fn is_plugin_active(&self) -> bool {
-        let plugin = self.shared.borrow();
+    pub fn set_audio_ports(&mut self, audio_ports: ClapAudioPorts) -> Result<(), ()> {
+        // TODO: Assert that these buffers match what the plugin requested?
+        self.plugin.audio_ports = audio_ports;
 
-        match plugin.state {
-            PluginState::Inactive => false,
-            PluginState::InactiveWithError => false,
-            _ => true,
-        }
+        Ok(())
     }
 
-    fn set_plugin_state(&mut self, state: PluginState) {
-        let plugin = self.shared.borrow_mut();
+    pub fn process_begin(self) {
+        self.plugin.thread_state = ThreadState::AudioThread;
+    }
 
-        match state {
-            PluginState::Inactive => {
-                assert_eq!(plugin.state, PluginState::ActiveAndReadyToDeactivate);
-            }
-            PluginState::InactiveWithError => {
-                assert_eq!(plugin.state, PluginState::Inactive);
-            }
-            PluginState::ActiveAndSleeping => {
-                assert!(
-                    plugin.state == PluginState::Inactive
-                        || plugin.state == PluginState::ActiveAndProcessing
-                );
-            }
-            PluginState::ActiveAndProcessing => {
-                assert_eq!(plugin.state, PluginState::ActiveAndSleeping);
-            }
-            PluginState::ActiveWithError => {
-                assert_eq!(plugin.state, PluginState::ActiveAndProcessing);
-            }
-            PluginState::ActiveAndReadyToDeactivate => {
-                assert!(
-                    plugin.state == PluginState::ActiveAndProcessing
-                        || plugin.state == PluginState::ActiveAndSleeping
-                        || plugin.state == PluginState::ActiveWithError
-                );
-            }
-        }
-
-        plugin.state = state;
+    pub fn idle(&mut self) {
+        todo!()
     }
 }
 
-pub(crate) struct ClapPluginAudioThread {
-    shared: ClapPluginInstanceShared,
+pub(crate) struct ClapPluginAudioThread<'a> {
+    plugin: &'a mut ClapPluginInstance,
 }
 
-impl ClapPluginAudioThread {}
+impl<'a> ClapPluginAudioThread<'a> {
+    pub fn process_end(&mut self) {
+        self.plugin.thread_state = ThreadState::Unknown;
+    }
+
+    pub fn process(self, process: &mut clap_process) -> ProcessStatus {
+        // Can't process a plugin that is not active.
+        if !self.plugin.is_plugin_active() {
+            return ProcessStatus::Sleep;
+        }
+
+        // This will always be `Some` when the plugin is active because
+        // the plugin must be loaded before it can be activated.
+        let raw_plugin = self.plugin.raw_plugin.unwrap();
+
+        // Better safe than sorry.
+        if raw_plugin.as_ptr().is_null() {
+            log::error!("Plugin pointer is null!");
+            return ProcessStatus::Error;
+        }
+
+        // Do we want to deactivate the plugin?
+        if self.plugin.schedule_deactivate {
+            self.plugin.schedule_deactivate = false;
+
+            if self.plugin.state == PluginState::ActiveAndProcessing {
+                // This is safe becase the raw plugin will always be initialized
+                // when the plugin is active.
+                unsafe {
+                    let raw_plugin = raw_plugin.as_ref();
+                    (raw_plugin.stop_processing)(raw_plugin);
+                }
+            }
+
+            self.plugin.state = PluginState::ActiveAndReadyToDeactivate;
+        }
+
+        // We can't process a plugin which failed to start processing.
+        if self.plugin.state == PluginState::ActiveWithError {
+            return ProcessStatus::Error;
+        }
+
+        process.transport = std::ptr::null();
+
+        process.in_events = std::ptr::null();
+        process.out_events = std::ptr::null();
+
+        // TODO: event stuff
+
+        if self.plugin.state == PluginState::ActiveAndSleeping {
+            if !self.plugin.schedule_process {
+                // TODO: Check if there are events.
+
+                // The plugin is sleeping, there is no request to wake it up and
+                // there are no events to process
+                return ProcessStatus::Sleep;
+            }
+
+            self.plugin.schedule_process = false;
+
+            // This is safe becase the raw plugin will always be initialized
+            // when the plugin is active.
+            unsafe {
+                let raw_plugin = raw_plugin.as_ref();
+                if !(raw_plugin.start_processing)(raw_plugin) {
+                    // The plugin failed to start processing.
+                    self.plugin.state = PluginState::ActiveWithError;
+                    return ProcessStatus::Error;
+                }
+
+                self.plugin.state = PluginState::ActiveAndProcessing;
+            }
+        }
+
+        let status = if self.plugin.state == PluginState::ActiveAndProcessing {
+            // Assign the buffer pointers to the process struct.
+            self.plugin.audio_ports.prepare(process);
+
+            // This is safe becase the raw plugin will always be initialized
+            // when the plugin is active.
+            unsafe {
+                let raw_plugin = raw_plugin.as_ref();
+
+                ProcessStatus::from_clap((raw_plugin.process)(raw_plugin, process))
+                    .unwrap_or(ProcessStatus::Error)
+            }
+        } else {
+            ProcessStatus::Sleep
+        };
+
+        // TODO: event stuff
+
+        status
+    }
+}
 
 unsafe extern "C" fn get_extension(
     host: *const clap_host,

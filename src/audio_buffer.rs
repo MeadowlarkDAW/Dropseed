@@ -118,9 +118,7 @@ impl ClapAudioBuffer {
             .map(|b| {
                 // Please refer to the "SAFETY NOTE" above on why this is safe.
                 //
-                // TODO: Can we be sure that the data that this pointer points to
-                // never moves? It's a shared atomic pointer so I assume it doesn't
-                // move.
+                // Also, basedrop's `Shared` pointer never moves its contents.
                 unsafe { (*b.buffer.0.get()).as_ptr() }
             })
             .collect();
@@ -154,9 +152,7 @@ impl ClapAudioBuffer {
             .map(|b| {
                 // Please refer to the "SAFETY NOTE" above on why this is safe.
                 //
-                // TODO: Can we be sure that the data that this pointer points to
-                // never moves? It's a shared atomic pointer so I assume it doesn't
-                // move.
+                // Also, basedrop's `Shared` pointer never moves its contents.
                 unsafe { (*b.buffer.0.get()).as_ptr() }
             })
             .collect();
@@ -182,10 +178,10 @@ impl ClapAudioBuffer {
         }
     }
 
-    pub(crate) fn as_clap(&mut self) -> *const clap_audio_buffer {
-        // TODO: We could probably use `Pin` or something to avoid collecting
-        // the pointer every time.
-
+    pub(crate) fn as_raw(&mut self) -> *const clap_audio_buffer {
+        // While it might be possible to use `Pin` to avoid needing to do this
+        // small check and assign the pointer every time, I'm unsure how reliable
+        // `Pin` is for `SmallVec`.
         if self.is_float {
             self.raw.data32 = self.raw_buffers_f32.as_ptr();
         } else {
