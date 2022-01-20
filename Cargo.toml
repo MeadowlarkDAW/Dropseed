@@ -1,0 +1,14 @@
+[package]
+name = "rusty-daw-engine"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+rusty-daw-core = { path = "../rusty-daw-core" }
+clap-sys = { path = "../clap-sys" }
+raw-window-handle = "0.4"
+basedrop = "0.1"
+smallvec = "1.7"
+log = "0.4"
