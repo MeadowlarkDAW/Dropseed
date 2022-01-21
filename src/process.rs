@@ -66,17 +66,14 @@ pub enum StereoInOutStatus<'a, T: Sized + Copy + Clone + Send + Default + 'stati
     InPlace((&'a mut [T], &'a mut [T])),
 
     /// The host has given a separate input and output buffer.
-    Separate {
-        input: (&'a [T], &'a [T]),
-        output: (&'a mut [T], &'a mut [T]),
-    },
+    Separate { input: (&'a [T], &'a [T]), output: (&'a mut [T], &'a mut [T]) },
 
     /// The host has not given a stereo output buffer.
     NoStereoOut,
 }
 
 /// The port buffers (for use with external CLAP plugins).
-pub(crate) struct ClapAudioPorts {
+pub(crate) struct ClapProcAudioPorts {
     audio_inputs: SmallVec<[ClapAudioBuffer; 1]>,
     audio_outputs: SmallVec<[ClapAudioBuffer; 1]>,
 
@@ -87,7 +84,7 @@ pub(crate) struct ClapAudioPorts {
     audio_outputs_count: u32,
 }
 
-impl ClapAudioPorts {
+impl ClapProcAudioPorts {
     pub(crate) fn debug_fields(&self, f: &mut std::fmt::DebugStruct) {
         if !self.audio_inputs.is_empty() {
             let mut s = format!("[{:?}", &self.audio_inputs[0]);
@@ -169,7 +166,7 @@ impl ClapAudioPorts {
 }
 
 /// The audio port buffers (for use with internal plugins).
-pub struct AudioPorts<T: Sized + Copy + Clone + Send + Default + 'static> {
+pub struct ProcAudioPorts<T: Sized + Copy + Clone + Send + Default + 'static> {
     /// The main audio input buffer.
     ///
     /// Note this may be `None` even when a main input port exists.
@@ -187,7 +184,7 @@ pub struct AudioPorts<T: Sized + Copy + Clone + Send + Default + 'static> {
     pub extra_outputs: Vec<InternalAudioBuffer<T>>,
 }
 
-impl<T: Sized + Copy + Clone + Send + Default + 'static> AudioPorts<T> {
+impl<T: Sized + Copy + Clone + Send + Default + 'static> ProcAudioPorts<T> {
     pub(crate) fn debug_fields(&self, f: &mut std::fmt::DebugStruct) {
         if let Some(b) = &self.main_in {
             f.field("main_in", b);
@@ -217,9 +214,7 @@ impl<T: Sized + Copy + Clone + Send + Default + 'static> AudioPorts<T> {
 
     /// A helper method to retrieve the main mono input/output buffers.
     pub fn main_mono_in_out<'a>(&'a mut self) -> MonoInOutStatus<'a, T> {
-        let Self {
-            main_in, main_out, ..
-        } = self;
+        let Self { main_in, main_out, .. } = self;
 
         if let Some(main_out) = main_out {
             if let Some(main_in) = main_in {
@@ -237,18 +232,13 @@ impl<T: Sized + Copy + Clone + Send + Default + 'static> AudioPorts<T> {
 
     /// A helper method to retrieve the main stereo input/output buffers.
     pub fn main_stereo_in_out<'a>(&'a mut self) -> StereoInOutStatus<'a, T> {
-        let Self {
-            main_in, main_out, ..
-        } = self;
+        let Self { main_in, main_out, .. } = self;
 
         if let Some(main_out) = main_out {
             if let Some(out_bufs) = main_out.stereo_mut() {
                 if let Some(main_in) = main_in {
                     if let Some(in_bufs) = main_in.stereo() {
-                        return StereoInOutStatus::Separate {
-                            input: in_bufs,
-                            output: out_bufs,
-                        };
+                        return StereoInOutStatus::Separate { input: in_bufs, output: out_bufs };
                     } else {
                         return StereoInOutStatus::InPlace(out_bufs);
                     }

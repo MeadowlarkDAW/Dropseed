@@ -17,8 +17,8 @@ use smallvec::SmallVec;
 use crate::audio_buffer::ClapAudioBuffer;
 use crate::engine::RustyDAWEngine;
 use crate::error::{ClapPluginActivationError, ClapPluginThreadError};
-use crate::info::HostInfo;
-use crate::process::{ClapAudioPorts, ProcessStatus};
+use crate::host::HostInfo;
+use crate::process::{ClapProcAudioPorts, ProcessStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PluginState {
@@ -56,9 +56,7 @@ struct ClapPluginInstanceShared {
 
 impl Clone for ClapPluginInstanceShared {
     fn clone(&self) -> Self {
-        Self {
-            shared: Shared::clone(&self.shared),
-        }
+        Self { shared: Shared::clone(&self.shared) }
     }
 }
 
@@ -97,7 +95,7 @@ impl ClapPluginInstanceShared {
                 schedule_deactivate: false,
                 state: PluginState::Inactive,
                 raw_plugin: None,
-                audio_ports: ClapAudioPorts::new(SmallVec::new(), SmallVec::new()),
+                audio_ports: ClapProcAudioPorts::new(SmallVec::new(), SmallVec::new()),
                 thread_state: ThreadState::MainThread,
                 _phantom_pinned: PhantomPinned::default(),
             }),
@@ -160,7 +158,7 @@ struct ClapPluginInstance {
 
     raw_plugin: Option<NonNull<clap_plugin>>,
 
-    audio_ports: ClapAudioPorts,
+    audio_ports: ClapProcAudioPorts,
 
     thread_state: ThreadState,
 
@@ -297,7 +295,7 @@ impl<'a> ClapPluginMainThread<'a> {
         todo!()
     }
 
-    pub fn set_audio_ports(&mut self, audio_ports: ClapAudioPorts) -> Result<(), ()> {
+    pub fn set_audio_ports(&mut self, audio_ports: ClapProcAudioPorts) -> Result<(), ()> {
         // TODO: Assert that these buffers match what the plugin requested?
         self.plugin.audio_ports = audio_ports;
 

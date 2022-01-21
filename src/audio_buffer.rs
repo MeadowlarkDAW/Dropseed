@@ -57,9 +57,7 @@ pub(crate) struct SharedAudioBuffer<T: Sized + Copy + Clone + Send + Default + '
 
 impl<T: Sized + Copy + Clone + Send + Default + 'static> SharedAudioBuffer<T> {
     fn new(id: UniqueBufferID, len: usize, coll_handle: &basedrop::Handle) -> Self {
-        Self {
-            buffer: Shared::new(coll_handle, (UnsafeCell::new(vec![T::default(); len]), id)),
-        }
+        Self { buffer: Shared::new(coll_handle, (UnsafeCell::new(vec![T::default(); len]), id)) }
     }
 
     pub fn unique_id(&self) -> UniqueBufferID {
@@ -98,13 +96,9 @@ pub(crate) struct ClapAudioBuffer {
 impl std::fmt::Debug for ClapAudioBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.is_float {
-            f.debug_list()
-                .entries(self.rc_buffers_f32.iter().map(|b| b.buffer.1))
-                .finish()
+            f.debug_list().entries(self.rc_buffers_f32.iter().map(|b| b.buffer.1)).finish()
         } else {
-            f.debug_list()
-                .entries(self.rc_buffers_f64.iter().map(|b| b.buffer.1))
-                .finish()
+            f.debug_list().entries(self.rc_buffers_f64.iter().map(|b| b.buffer.1)).finish()
         }
     }
 }
@@ -204,9 +198,7 @@ impl<T: Sized + Copy + Clone + Send + Default + 'static> std::fmt::Debug
     for InternalAudioBuffer<T>
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_list()
-            .entries(self.rc_buffers.iter().map(|b| b.buffer.1))
-            .finish()
+        f.debug_list().entries(self.rc_buffers.iter().map(|b| b.buffer.1)).finish()
     }
 }
 
@@ -298,10 +290,7 @@ impl<T: Sized + Copy + Clone + Send + Default + 'static> InternalAudioBuffer<T> 
     /// checking if the buffer is not mono.
     #[inline]
     pub unsafe fn stereo_unchecked(&self) -> (&[T], &[T]) {
-        (
-            self.rc_buffers.get_unchecked(0).borrow(),
-            self.rc_buffers.get_unchecked(1).borrow(),
-        )
+        (self.rc_buffers.get_unchecked(0).borrow(), self.rc_buffers.get_unchecked(1).borrow())
     }
 
     /// Mutably borrow the first two (or only two) channels in this buffer.
@@ -310,10 +299,7 @@ impl<T: Sized + Copy + Clone + Send + Default + 'static> InternalAudioBuffer<T> 
     #[inline]
     pub fn stereo_mut(&mut self) -> Option<(&mut [T], &mut [T])> {
         if self.rc_buffers.len() > 1 {
-            Some((
-                self.rc_buffers[0].borrow_mut(),
-                self.rc_buffers[1].borrow_mut(),
-            ))
+            Some((self.rc_buffers[0].borrow_mut(), self.rc_buffers[1].borrow_mut()))
         } else {
             None
         }

@@ -61,10 +61,7 @@ impl<'a> AudioPortInfo<'a> {
         let channel_map = if let Some(m) = ChannelMap::from_clap(info.channel_map) {
             m
         } else {
-            log::error!(
-                "Failed to parse channel map of audio port. Got: {}",
-                info.channel_map
-            );
+            log::error!("Failed to parse channel map of audio port. Got: {}", info.channel_map);
 
             return None;
         };
@@ -101,33 +98,42 @@ impl<'a> AudioPortInfo<'a> {
     }
 }
 
+/// The configuration of the "main" audio ports.
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MainPortConfig {
+    /// Neither of the first input/output ports are a "main" port.
+    None = 0,
+
+    /// The first input port is a "main" port, but the first output port
+    /// is not a "main" port.
+    InputOnly = 1,
+
+    /// The first output port is a "main" port, but the first input port
+    /// is not a "main" port.
+    OutputOnly = 2,
+
+    /// Both the first input port and the first output port are "main" ports,
+    /// but the host must not use the same buffer for both ports.
+    Both = 3,
+
+    /// Both the first input port and the first output port are "main" ports,
+    /// and also the host may use the same buffer for both ports.
+    BothInPlace = 4,
+}
+
+/// An extension that allows a plugin to tell the host the configuration
+/// of its audio ports.
 pub struct PluginAudioPortsExtension<'a> {
-    /// Info about the "main" input audio port.
-    ///
-    /// Set this to `None` for no main input port.
-    pub main_input: Option<&'a AudioPortInfo<'a>>,
+    /// The list of audio input ports.
+    pub input_ports: &'a [AudioPortInfo<'a>],
 
-    /// Info about the "main" output audio port.
-    ///
-    /// Set this to `None` for no main output port.
-    pub main_output: Option<&'a AudioPortInfo<'a>>,
+    /// The list of audio output ports.
+    pub output_ports: &'a [AudioPortInfo<'a>],
 
-    /// The list of any extra audio input ports (not including the "main"
-    /// input port).
-    pub extra_input_ports: &'a [AudioPortInfo<'a>],
+    /// The configuration of the "main" audio ports.
+    pub main_port_config: MainPortConfig,
 
-    /// The list of any extra audio output ports (not including the "main"
-    /// output port).
-    pub extra_output_ports: &'a [AudioPortInfo<'a>],
-
-    /// If true, then the host can use the same buffer for the main
-    /// input and main output port.
-    ///
-    /// This is only relevant if you do have both `main_input`
-    /// and `main_output` set.
-    pub in_place: bool,
-
-    /// Specifies whether this plugin prefers to use floats (`f32`)
-    /// or doubles (`f64`).
-    pub preferred_sample_size: SampleSize,
+    /// Specifies whether the audio buffers use floats or doubles.
+    pub sample_size: SampleSize,
 }

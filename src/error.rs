@@ -29,16 +29,10 @@ impl std::fmt::Display for ClapPluginActivationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
             ClapPluginActivationError::PluginAlreadyActivated => {
-                write!(
-                    f,
-                    "Could not activate CLAP plugin. Plugin is already activated."
-                )
+                write!(f, "Could not activate CLAP plugin. Plugin is already activated.")
             }
             ClapPluginActivationError::PluginNotLoaded => {
-                write!(
-                    f,
-                    "Could not activate CLAP plugin. Plugin has not been loaded yet."
-                )
+                write!(f, "Could not activate CLAP plugin. Plugin has not been loaded yet.")
             }
             ClapPluginActivationError::PluginFailure => {
                 write!(f, "CLAP plugin failed to activate.")

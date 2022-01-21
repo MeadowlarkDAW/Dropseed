@@ -11,4 +11,5 @@ clap-sys = { path = "../clap-sys" }
 raw-window-handle = "0.4"
 basedrop = "0.1"
 smallvec = "1.7"
+fnv = "1.0"
 log = "0.4"
