@@ -1,7 +1,15 @@
 [package]
 name = "rusty-daw-engine"
-version = "0.1.0"
+version = "0.0.0"
 edition = "2021"
+authors = ["Billy Messenger <BillyDM@tutamail.com>"]
+license = "GPL-3.0"
+keywords = ["audio", "graph", "daw", "plugin", "host"]
+categories = ["multimedia::audio"]
+description = "The RustyDAW DAW engine (placeholder)"
+documentation = "https://docs.rs/rusty-daw-engine"
+repository = "https://github.com/RustyDAW/rusty-daw-engine"
+readme = "README.md"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
