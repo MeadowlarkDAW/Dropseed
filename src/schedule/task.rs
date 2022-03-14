@@ -8,15 +8,15 @@ use crate::{
 };
 
 pub(crate) enum Task {
-    InternalProcessor(InternalProcessorTask),
-    ClapProcessor(ClapProcessorTask),
+    InternalProcessor(InternalPluginTask),
+    ClapProcessor(ClapPluginTask),
 }
 
 impl std::fmt::Debug for Task {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Task::InternalProcessor(t) => {
-                let mut f = f.debug_struct("IntProc");
+                let mut f = f.debug_struct("InternalPlugin");
 
                 f.field("id", &t.plugin.id());
 
@@ -25,7 +25,7 @@ impl std::fmt::Debug for Task {
                 f.finish()
             }
             Task::ClapProcessor(t) => {
-                let mut f = f.debug_struct("ClapProc");
+                let mut f = f.debug_struct("ClapPlugin");
 
                 // TODO: Processor ID
 
@@ -37,42 +37,55 @@ impl std::fmt::Debug for Task {
     }
 }
 
-pub(crate) struct InternalProcessorTask {
+pub(crate) struct InternalPluginTask {
     plugin: SharedPluginAudioThreadInstance,
 
     audio_buffers: ProcAudioBuffers,
 }
 
-impl InternalProcessorTask {
+impl InternalPluginTask {
     #[inline]
-    pub fn process(&mut self, info: &ProcInfo, host: &mut Host) {
+    pub fn process(&mut self, info: &ProcInfo, host: &mut Host) -> ProcessStatus {
         let Self { plugin, audio_buffers } = self;
 
-        // This is safe because the audio thread counterpart of a plugin only ever
-        // borrowed mutably here in the audio thread. Also, the verifier has verified
-        // that no data races exist between parallel audio threads (once we actually
-        // have multi-threaded schedules of course).
+        // This is safe because the audio thread counterpart of a plugin is only ever
+        // borrowed mutably in this method. Also, the verifier has verified that no
+        // data races exist between parallel audio threads (once we actually have
+        // multi-threaded schedules of course).
         let plugin = unsafe { plugin.borrow_mut() };
 
         // Prepare the host handle to accept requests from the plugin.
         host.current_plugin_channel = Shared::clone(&plugin.channel);
 
-        // TODO: event stuff
+        // TODO: input event stuff
 
-        // TODO: process stuff
+        let status = if let Err(_) = plugin.plugin.start_processing(host) {
+            ProcessStatus::Error
+        } else {
+            let status = plugin.plugin.process(info, audio_buffers, host);
 
-        // TODO: event stuff
+            plugin.plugin.stop_processing(host);
 
-        todo!()
+            status
+        };
+
+        if let ProcessStatus::Error = status {
+            // As per the spec, we must clear all output buffers.
+            audio_buffers.clear_all_outputs(info);
+        }
+
+        // TODO: output event stuff
+
+        status
     }
 }
 
-pub(crate) struct ClapProcessorTask {
+pub(crate) struct ClapPluginTask {
     // TODO: clap processor
     ports: ClapProcAudioPorts,
 }
 
-impl ClapProcessorTask {
+impl ClapPluginTask {
     #[inline]
     pub fn process(&mut self, proc: &mut clap_process) -> ProcessStatus {
         // Prepare the buffers to be sent to the external plugin.

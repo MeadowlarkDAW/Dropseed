@@ -165,5 +165,5 @@ pub struct ProcInfo {
     pub steady_time: Option<Frames>,
 
     /// The number of frames to process.
-    pub frames: Frames,
+    pub frames: usize,
 }

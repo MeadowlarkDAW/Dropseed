@@ -1,7 +1,7 @@
 use std::fmt::DebugStruct;
 
 use super::buffer_layout::CurrentBufferLayout;
-use super::{AudioPortBuffer, ProcBufferLayout, RawBufferLayout};
+use super::{AudioPortBuffer, ProcBufferLayout, ProcInfo, RawBufferLayout};
 
 /// The audio port buffers sent to the plugin's `process()` method.
 pub struct ProcAudioBuffers {
@@ -37,7 +37,7 @@ impl ProcAudioBuffers {
     /// the host may return in this method.
     ///
     /// [`AudioPortLayout`]: ../../plugin/ext/audio_ports/enum.AudioPortLayout.html
-    pub fn get<'a>(&'a mut self) -> ProcBufferLayout<'a> {
+    pub fn get<'a>(&'a mut self, proc_info: &ProcInfo) -> ProcBufferLayout<'a> {
         // Safe because the scheduler ensures that the correct buffers exist
         // for `self.layout`.
         unsafe {
@@ -48,7 +48,7 @@ impl ProcAudioBuffers {
                         .get_unchecked_mut(0)
                         .as_mut()
                         .unwrap_unchecked()
-                        .stereo_unchecked_mut();
+                        .stereo_unchecked_mut(proc_info);
                     ProcBufferLayout::StereoOut32 { left, right }
                 }
                 CurrentBufferLayout::StereoOut64 => {
@@ -57,18 +57,26 @@ impl ProcAudioBuffers {
                         .get_unchecked_mut(0)
                         .as_mut()
                         .unwrap_unchecked()
-                        .stereo_unchecked_mut();
+                        .stereo_unchecked_mut(proc_info);
                     ProcBufferLayout::StereoOut64 { left, right }
                 }
 
                 CurrentBufferLayout::MonoOut32 => {
-                    let b =
-                        self.out_f32.get_unchecked_mut(0).as_mut().unwrap_unchecked().mono_mut();
+                    let b = self
+                        .out_f32
+                        .get_unchecked_mut(0)
+                        .as_mut()
+                        .unwrap_unchecked()
+                        .mono_mut(proc_info);
                     ProcBufferLayout::MonoOut32(b)
                 }
                 CurrentBufferLayout::MonoOut64 => {
-                    let b =
-                        self.out_f64.get_unchecked_mut(0).as_mut().unwrap_unchecked().mono_mut();
+                    let b = self
+                        .out_f64
+                        .get_unchecked_mut(0)
+                        .as_mut()
+                        .unwrap_unchecked()
+                        .mono_mut(proc_info);
                     ProcBufferLayout::MonoOut64(b)
                 }
 
@@ -78,7 +86,7 @@ impl ProcAudioBuffers {
                         .get_unchecked_mut(0)
                         .as_mut()
                         .unwrap_unchecked()
-                        .stereo_unchecked_mut();
+                        .stereo_unchecked_mut(proc_info);
                     ProcBufferLayout::StereoInPlace32 { left, right }
                 }
                 CurrentBufferLayout::StereoInPlace64 => {
@@ -87,7 +95,7 @@ impl ProcAudioBuffers {
                         .get_unchecked_mut(0)
                         .as_mut()
                         .unwrap_unchecked()
-                        .stereo_unchecked_mut();
+                        .stereo_unchecked_mut(proc_info);
                     ProcBufferLayout::StereoInPlace64 { left, right }
                 }
 
@@ -97,9 +105,13 @@ impl ProcAudioBuffers {
                         .get_unchecked_mut(0)
                         .as_mut()
                         .unwrap_unchecked()
-                        .stereo_unchecked_mut();
-                    let (sc_left, sc_right) =
-                        self.in_f32.get_unchecked(1).as_ref().unwrap_unchecked().stereo_unchecked();
+                        .stereo_unchecked_mut(proc_info);
+                    let (sc_left, sc_right) = self
+                        .in_f32
+                        .get_unchecked(1)
+                        .as_ref()
+                        .unwrap_unchecked()
+                        .stereo_unchecked(proc_info);
                     ProcBufferLayout::StereoInPlaceWithSidechain32 {
                         left,
                         right,
@@ -113,9 +125,13 @@ impl ProcAudioBuffers {
                         .get_unchecked_mut(0)
                         .as_mut()
                         .unwrap_unchecked()
-                        .stereo_unchecked_mut();
-                    let (sc_left, sc_right) =
-                        self.in_f64.get_unchecked(1).as_ref().unwrap_unchecked().stereo_unchecked();
+                        .stereo_unchecked_mut(proc_info);
+                    let (sc_left, sc_right) = self
+                        .in_f64
+                        .get_unchecked(1)
+                        .as_ref()
+                        .unwrap_unchecked()
+                        .stereo_unchecked(proc_info);
                     ProcBufferLayout::StereoInPlaceWithSidechain64 {
                         left,
                         right,
@@ -126,12 +142,13 @@ impl ProcAudioBuffers {
 
                 CurrentBufferLayout::StereoInPlaceWithExtraOut32 => {
                     let (out_1, out_2) = self.out_f32.split_first_mut().unwrap_unchecked();
-                    let (left, right) = out_1.as_mut().unwrap_unchecked().stereo_unchecked_mut();
+                    let (left, right) =
+                        out_1.as_mut().unwrap_unchecked().stereo_unchecked_mut(proc_info);
                     let (extra_out_left, extra_out_right) = out_2
                         .get_unchecked_mut(0)
                         .as_mut()
                         .unwrap_unchecked()
-                        .stereo_unchecked_mut();
+                        .stereo_unchecked_mut(proc_info);
                     ProcBufferLayout::StereoInPlaceWithExtraOut32 {
                         left,
                         right,
@@ -141,12 +158,13 @@ impl ProcAudioBuffers {
                 }
                 CurrentBufferLayout::StereoInPlaceWithExtraOut64 => {
                     let (out_1, out_2) = self.out_f64.split_first_mut().unwrap_unchecked();
-                    let (left, right) = out_1.as_mut().unwrap_unchecked().stereo_unchecked_mut();
+                    let (left, right) =
+                        out_1.as_mut().unwrap_unchecked().stereo_unchecked_mut(proc_info);
                     let (extra_out_left, extra_out_right) = out_2
                         .get_unchecked_mut(0)
                         .as_mut()
                         .unwrap_unchecked()
-                        .stereo_unchecked_mut();
+                        .stereo_unchecked_mut(proc_info);
                     ProcBufferLayout::StereoInPlaceWithExtraOut64 {
                         left,
                         right,
@@ -156,63 +174,97 @@ impl ProcAudioBuffers {
                 }
 
                 CurrentBufferLayout::MonoInPlace32 => {
-                    let b =
-                        self.out_f32.get_unchecked_mut(0).as_mut().unwrap_unchecked().mono_mut();
+                    let b = self
+                        .out_f32
+                        .get_unchecked_mut(0)
+                        .as_mut()
+                        .unwrap_unchecked()
+                        .mono_mut(proc_info);
                     ProcBufferLayout::MonoInPlace32(b)
                 }
                 CurrentBufferLayout::MonoInPlace64 => {
-                    let b =
-                        self.out_f64.get_unchecked_mut(0).as_mut().unwrap_unchecked().mono_mut();
+                    let b = self
+                        .out_f64
+                        .get_unchecked_mut(0)
+                        .as_mut()
+                        .unwrap_unchecked()
+                        .mono_mut(proc_info);
                     ProcBufferLayout::MonoInPlace64(b)
                 }
 
                 CurrentBufferLayout::MonoInPlaceWithSidechain32 => {
-                    let in_out =
-                        self.out_f32.get_unchecked_mut(0).as_mut().unwrap_unchecked().mono_mut();
-                    let sc = self.in_f32.get_unchecked(1).as_ref().unwrap_unchecked().mono();
+                    let in_out = self
+                        .out_f32
+                        .get_unchecked_mut(0)
+                        .as_mut()
+                        .unwrap_unchecked()
+                        .mono_mut(proc_info);
+                    let sc =
+                        self.in_f32.get_unchecked(1).as_ref().unwrap_unchecked().mono(proc_info);
                     ProcBufferLayout::MonoInPlaceWithSidechain32 { in_out, sc }
                 }
                 CurrentBufferLayout::MonoInPlaceWithSidechain64 => {
-                    let in_out =
-                        self.out_f64.get_unchecked_mut(0).as_mut().unwrap_unchecked().mono_mut();
-                    let sc = self.in_f64.get_unchecked(1).as_ref().unwrap_unchecked().mono();
+                    let in_out = self
+                        .out_f64
+                        .get_unchecked_mut(0)
+                        .as_mut()
+                        .unwrap_unchecked()
+                        .mono_mut(proc_info);
+                    let sc =
+                        self.in_f64.get_unchecked(1).as_ref().unwrap_unchecked().mono(proc_info);
                     ProcBufferLayout::MonoInPlaceWithSidechain64 { in_out, sc }
                 }
 
                 CurrentBufferLayout::StereoInOut32 => {
-                    let (in_left, in_right) =
-                        self.in_f32.get_unchecked(0).as_ref().unwrap_unchecked().stereo_unchecked();
+                    let (in_left, in_right) = self
+                        .in_f32
+                        .get_unchecked(0)
+                        .as_ref()
+                        .unwrap_unchecked()
+                        .stereo_unchecked(proc_info);
                     let (out_left, out_right) = self
                         .out_f32
                         .get_unchecked_mut(0)
                         .as_mut()
                         .unwrap_unchecked()
-                        .stereo_unchecked_mut();
+                        .stereo_unchecked_mut(proc_info);
                     ProcBufferLayout::StereoInOut32 { in_left, in_right, out_left, out_right }
                 }
                 CurrentBufferLayout::StereoInOut64 => {
-                    let (in_left, in_right) =
-                        self.in_f64.get_unchecked(0).as_ref().unwrap_unchecked().stereo_unchecked();
+                    let (in_left, in_right) = self
+                        .in_f64
+                        .get_unchecked(0)
+                        .as_ref()
+                        .unwrap_unchecked()
+                        .stereo_unchecked(proc_info);
                     let (out_left, out_right) = self
                         .out_f64
                         .get_unchecked_mut(0)
                         .as_mut()
                         .unwrap_unchecked()
-                        .stereo_unchecked_mut();
+                        .stereo_unchecked_mut(proc_info);
                     ProcBufferLayout::StereoInOut64 { in_left, in_right, out_left, out_right }
                 }
 
                 CurrentBufferLayout::StereoInOutWithSidechain32 => {
-                    let (in_left, in_right) =
-                        self.in_f32.get_unchecked(0).as_ref().unwrap_unchecked().stereo_unchecked();
+                    let (in_left, in_right) = self
+                        .in_f32
+                        .get_unchecked(0)
+                        .as_ref()
+                        .unwrap_unchecked()
+                        .stereo_unchecked(proc_info);
                     let (out_left, out_right) = self
                         .out_f32
                         .get_unchecked_mut(0)
                         .as_mut()
                         .unwrap_unchecked()
-                        .stereo_unchecked_mut();
-                    let (sc_left, sc_right) =
-                        self.in_f32.get_unchecked(1).as_ref().unwrap_unchecked().stereo_unchecked();
+                        .stereo_unchecked_mut(proc_info);
+                    let (sc_left, sc_right) = self
+                        .in_f32
+                        .get_unchecked(1)
+                        .as_ref()
+                        .unwrap_unchecked()
+                        .stereo_unchecked(proc_info);
                     ProcBufferLayout::StereoInOutWithSidechain32 {
                         in_left,
                         in_right,
@@ -223,16 +275,24 @@ impl ProcAudioBuffers {
                     }
                 }
                 CurrentBufferLayout::StereoInOutWithSidechain64 => {
-                    let (in_left, in_right) =
-                        self.in_f64.get_unchecked(0).as_ref().unwrap_unchecked().stereo_unchecked();
+                    let (in_left, in_right) = self
+                        .in_f64
+                        .get_unchecked(0)
+                        .as_ref()
+                        .unwrap_unchecked()
+                        .stereo_unchecked(proc_info);
                     let (out_left, out_right) = self
                         .out_f64
                         .get_unchecked_mut(0)
                         .as_mut()
                         .unwrap_unchecked()
-                        .stereo_unchecked_mut();
-                    let (sc_left, sc_right) =
-                        self.in_f64.get_unchecked(1).as_ref().unwrap_unchecked().stereo_unchecked();
+                        .stereo_unchecked_mut(proc_info);
+                    let (sc_left, sc_right) = self
+                        .in_f64
+                        .get_unchecked(1)
+                        .as_ref()
+                        .unwrap_unchecked()
+                        .stereo_unchecked(proc_info);
                     ProcBufferLayout::StereoInOutWithSidechain64 {
                         in_left,
                         in_right,
@@ -244,16 +304,20 @@ impl ProcAudioBuffers {
                 }
 
                 CurrentBufferLayout::StereoInOutWithExtraOut32 => {
-                    let (in_left, in_right) =
-                        self.in_f32.get_unchecked(0).as_ref().unwrap_unchecked().stereo_unchecked();
+                    let (in_left, in_right) = self
+                        .in_f32
+                        .get_unchecked(0)
+                        .as_ref()
+                        .unwrap_unchecked()
+                        .stereo_unchecked(proc_info);
                     let (out_1, out_2) = self.out_f32.split_first_mut().unwrap_unchecked();
                     let (out_left, out_right) =
-                        out_1.as_mut().unwrap_unchecked().stereo_unchecked_mut();
+                        out_1.as_mut().unwrap_unchecked().stereo_unchecked_mut(proc_info);
                     let (extra_out_left, extra_out_right) = out_2
                         .get_unchecked_mut(0)
                         .as_mut()
                         .unwrap_unchecked()
-                        .stereo_unchecked_mut();
+                        .stereo_unchecked_mut(proc_info);
                     ProcBufferLayout::StereoInOutWithExtraOut32 {
                         in_left,
                         in_right,
@@ -264,16 +328,20 @@ impl ProcAudioBuffers {
                     }
                 }
                 CurrentBufferLayout::StereoInOutWithExtraOut64 => {
-                    let (in_left, in_right) =
-                        self.in_f64.get_unchecked(0).as_ref().unwrap_unchecked().stereo_unchecked();
+                    let (in_left, in_right) = self
+                        .in_f64
+                        .get_unchecked(0)
+                        .as_ref()
+                        .unwrap_unchecked()
+                        .stereo_unchecked(proc_info);
                     let (out_1, out_2) = self.out_f64.split_first_mut().unwrap_unchecked();
                     let (out_left, out_right) =
-                        out_1.as_mut().unwrap_unchecked().stereo_unchecked_mut();
+                        out_1.as_mut().unwrap_unchecked().stereo_unchecked_mut(proc_info);
                     let (extra_out_left, extra_out_right) = out_2
                         .get_unchecked_mut(0)
                         .as_mut()
                         .unwrap_unchecked()
-                        .stereo_unchecked_mut();
+                        .stereo_unchecked_mut(proc_info);
                     ProcBufferLayout::StereoInOutWithExtraOut64 {
                         in_left,
                         in_right,
@@ -285,66 +353,106 @@ impl ProcAudioBuffers {
                 }
 
                 CurrentBufferLayout::MonoInOut32 => {
-                    let input = self.in_f32.get_unchecked(0).as_ref().unwrap_unchecked().mono();
-                    let output =
-                        self.out_f32.get_unchecked_mut(0).as_mut().unwrap_unchecked().mono_mut();
+                    let input =
+                        self.in_f32.get_unchecked(0).as_ref().unwrap_unchecked().mono(proc_info);
+                    let output = self
+                        .out_f32
+                        .get_unchecked_mut(0)
+                        .as_mut()
+                        .unwrap_unchecked()
+                        .mono_mut(proc_info);
                     ProcBufferLayout::MonoInOut32 { input, output }
                 }
                 CurrentBufferLayout::MonoInOut64 => {
-                    let input = self.in_f64.get_unchecked(0).as_ref().unwrap_unchecked().mono();
-                    let output =
-                        self.out_f64.get_unchecked_mut(0).as_mut().unwrap_unchecked().mono_mut();
+                    let input =
+                        self.in_f64.get_unchecked(0).as_ref().unwrap_unchecked().mono(proc_info);
+                    let output = self
+                        .out_f64
+                        .get_unchecked_mut(0)
+                        .as_mut()
+                        .unwrap_unchecked()
+                        .mono_mut(proc_info);
                     ProcBufferLayout::MonoInOut64 { input, output }
                 }
 
                 CurrentBufferLayout::MonoInOutWithSidechain32 => {
-                    let input = self.in_f32.get_unchecked(0).as_ref().unwrap_unchecked().mono();
-                    let output =
-                        self.out_f32.get_unchecked_mut(0).as_mut().unwrap_unchecked().mono_mut();
-                    let sc = self.in_f32.get_unchecked(1).as_ref().unwrap_unchecked().mono();
+                    let input =
+                        self.in_f32.get_unchecked(0).as_ref().unwrap_unchecked().mono(proc_info);
+                    let output = self
+                        .out_f32
+                        .get_unchecked_mut(0)
+                        .as_mut()
+                        .unwrap_unchecked()
+                        .mono_mut(proc_info);
+                    let sc =
+                        self.in_f32.get_unchecked(1).as_ref().unwrap_unchecked().mono(proc_info);
                     ProcBufferLayout::MonoInOutWithSidechain32 { input, output, sc }
                 }
                 CurrentBufferLayout::MonoInOutWithSidechain64 => {
-                    let input = self.in_f64.get_unchecked(0).as_ref().unwrap_unchecked().mono();
-                    let output =
-                        self.out_f64.get_unchecked_mut(0).as_mut().unwrap_unchecked().mono_mut();
-                    let sc = self.in_f64.get_unchecked(1).as_ref().unwrap_unchecked().mono();
+                    let input =
+                        self.in_f64.get_unchecked(0).as_ref().unwrap_unchecked().mono(proc_info);
+                    let output = self
+                        .out_f64
+                        .get_unchecked_mut(0)
+                        .as_mut()
+                        .unwrap_unchecked()
+                        .mono_mut(proc_info);
+                    let sc =
+                        self.in_f64.get_unchecked(1).as_ref().unwrap_unchecked().mono(proc_info);
                     ProcBufferLayout::MonoInOutWithSidechain64 { input, output, sc }
                 }
 
                 CurrentBufferLayout::MonoInStereoOut32 => {
-                    let input = self.in_f32.get_unchecked(0).as_ref().unwrap_unchecked().mono();
+                    let input =
+                        self.in_f32.get_unchecked(0).as_ref().unwrap_unchecked().mono(proc_info);
                     let (out_left, out_right) = self
                         .out_f32
                         .get_unchecked_mut(0)
                         .as_mut()
                         .unwrap_unchecked()
-                        .stereo_unchecked_mut();
+                        .stereo_unchecked_mut(proc_info);
                     ProcBufferLayout::MonoInStereoOut32 { input, out_left, out_right }
                 }
                 CurrentBufferLayout::MonoInStereoOut64 => {
-                    let input = self.in_f64.get_unchecked(0).as_ref().unwrap_unchecked().mono();
+                    let input =
+                        self.in_f64.get_unchecked(0).as_ref().unwrap_unchecked().mono(proc_info);
                     let (out_left, out_right) = self
                         .out_f64
                         .get_unchecked_mut(0)
                         .as_mut()
                         .unwrap_unchecked()
-                        .stereo_unchecked_mut();
+                        .stereo_unchecked_mut(proc_info);
                     ProcBufferLayout::MonoInStereoOut64 { input, out_left, out_right }
                 }
 
                 CurrentBufferLayout::StereoInMonoOut32 => {
-                    let (in_left, in_right) =
-                        self.in_f32.get_unchecked(0).as_ref().unwrap_unchecked().stereo_unchecked();
-                    let output =
-                        self.out_f32.get_unchecked_mut(0).as_mut().unwrap_unchecked().mono_mut();
+                    let (in_left, in_right) = self
+                        .in_f32
+                        .get_unchecked(0)
+                        .as_ref()
+                        .unwrap_unchecked()
+                        .stereo_unchecked(proc_info);
+                    let output = self
+                        .out_f32
+                        .get_unchecked_mut(0)
+                        .as_mut()
+                        .unwrap_unchecked()
+                        .mono_mut(proc_info);
                     ProcBufferLayout::StereoInMonoOut32 { in_left, in_right, output }
                 }
                 CurrentBufferLayout::StereoInMonoOut64 => {
-                    let (in_left, in_right) =
-                        self.in_f64.get_unchecked(0).as_ref().unwrap_unchecked().stereo_unchecked();
-                    let output =
-                        self.out_f64.get_unchecked_mut(0).as_mut().unwrap_unchecked().mono_mut();
+                    let (in_left, in_right) = self
+                        .in_f64
+                        .get_unchecked(0)
+                        .as_ref()
+                        .unwrap_unchecked()
+                        .stereo_unchecked(proc_info);
+                    let output = self
+                        .out_f64
+                        .get_unchecked_mut(0)
+                        .as_mut()
+                        .unwrap_unchecked()
+                        .mono_mut(proc_info);
                     ProcBufferLayout::StereoInMonoOut64 { in_left, in_right, output }
                 }
 
@@ -431,6 +539,20 @@ impl ProcAudioBuffers {
     /// are silent (all zeros), `false` otherwise.
     pub fn in_port_is_silent(&self, port_index: usize) -> bool {
         false
+    }
+
+    /// Clear all of the output buffers to `0.0`.
+    pub fn clear_all_outputs(&mut self, proc_info: &ProcInfo) {
+        for b in self.out_f32.iter_mut() {
+            if let Some(b) = b.as_mut() {
+                b.clear(proc_info);
+            }
+        }
+        for b in self.out_f64.iter_mut() {
+            if let Some(b) = b.as_mut() {
+                b.clear(proc_info);
+            }
+        }
     }
 
     pub(crate) fn assert_layout(&self) -> Result<(), ()> {

@@ -163,7 +163,7 @@ pub trait PluginMainThread {
 
 /// The methods of an audio plugin instance which run in the "audio" thread.
 pub trait PluginAudioThread: Send + 'static {
-    /// This will be called each time before a call to `process()` or `process_f64()`.
+    /// This will be called each time before a call to `process()`.
     ///
     /// Return an error if the plugin failed to start processing. In this case the host will not
     /// call `process()` this process cycle.
@@ -176,7 +176,7 @@ pub trait PluginAudioThread: Send + 'static {
         Ok(())
     }
 
-    /// This will be called each time after a call to `process()` or `process_f64()`.
+    /// This will be called each time after a call to `process()`.
     ///
     /// By default this does nothing.
     ///
@@ -189,7 +189,7 @@ pub trait PluginAudioThread: Send + 'static {
     /// `[audio-thread & active_state & processing_state]`
     fn process(
         &mut self,
-        proc: &ProcInfo,
+        info: &ProcInfo,
         audio: &mut ProcAudioBuffers,
         host: &Host,
     ) -> ProcessStatus;

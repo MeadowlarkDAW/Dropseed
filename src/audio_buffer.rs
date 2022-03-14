@@ -5,6 +5,8 @@ use smallvec::SmallVec;
 
 use clap_sys::audio_buffer::clap_audio_buffer;
 
+use crate::process_info::ProcInfo;
+
 // ----- SAFETY NOTE  -------------------------------------------------------
 //
 // We're using Shared (reference counted) pointers to buffers wrapped in
@@ -56,8 +58,10 @@ pub(crate) struct SharedAudioBuffer<T: Sized + Copy + Clone + Send + Default + '
 }
 
 impl<T: Sized + Copy + Clone + Send + Default + 'static> SharedAudioBuffer<T> {
-    fn new(id: UniqueBufferID, len: usize, coll_handle: &basedrop::Handle) -> Self {
-        Self { buffer: Shared::new(coll_handle, (UnsafeCell::new(vec![T::default(); len]), id)) }
+    fn new(id: UniqueBufferID, max_frames: usize, coll_handle: &basedrop::Handle) -> Self {
+        Self {
+            buffer: Shared::new(coll_handle, (UnsafeCell::new(vec![T::default(); max_frames]), id)),
+        }
     }
 
     pub fn unique_id(&self) -> UniqueBufferID {
@@ -65,15 +69,30 @@ impl<T: Sized + Copy + Clone + Send + Default + 'static> SharedAudioBuffer<T> {
     }
 
     #[inline]
-    fn borrow(&self) -> &[T] {
+    fn borrow(&self, proc_info: &ProcInfo) -> &[T] {
         // Please refer to the "SAFETY NOTE" above on why this is safe.
-        unsafe { (*self.buffer.0.get()).as_slice() }
+        //
+        // In addition the host will never set `proc_info.frames` to something
+        // higher than the maximum frame size (which is what the Vec's initial
+        // capacity is set to).
+        unsafe {
+            std::slice::from_raw_parts((*self.buffer.0.get()).as_slice().as_ptr(), proc_info.frames)
+        }
     }
 
     #[inline]
-    fn borrow_mut(&self) -> &mut [T] {
+    fn borrow_mut(&self, proc_info: &ProcInfo) -> &mut [T] {
         // Please refer to the "SAFETY NOTE" above on why this is safe.
-        unsafe { (*self.buffer.0.get()).as_mut_slice() }
+        //
+        // In addition the host will never set `proc_info.frames` to something
+        // higher than the maximum frame size (which is what the Vec's initial
+        // capacity is set to).
+        unsafe {
+            std::slice::from_raw_parts_mut(
+                (*self.buffer.0.get()).as_mut_slice().as_mut_ptr(),
+                proc_info.frames,
+            )
+        }
     }
 }
 
@@ -91,6 +110,8 @@ pub(crate) struct ClapAudioBuffer {
     /// buffers.
     rc_buffers_f32: SmallVec<[SharedAudioBuffer<f32>; 2]>,
     rc_buffers_f64: SmallVec<[SharedAudioBuffer<f64>; 2]>,
+
+    frames: usize,
 }
 
 impl std::fmt::Debug for ClapAudioBuffer {
@@ -135,6 +156,8 @@ impl ClapAudioBuffer {
 
             rc_buffers_f32: buffers,
             rc_buffers_f64: SmallVec::new(),
+
+            frames: 0,
         }
     }
 
@@ -169,6 +192,8 @@ impl ClapAudioBuffer {
 
             rc_buffers_f32: SmallVec::new(),
             rc_buffers_f64: buffers,
+
+            frames: 0,
         }
     }
 
@@ -232,53 +257,57 @@ impl<T: Sized + Copy + Clone + Send + Default + 'static> AudioPortBuffer<T> {
     ///
     /// This will return `None` if the channel with the given index does not exist.
     #[inline]
-    pub fn channel(&self, channel: usize) -> Option<&[T]> {
-        self.rc_buffers.get(channel).map(|b| b.borrow())
+    pub fn channel(&self, channel: usize, proc_info: &ProcInfo) -> Option<&[T]> {
+        self.rc_buffers.get(channel).map(|b| b.borrow(proc_info))
     }
 
     /// Immutably borrow a channel without checking that the channel with the given index exists.
     #[inline]
-    pub unsafe fn channel_unchecked(&self, channel: usize) -> &[T] {
-        self.rc_buffers.get_unchecked(channel).borrow()
+    pub unsafe fn channel_unchecked(&self, channel: usize, proc_info: &ProcInfo) -> &[T] {
+        self.rc_buffers.get_unchecked(channel).borrow(proc_info)
     }
 
     /// Mutably borrow a channel.
     ///
     /// This will return `None` if the channel with the given index does not exist.
     #[inline]
-    pub fn channel_mut(&mut self, channel: usize) -> Option<&mut [T]> {
-        self.rc_buffers.get(channel).map(|b| b.borrow_mut())
+    pub fn channel_mut(&mut self, channel: usize, proc_info: &ProcInfo) -> Option<&mut [T]> {
+        self.rc_buffers.get(channel).map(|b| b.borrow_mut(proc_info))
     }
 
     /// Mutably borrow a channel without checking that the channel with the given index exists.
     #[inline]
-    pub unsafe fn channel_unchecked_mut(&mut self, channel: usize) -> &mut [T] {
-        self.rc_buffers.get_unchecked(channel).borrow_mut()
+    pub unsafe fn channel_unchecked_mut(
+        &mut self,
+        channel: usize,
+        proc_info: &ProcInfo,
+    ) -> &mut [T] {
+        self.rc_buffers.get_unchecked(channel).borrow_mut(proc_info)
     }
 
     /// Immutably borrow the first/only channel in this buffer.
     #[inline]
-    pub fn mono(&self) -> &[T] {
+    pub fn mono(&self, proc_info: &ProcInfo) -> &[T] {
         // This is safe because we assert in the constructor that the number of
         // buffers is never 0.
-        unsafe { self.rc_buffers.get_unchecked(0).borrow() }
+        unsafe { self.rc_buffers.get_unchecked(0).borrow(proc_info) }
     }
 
     /// Mutably borrow the first/only channel in this buffer.
     #[inline]
-    pub fn mono_mut(&mut self) -> &mut [T] {
+    pub fn mono_mut(&mut self, proc_info: &ProcInfo) -> &mut [T] {
         // This is safe because we assert in the constructor that the number of
         // buffers is never 0.
-        unsafe { self.rc_buffers.get_unchecked(0).borrow_mut() }
+        unsafe { self.rc_buffers.get_unchecked(0).borrow_mut(proc_info) }
     }
 
     /// Immutably borrow the first two (or only two) channels in this buffer.
     ///
     /// This will return an error if the buffer is mono.
     #[inline]
-    pub fn stereo(&self) -> Option<(&[T], &[T])> {
+    pub fn stereo(&self, proc_info: &ProcInfo) -> Option<(&[T], &[T])> {
         if self.rc_buffers.len() > 1 {
-            Some((self.rc_buffers[0].borrow(), self.rc_buffers[1].borrow()))
+            Some((self.rc_buffers[0].borrow(proc_info), self.rc_buffers[1].borrow(proc_info)))
         } else {
             None
         }
@@ -287,17 +316,23 @@ impl<T: Sized + Copy + Clone + Send + Default + 'static> AudioPortBuffer<T> {
     /// Immutably borrow the first two (or only two) channels in this buffer without
     /// checking if the buffer is not mono.
     #[inline]
-    pub unsafe fn stereo_unchecked(&self) -> (&[T], &[T]) {
-        (self.rc_buffers.get_unchecked(0).borrow(), self.rc_buffers.get_unchecked(1).borrow())
+    pub unsafe fn stereo_unchecked(&self, proc_info: &ProcInfo) -> (&[T], &[T]) {
+        (
+            self.rc_buffers.get_unchecked(0).borrow(proc_info),
+            self.rc_buffers.get_unchecked(1).borrow(proc_info),
+        )
     }
 
     /// Mutably borrow the first two (or only two) channels in this buffer.
     ///
     /// This will return an error if the buffer is mono.
     #[inline]
-    pub fn stereo_mut(&mut self) -> Option<(&mut [T], &mut [T])> {
+    pub fn stereo_mut(&mut self, proc_info: &ProcInfo) -> Option<(&mut [T], &mut [T])> {
         if self.rc_buffers.len() > 1 {
-            Some((self.rc_buffers[0].borrow_mut(), self.rc_buffers[1].borrow_mut()))
+            Some((
+                self.rc_buffers[0].borrow_mut(proc_info),
+                self.rc_buffers[1].borrow_mut(proc_info),
+            ))
         } else {
             None
         }
@@ -306,11 +341,18 @@ impl<T: Sized + Copy + Clone + Send + Default + 'static> AudioPortBuffer<T> {
     /// Mutably borrow the first two (or only two) channels in this buffer without
     /// checking if the buffer is not mono.
     #[inline]
-    pub unsafe fn stereo_unchecked_mut(&mut self) -> (&mut [T], &mut [T]) {
+    pub unsafe fn stereo_unchecked_mut(&mut self, proc_info: &ProcInfo) -> (&mut [T], &mut [T]) {
         (
-            self.rc_buffers.get_unchecked(0).borrow_mut(),
-            self.rc_buffers.get_unchecked(1).borrow_mut(),
+            self.rc_buffers.get_unchecked(0).borrow_mut(proc_info),
+            self.rc_buffers.get_unchecked(1).borrow_mut(proc_info),
         )
+    }
+
+    #[inline]
+    pub fn clear(&mut self, proc_info: &ProcInfo) {
+        for b in self.rc_buffers.iter() {
+            b.borrow_mut(proc_info).fill(T::default());
+        }
     }
 
     // TODO: Methods for borrowing more than 2 channel buffers at a time.

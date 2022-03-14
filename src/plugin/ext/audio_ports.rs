@@ -111,6 +111,7 @@ pub struct CustomAudioPortLayout {
     pub output_ports: Vec<AudioPortInfo>,
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 /// An extension that allows a plugin to tell the host the configuration
 /// of its audio ports.

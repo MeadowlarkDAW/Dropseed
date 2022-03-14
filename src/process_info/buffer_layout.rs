@@ -1,5 +1,6 @@
 use super::AudioPortBuffer;
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CurrentBufferLayout {
     StereoOut32,
@@ -66,6 +67,7 @@ pub(crate) enum CurrentBufferLayout {
 /// The layout of audio buffers sent to this plugin's `process()` method.
 ///
 /// The host will always send the same
+#[non_exhaustive]
 pub enum ProcBufferLayout<'a> {
     /// For plugins that use `AudioPortLayout::StereoOut`, the host will always
     /// send this.
