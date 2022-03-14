@@ -187,22 +187,20 @@ impl ClapAudioBuffer {
 }
 
 /// An audio port buffer for use with internal plugins.
-pub struct InternalAudioBuffer<T: Sized + Copy + Clone + Send + Default + 'static> {
+pub struct AudioPortBuffer<T: Sized + Copy + Clone + Send + Default + 'static> {
     latency: u32,     // latency from/to the audio interface
     silent_mask: u64, // mask & (1 << N) to test if channel N is silent
 
     rc_buffers: SmallVec<[SharedAudioBuffer<T>; 2]>,
 }
 
-impl<T: Sized + Copy + Clone + Send + Default + 'static> std::fmt::Debug
-    for InternalAudioBuffer<T>
-{
+impl<T: Sized + Copy + Clone + Send + Default + 'static> std::fmt::Debug for AudioPortBuffer<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_list().entries(self.rc_buffers.iter().map(|b| b.buffer.1)).finish()
     }
 }
 
-impl<T: Sized + Copy + Clone + Send + Default + 'static> InternalAudioBuffer<T> {
+impl<T: Sized + Copy + Clone + Send + Default + 'static> AudioPortBuffer<T> {
     pub(crate) fn new(buffers: SmallVec<[SharedAudioBuffer<T>; 2]>, latency: u32) -> Self {
         assert_ne!(buffers.len(), 0);
         buffers.len() as u32;

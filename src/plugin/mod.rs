@@ -4,7 +4,7 @@ use std::error::Error;
 use basedrop::Shared;
 
 use crate::host::{Host, HostInfo};
-use crate::process::{ProcAudioPorts, ProcInfo, ProcessStatus};
+use crate::process_info::{ProcAudioBuffers, ProcInfo, ProcessStatus};
 
 pub mod ext;
 
@@ -138,18 +138,26 @@ pub trait PluginMainThread {
     ///
     /// This will only be called while the plugin is inactive.
     ///
-    /// When `None` is returned then the plugin will have a default of one stereo input and one stereo
-    /// output port. (Also the host may use the same buffer for these ports ("process replacing").)
+    /// By default this returns `AudioPortLayout::StereoInPlace`, which has a 32 bit stereo input and
+    /// a 32 bit stereo output port that are tied together in an "in_place" pair. This means the host
+    /// may provide a single buffer for both the input and output ports, akin to `process_replacing()`
+    /// in VST. The host may still decide to send separate buffers though.
     ///
-    /// By default this returns `None`.
+    /// When using the the default port layout of `AudioPortLayout::StereoInPlace`, the the host will
+    /// always send one of these options to the plugin's `process()` method:
+    ///
+    /// * `ProcBufferLayout::StereoInPlace32`
+    /// * `ProcBufferLayout::StereoInOut32`
+    ///
+    /// If using a different port layout then the default, then refer to the documentation in
+    /// [`AudioPortLayout`] to know what options the host may send to the plugin's `process()` method.
+    ///
+    /// [`AudioPortLayout`]: ../../plugin/ext/audio_ports/enum.AudioPortLayout.html
     ///
     /// [main-thread & !active_state]
     #[allow(unused)]
-    fn audio_ports_extension<'a>(
-        &'a self,
-        host: &Host,
-    ) -> Option<ext::audio_ports::PluginAudioPortsExtension<'a>> {
-        None
+    fn audio_ports_extension(&self, host: &Host) -> &ext::audio_ports::AudioPortLayout {
+        &ext::audio_ports::AudioPortLayout::StereoInPlace
     }
 }
 
@@ -176,34 +184,13 @@ pub trait PluginAudioThread: Send + 'static {
     #[allow(unused)]
     fn stop_processing(&mut self, host: &Host) {}
 
-    /// Process audio and events (with `f32` audio buffers).
-    ///
-    /// The host may call this method even if your plugin has set `preferred_sample_size` to `F64`.
-    /// In that case it is up to you to decide whether to process in `f32` or convert to/from `f64`
-    /// buffers manually.
+    /// Process audio and events.
     ///
     /// `[audio-thread & active_state & processing_state]`
     fn process(
         &mut self,
         proc: &ProcInfo,
-        audio: &mut ProcAudioPorts<f32>,
+        audio: &mut ProcAudioBuffers,
         host: &Host,
     ) -> ProcessStatus;
-
-    /// Process audio and events (with `f64` audio buffers).
-    ///
-    /// The host will not call this method unless your plugin has set `preferred_sample_size` to `F64`.
-    ///
-    /// By default this just returns `ProcessStatus::Error`.
-    ///
-    /// `[audio-thread & active_state & processing_state]`
-    #[allow(unused)]
-    fn process_f64(
-        &mut self,
-        proc: &ProcInfo,
-        audio: &mut ProcAudioPorts<f64>,
-        host: &Host,
-    ) -> ProcessStatus {
-        ProcessStatus::Error
-    }
 }

@@ -18,7 +18,7 @@ use crate::audio_buffer::ClapAudioBuffer;
 use crate::engine::RustyDAWEngine;
 use crate::error::{ClapPluginActivationError, ClapPluginThreadError};
 use crate::host::HostInfo;
-use crate::process::{ClapProcAudioPorts, ProcessStatus};
+use crate::process_info::{ClapProcAudioPorts, ProcessStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PluginState {

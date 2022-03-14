@@ -4,7 +4,7 @@ use clap_sys::process::clap_process;
 use super::plugin_pool::SharedPluginAudioThreadInstance;
 use crate::{
     host::Host,
-    process::{ClapProcAudioPorts, ProcAudioPorts, ProcInfo, ProcessStatus},
+    process_info::{ClapProcAudioPorts, ProcAudioBuffers, ProcInfo, ProcessStatus},
 };
 
 pub(crate) enum Task {
@@ -20,10 +20,7 @@ impl std::fmt::Debug for Task {
 
                 f.field("id", &t.plugin.id());
 
-                match &t.audio_ports {
-                    TaskProcAudioPorts::F32(a) => a.debug_fields(&mut f),
-                    TaskProcAudioPorts::F64(a) => a.debug_fields(&mut f),
-                }
+                t.audio_buffers.debug_fields(&mut f);
 
                 f.finish()
             }
@@ -40,21 +37,16 @@ impl std::fmt::Debug for Task {
     }
 }
 
-pub(crate) enum TaskProcAudioPorts {
-    F32(ProcAudioPorts<f32>),
-    F64(ProcAudioPorts<f64>),
-}
-
 pub(crate) struct InternalProcessorTask {
     plugin: SharedPluginAudioThreadInstance,
 
-    audio_ports: TaskProcAudioPorts,
+    audio_buffers: ProcAudioBuffers,
 }
 
 impl InternalProcessorTask {
     #[inline]
     pub fn process(&mut self, info: &ProcInfo, host: &mut Host) {
-        let Self { plugin, audio_ports } = self;
+        let Self { plugin, audio_buffers } = self;
 
         // This is safe because the audio thread counterpart of a plugin only ever
         // borrowed mutably here in the audio thread. Also, the verifier has verified

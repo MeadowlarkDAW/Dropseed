@@ -15,9 +15,10 @@ readme = "README.md"
 
 [dependencies]
 rusty-daw-core = { path = "../rusty-daw-core" }
-clap-sys = { path = "../clap-sys" }
+clap-sys = { git = "https://github.com/glowcoil/clap-sys.git", branch = "master" }
 raw-window-handle = "0.4"
 basedrop = "0.1"
 smallvec = "1.7"
+bitflags = "1.3"
 fnv = "1.0"
 log = "0.4"

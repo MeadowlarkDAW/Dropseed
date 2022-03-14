@@ -8,7 +8,16 @@ use clap_sys::{
 use rusty_daw_core::Frames;
 use smallvec::SmallVec;
 
-use crate::audio_buffer::{ClapAudioBuffer, InternalAudioBuffer};
+use crate::audio_buffer::{AudioPortBuffer, ClapAudioBuffer};
+
+pub type PortID = u32;
+pub type InPlacePairID = u32;
+
+mod buffer_layout;
+mod proc_audio_buffers;
+
+pub use buffer_layout::{ProcBufferLayout, RawBufferLayout};
+pub use proc_audio_buffers::ProcAudioBuffers;
 
 /// The status of a call to a plugin's `process()` method.
 #[non_exhaustive]
@@ -50,35 +59,13 @@ impl ProcessStatus {
     }
 }
 
-pub enum MonoInOutStatus<'a, T: Sized + Copy + Clone + Send + Default + 'static> {
-    /// The host has given a single buffer for both the input and output port.
-    InPlace(&'a mut [T]),
-
-    /// The host has given a separate input and output buffer.
-    Separate { input: &'a [T], output: &'a mut [T] },
-
-    /// The host has not given a main mono output buffer.
-    NoMonoOut,
-}
-
-pub enum StereoInOutStatus<'a, T: Sized + Copy + Clone + Send + Default + 'static> {
-    /// The host has given a single buffer for both the input and output port.
-    InPlace((&'a mut [T], &'a mut [T])),
-
-    /// The host has given a separate input and output buffer.
-    Separate { input: (&'a [T], &'a [T]), output: (&'a mut [T], &'a mut [T]) },
-
-    /// The host has not given a stereo output buffer.
-    NoStereoOut,
-}
-
 /// The port buffers (for use with external CLAP plugins).
 pub(crate) struct ClapProcAudioPorts {
     audio_inputs: SmallVec<[ClapAudioBuffer; 1]>,
     audio_outputs: SmallVec<[ClapAudioBuffer; 1]>,
 
     raw_audio_inputs: SmallVec<[*const clap_audio_buffer; 1]>,
-    raw_audio_outputs: SmallVec<[*const clap_audio_buffer; 1]>,
+    raw_audio_outputs: SmallVec<[*mut clap_audio_buffer; 1]>,
 
     audio_inputs_count: u32,
     audio_outputs_count: u32,
@@ -112,13 +99,13 @@ impl ClapProcAudioPorts {
     ) -> Self {
         let mut raw_audio_inputs: SmallVec<[*const clap_audio_buffer; 1]> =
             SmallVec::with_capacity(audio_inputs.len());
-        let mut raw_audio_outputs: SmallVec<[*const clap_audio_buffer; 1]> =
+        let mut raw_audio_outputs: SmallVec<[*mut clap_audio_buffer; 1]> =
             SmallVec::with_capacity(audio_outputs.len());
         for _ in 0..audio_inputs.len() {
             raw_audio_inputs.push(std::ptr::null());
         }
         for _ in 0..audio_outputs.len() {
-            raw_audio_outputs.push(std::ptr::null());
+            raw_audio_outputs.push(std::ptr::null_mut());
         }
 
         let audio_inputs_count = audio_inputs.len() as u32;
@@ -145,7 +132,8 @@ impl ClapProcAudioPorts {
                 *self.raw_audio_inputs.get_unchecked_mut(i) = self.audio_inputs[i].as_raw();
             }
             for i in 0..self.audio_outputs.len() {
-                *self.raw_audio_outputs.get_unchecked_mut(i) = self.audio_outputs[i].as_raw();
+                *self.raw_audio_outputs.get_unchecked_mut(i) =
+                    self.audio_outputs[i].as_raw() as *mut clap_audio_buffer;
             }
         }
 
@@ -157,127 +145,11 @@ impl ClapProcAudioPorts {
         proc.audio_outputs = if !self.raw_audio_outputs.is_empty() {
             self.raw_audio_outputs[0]
         } else {
-            std::ptr::null()
+            std::ptr::null_mut()
         };
 
         proc.audio_inputs_count = self.audio_inputs_count;
         proc.audio_outputs_count = self.audio_outputs_count;
-    }
-}
-
-/// The audio port buffers (for use with internal plugins).
-pub struct ProcAudioPorts<T: Sized + Copy + Clone + Send + Default + 'static> {
-    /// The main audio input buffer.
-    ///
-    /// Note this may be `None` even when a main input port exists.
-    /// In that case it means the host has given the same buffer for
-    /// the main input and output ports (process replacing).
-    pub main_in: Option<InternalAudioBuffer<T>>,
-
-    /// The main audio output buffer.
-    pub main_out: Option<InternalAudioBuffer<T>>,
-
-    /// The extra inputs buffers (not including the main input buffer).
-    pub extra_inputs: Vec<InternalAudioBuffer<T>>,
-
-    /// The extra output buffers (not including the main input buffer).
-    pub extra_outputs: Vec<InternalAudioBuffer<T>>,
-}
-
-impl<T: Sized + Copy + Clone + Send + Default + 'static> ProcAudioPorts<T> {
-    pub(crate) fn debug_fields(&self, f: &mut std::fmt::DebugStruct) {
-        if let Some(b) = &self.main_in {
-            f.field("main_in", b);
-        }
-        if let Some(b) = &self.main_out {
-            f.field("main_out", b);
-        }
-        if !self.extra_inputs.is_empty() {
-            let mut s = format!("[{:?}", &self.extra_inputs[0]);
-            for b in self.extra_inputs.iter().skip(1) {
-                s.push_str(&format!(" ,{:?}", b));
-            }
-            s.push_str("]");
-
-            f.field("extra_in", &s);
-        }
-        if !self.extra_outputs.is_empty() {
-            let mut s = format!("[{:?}", &self.extra_outputs[0]);
-            for b in self.extra_outputs.iter().skip(1) {
-                s.push_str(&format!(" ,{:?}", b));
-            }
-            s.push_str("]");
-
-            f.field("extra_out", &s);
-        }
-    }
-
-    /// A helper method to retrieve the main mono input/output buffers.
-    pub fn main_mono_in_out<'a>(&'a mut self) -> MonoInOutStatus<'a, T> {
-        let Self { main_in, main_out, .. } = self;
-
-        if let Some(main_out) = main_out {
-            if let Some(main_in) = main_in {
-                return MonoInOutStatus::Separate {
-                    input: main_in.mono(),
-                    output: main_out.mono_mut(),
-                };
-            } else {
-                return MonoInOutStatus::InPlace(main_out.mono_mut());
-            }
-        }
-
-        MonoInOutStatus::NoMonoOut
-    }
-
-    /// A helper method to retrieve the main stereo input/output buffers.
-    pub fn main_stereo_in_out<'a>(&'a mut self) -> StereoInOutStatus<'a, T> {
-        let Self { main_in, main_out, .. } = self;
-
-        if let Some(main_out) = main_out {
-            if let Some(out_bufs) = main_out.stereo_mut() {
-                if let Some(main_in) = main_in {
-                    if let Some(in_bufs) = main_in.stereo() {
-                        return StereoInOutStatus::Separate { input: in_bufs, output: out_bufs };
-                    } else {
-                        return StereoInOutStatus::InPlace(out_bufs);
-                    }
-                } else {
-                    return StereoInOutStatus::InPlace(out_bufs);
-                }
-            }
-        }
-
-        StereoInOutStatus::NoStereoOut
-    }
-
-    /// A helper method to retrieve the main mono output buffer.
-    #[inline]
-    pub fn main_mono_out<'a>(&'a mut self) -> Option<&'a mut [T]> {
-        if let Some(main_out) = &mut self.main_out {
-            Some(main_out.mono_mut())
-        } else {
-            None
-        }
-    }
-
-    /// A helper method to retrieve the main stereo output buffer.
-    #[inline]
-    pub fn main_stereo_out<'a>(&'a mut self) -> Option<(&'a mut [T], &'a mut [T])> {
-        if let Some(main_out) = &mut self.main_out {
-            if let Some(out_bufs) = main_out.stereo_mut() {
-                return Some(out_bufs);
-            }
-        }
-
-        None
-    }
-
-    /// Returns `true` if all the input buffers are silent.
-    pub fn inputs_are_silent(&self) -> bool {
-        // TODO
-
-        false
     }
 }
 
