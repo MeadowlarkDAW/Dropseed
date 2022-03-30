@@ -16,7 +16,11 @@ pub type InPlacePairID = u32;
 mod buffer_layout;
 mod proc_audio_buffers;
 
-pub use buffer_layout::{ProcBufferLayout, RawBufferLayout};
+pub use buffer_layout::{
+    MonoIn64Res, MonoInOut64Res, MonoInPlace32Res, MonoInPlace64Res, MonoInStereOut64Res,
+    MonoOut64Res, StereoIn64Res, StereoInMonoOut64Res, StereoInOut64Res, StereoInPlace32Res,
+    StereoInPlace64Res, StereoOut64Res,
+};
 pub use proc_audio_buffers::ProcAudioBuffers;
 
 /// The status of a call to a plugin's `process()` method.

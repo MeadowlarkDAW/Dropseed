@@ -1,533 +1,410 @@
 use std::fmt::DebugStruct;
 
-use super::buffer_layout::CurrentBufferLayout;
-use super::{AudioPortBuffer, ProcBufferLayout, ProcInfo, RawBufferLayout};
+use super::buffer_layout::{
+    CurrentMainLayout, MonoIn64Res, MonoInOut64Res, MonoInPlace32Res, MonoInPlace64Res,
+    MonoInStereOut64Res, MonoOut64Res, StereoIn64Res, StereoInMonoOut64Res, StereoInOut64Res,
+    StereoInPlace32Res, StereoInPlace64Res, StereoOut64Res,
+};
+use super::{AudioPortBuffer, ProcInfo};
 
 /// The audio port buffers sent to the plugin's `process()` method.
 pub struct ProcAudioBuffers {
-    in_f32: Vec<Option<AudioPortBuffer<f32>>>,
-    in_f64: Vec<Option<AudioPortBuffer<f64>>>,
+    /// The audio buffers for the main audio ports.
+    pub main: ProcMainBuffers,
 
-    out_f32: Vec<Option<AudioPortBuffer<f32>>>,
-    out_f64: Vec<Option<AudioPortBuffer<f64>>>,
-
-    layout: CurrentBufferLayout,
+    /// The audio buffers for any extra audio ports (**NOT** including the
+    /// main ports).
+    pub extra: ProcExtraBuffers,
 }
 
-impl ProcAudioBuffers {
-    pub(crate) fn debug_fields(&self, f: &mut DebugStruct) {
-        f.field("audio_layout: {:?}", &self.layout);
-        f.field("in_f32: {}", &self.in_f32);
-        f.field("in_f64: {}", &self.in_f64);
-        f.field("out_f64: {}", &self.out_f32);
-        f.field("out_f64: {}", &self.out_f64);
-    }
+pub struct ProcMainBuffers {
+    in_f32: Option<AudioPortBuffer<f32>>,
+    in_f64: Option<AudioPortBuffer<f64>>,
+    out_f32: Option<AudioPortBuffer<f32>>,
+    out_f64: Option<AudioPortBuffer<f64>>,
 
-    /// Get the layout of audio buffers.
-    ///
-    /// If the plugin is using the the default port layout of
-    /// `AudioPortLayout::StereoInPlace`, then the host will always return one of
-    /// these options in this method:
-    ///
-    /// * `ProcBufferLayout::StereoInPlace32`
-    /// * `ProcBufferLayout::StereoInOut32`
-    ///
-    /// If the plugin is using a different port layout then the default, then
-    /// refer to the documentation in [`AudioPortLayout`] to know what options
-    /// the host may return in this method.
-    ///
-    /// [`AudioPortLayout`]: ../../plugin/ext/audio_ports/enum.AudioPortLayout.html
-    pub fn get<'a>(&'a mut self, proc_info: &ProcInfo) -> ProcBufferLayout<'a> {
-        // Safe because the scheduler ensures that the correct buffers exist
-        // for `self.layout`.
-        unsafe {
-            match self.layout {
-                CurrentBufferLayout::StereoOut32 => {
-                    let (left, right) = self
-                        .out_f32
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .stereo_unchecked_mut(proc_info);
-                    ProcBufferLayout::StereoOut32 { left, right }
-                }
-                CurrentBufferLayout::StereoOut64 => {
-                    let (left, right) = self
-                        .out_f64
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .stereo_unchecked_mut(proc_info);
-                    ProcBufferLayout::StereoOut64 { left, right }
-                }
+    layout: CurrentMainLayout,
+}
 
-                CurrentBufferLayout::MonoOut32 => {
-                    let b = self
-                        .out_f32
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .mono_mut(proc_info);
-                    ProcBufferLayout::MonoOut32(b)
-                }
-                CurrentBufferLayout::MonoOut64 => {
-                    let b = self
-                        .out_f64
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .mono_mut(proc_info);
-                    ProcBufferLayout::MonoOut64(b)
-                }
-
-                CurrentBufferLayout::StereoInPlace32 => {
-                    let (left, right) = self
-                        .out_f32
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .stereo_unchecked_mut(proc_info);
-                    ProcBufferLayout::StereoInPlace32 { left, right }
-                }
-                CurrentBufferLayout::StereoInPlace64 => {
-                    let (left, right) = self
-                        .out_f64
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .stereo_unchecked_mut(proc_info);
-                    ProcBufferLayout::StereoInPlace64 { left, right }
-                }
-
-                CurrentBufferLayout::StereoInPlaceWithSidechain32 => {
-                    let (left, right) = self
-                        .out_f32
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .stereo_unchecked_mut(proc_info);
-                    let (sc_left, sc_right) = self
-                        .in_f32
-                        .get_unchecked(1)
-                        .as_ref()
-                        .unwrap_unchecked()
-                        .stereo_unchecked(proc_info);
-                    ProcBufferLayout::StereoInPlaceWithSidechain32 {
-                        left,
-                        right,
-                        sc_left,
-                        sc_right,
-                    }
-                }
-                CurrentBufferLayout::StereoInPlaceWithSidechain64 => {
-                    let (left, right) = self
-                        .out_f64
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .stereo_unchecked_mut(proc_info);
-                    let (sc_left, sc_right) = self
-                        .in_f64
-                        .get_unchecked(1)
-                        .as_ref()
-                        .unwrap_unchecked()
-                        .stereo_unchecked(proc_info);
-                    ProcBufferLayout::StereoInPlaceWithSidechain64 {
-                        left,
-                        right,
-                        sc_left,
-                        sc_right,
-                    }
-                }
-
-                CurrentBufferLayout::StereoInPlaceWithExtraOut32 => {
-                    let (out_1, out_2) = self.out_f32.split_first_mut().unwrap_unchecked();
-                    let (left, right) =
-                        out_1.as_mut().unwrap_unchecked().stereo_unchecked_mut(proc_info);
-                    let (extra_out_left, extra_out_right) = out_2
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .stereo_unchecked_mut(proc_info);
-                    ProcBufferLayout::StereoInPlaceWithExtraOut32 {
-                        left,
-                        right,
-                        extra_out_left,
-                        extra_out_right,
-                    }
-                }
-                CurrentBufferLayout::StereoInPlaceWithExtraOut64 => {
-                    let (out_1, out_2) = self.out_f64.split_first_mut().unwrap_unchecked();
-                    let (left, right) =
-                        out_1.as_mut().unwrap_unchecked().stereo_unchecked_mut(proc_info);
-                    let (extra_out_left, extra_out_right) = out_2
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .stereo_unchecked_mut(proc_info);
-                    ProcBufferLayout::StereoInPlaceWithExtraOut64 {
-                        left,
-                        right,
-                        extra_out_left,
-                        extra_out_right,
-                    }
-                }
-
-                CurrentBufferLayout::MonoInPlace32 => {
-                    let b = self
-                        .out_f32
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .mono_mut(proc_info);
-                    ProcBufferLayout::MonoInPlace32(b)
-                }
-                CurrentBufferLayout::MonoInPlace64 => {
-                    let b = self
-                        .out_f64
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .mono_mut(proc_info);
-                    ProcBufferLayout::MonoInPlace64(b)
-                }
-
-                CurrentBufferLayout::MonoInPlaceWithSidechain32 => {
-                    let in_out = self
-                        .out_f32
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .mono_mut(proc_info);
-                    let sc =
-                        self.in_f32.get_unchecked(1).as_ref().unwrap_unchecked().mono(proc_info);
-                    ProcBufferLayout::MonoInPlaceWithSidechain32 { in_out, sc }
-                }
-                CurrentBufferLayout::MonoInPlaceWithSidechain64 => {
-                    let in_out = self
-                        .out_f64
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .mono_mut(proc_info);
-                    let sc =
-                        self.in_f64.get_unchecked(1).as_ref().unwrap_unchecked().mono(proc_info);
-                    ProcBufferLayout::MonoInPlaceWithSidechain64 { in_out, sc }
-                }
-
-                CurrentBufferLayout::StereoInOut32 => {
-                    let (in_left, in_right) = self
-                        .in_f32
-                        .get_unchecked(0)
-                        .as_ref()
-                        .unwrap_unchecked()
-                        .stereo_unchecked(proc_info);
-                    let (out_left, out_right) = self
-                        .out_f32
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .stereo_unchecked_mut(proc_info);
-                    ProcBufferLayout::StereoInOut32 { in_left, in_right, out_left, out_right }
-                }
-                CurrentBufferLayout::StereoInOut64 => {
-                    let (in_left, in_right) = self
-                        .in_f64
-                        .get_unchecked(0)
-                        .as_ref()
-                        .unwrap_unchecked()
-                        .stereo_unchecked(proc_info);
-                    let (out_left, out_right) = self
-                        .out_f64
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .stereo_unchecked_mut(proc_info);
-                    ProcBufferLayout::StereoInOut64 { in_left, in_right, out_left, out_right }
-                }
-
-                CurrentBufferLayout::StereoInOutWithSidechain32 => {
-                    let (in_left, in_right) = self
-                        .in_f32
-                        .get_unchecked(0)
-                        .as_ref()
-                        .unwrap_unchecked()
-                        .stereo_unchecked(proc_info);
-                    let (out_left, out_right) = self
-                        .out_f32
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .stereo_unchecked_mut(proc_info);
-                    let (sc_left, sc_right) = self
-                        .in_f32
-                        .get_unchecked(1)
-                        .as_ref()
-                        .unwrap_unchecked()
-                        .stereo_unchecked(proc_info);
-                    ProcBufferLayout::StereoInOutWithSidechain32 {
-                        in_left,
-                        in_right,
-                        out_left,
-                        out_right,
-                        sc_left,
-                        sc_right,
-                    }
-                }
-                CurrentBufferLayout::StereoInOutWithSidechain64 => {
-                    let (in_left, in_right) = self
-                        .in_f64
-                        .get_unchecked(0)
-                        .as_ref()
-                        .unwrap_unchecked()
-                        .stereo_unchecked(proc_info);
-                    let (out_left, out_right) = self
-                        .out_f64
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .stereo_unchecked_mut(proc_info);
-                    let (sc_left, sc_right) = self
-                        .in_f64
-                        .get_unchecked(1)
-                        .as_ref()
-                        .unwrap_unchecked()
-                        .stereo_unchecked(proc_info);
-                    ProcBufferLayout::StereoInOutWithSidechain64 {
-                        in_left,
-                        in_right,
-                        out_left,
-                        out_right,
-                        sc_left,
-                        sc_right,
-                    }
-                }
-
-                CurrentBufferLayout::StereoInOutWithExtraOut32 => {
-                    let (in_left, in_right) = self
-                        .in_f32
-                        .get_unchecked(0)
-                        .as_ref()
-                        .unwrap_unchecked()
-                        .stereo_unchecked(proc_info);
-                    let (out_1, out_2) = self.out_f32.split_first_mut().unwrap_unchecked();
-                    let (out_left, out_right) =
-                        out_1.as_mut().unwrap_unchecked().stereo_unchecked_mut(proc_info);
-                    let (extra_out_left, extra_out_right) = out_2
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .stereo_unchecked_mut(proc_info);
-                    ProcBufferLayout::StereoInOutWithExtraOut32 {
-                        in_left,
-                        in_right,
-                        out_left,
-                        out_right,
-                        extra_out_left,
-                        extra_out_right,
-                    }
-                }
-                CurrentBufferLayout::StereoInOutWithExtraOut64 => {
-                    let (in_left, in_right) = self
-                        .in_f64
-                        .get_unchecked(0)
-                        .as_ref()
-                        .unwrap_unchecked()
-                        .stereo_unchecked(proc_info);
-                    let (out_1, out_2) = self.out_f64.split_first_mut().unwrap_unchecked();
-                    let (out_left, out_right) =
-                        out_1.as_mut().unwrap_unchecked().stereo_unchecked_mut(proc_info);
-                    let (extra_out_left, extra_out_right) = out_2
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .stereo_unchecked_mut(proc_info);
-                    ProcBufferLayout::StereoInOutWithExtraOut64 {
-                        in_left,
-                        in_right,
-                        out_left,
-                        out_right,
-                        extra_out_left,
-                        extra_out_right,
-                    }
-                }
-
-                CurrentBufferLayout::MonoInOut32 => {
-                    let input =
-                        self.in_f32.get_unchecked(0).as_ref().unwrap_unchecked().mono(proc_info);
-                    let output = self
-                        .out_f32
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .mono_mut(proc_info);
-                    ProcBufferLayout::MonoInOut32 { input, output }
-                }
-                CurrentBufferLayout::MonoInOut64 => {
-                    let input =
-                        self.in_f64.get_unchecked(0).as_ref().unwrap_unchecked().mono(proc_info);
-                    let output = self
-                        .out_f64
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .mono_mut(proc_info);
-                    ProcBufferLayout::MonoInOut64 { input, output }
-                }
-
-                CurrentBufferLayout::MonoInOutWithSidechain32 => {
-                    let input =
-                        self.in_f32.get_unchecked(0).as_ref().unwrap_unchecked().mono(proc_info);
-                    let output = self
-                        .out_f32
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .mono_mut(proc_info);
-                    let sc =
-                        self.in_f32.get_unchecked(1).as_ref().unwrap_unchecked().mono(proc_info);
-                    ProcBufferLayout::MonoInOutWithSidechain32 { input, output, sc }
-                }
-                CurrentBufferLayout::MonoInOutWithSidechain64 => {
-                    let input =
-                        self.in_f64.get_unchecked(0).as_ref().unwrap_unchecked().mono(proc_info);
-                    let output = self
-                        .out_f64
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .mono_mut(proc_info);
-                    let sc =
-                        self.in_f64.get_unchecked(1).as_ref().unwrap_unchecked().mono(proc_info);
-                    ProcBufferLayout::MonoInOutWithSidechain64 { input, output, sc }
-                }
-
-                CurrentBufferLayout::MonoInStereoOut32 => {
-                    let input =
-                        self.in_f32.get_unchecked(0).as_ref().unwrap_unchecked().mono(proc_info);
-                    let (out_left, out_right) = self
-                        .out_f32
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .stereo_unchecked_mut(proc_info);
-                    ProcBufferLayout::MonoInStereoOut32 { input, out_left, out_right }
-                }
-                CurrentBufferLayout::MonoInStereoOut64 => {
-                    let input =
-                        self.in_f64.get_unchecked(0).as_ref().unwrap_unchecked().mono(proc_info);
-                    let (out_left, out_right) = self
-                        .out_f64
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .stereo_unchecked_mut(proc_info);
-                    ProcBufferLayout::MonoInStereoOut64 { input, out_left, out_right }
-                }
-
-                CurrentBufferLayout::StereoInMonoOut32 => {
-                    let (in_left, in_right) = self
-                        .in_f32
-                        .get_unchecked(0)
-                        .as_ref()
-                        .unwrap_unchecked()
-                        .stereo_unchecked(proc_info);
-                    let output = self
-                        .out_f32
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .mono_mut(proc_info);
-                    ProcBufferLayout::StereoInMonoOut32 { in_left, in_right, output }
-                }
-                CurrentBufferLayout::StereoInMonoOut64 => {
-                    let (in_left, in_right) = self
-                        .in_f64
-                        .get_unchecked(0)
-                        .as_ref()
-                        .unwrap_unchecked()
-                        .stereo_unchecked(proc_info);
-                    let output = self
-                        .out_f64
-                        .get_unchecked_mut(0)
-                        .as_mut()
-                        .unwrap_unchecked()
-                        .mono_mut(proc_info);
-                    ProcBufferLayout::StereoInMonoOut64 { in_left, in_right, output }
-                }
-
-                /* TODO
-                CurrentBufferLayout::SurroundOut32 => {
-                    let b = self.out_f32.get_unchecked_mut(0).as_mut().unwrap_unchecked();
-                    ProcBufferLayout::SurroundOut32(b)
-                }
-                CurrentBufferLayout::SurroundOut64 => {
-                    let b = self.out_f64.get_unchecked_mut(0).as_mut().unwrap_unchecked();
-                    ProcBufferLayout::SurroundOut64(b)
-                }
-
-                CurrentBufferLayout::SurroundInPlace32 => {
-                    let b = self.out_f32.get_unchecked_mut(0).as_mut().unwrap_unchecked();
-                    ProcBufferLayout::SurroundInPlace32(b)
-                }
-                CurrentBufferLayout::SurroundInPlace64 => {
-                    let b = self.out_f64.get_unchecked_mut(0).as_mut().unwrap_unchecked();
-                    ProcBufferLayout::SurroundInPlace64(b)
-                }
-
-                CurrentBufferLayout::SurroundInPlaceWithSidechain32 => {
-                    let in_out = self.out_f32.get_unchecked_mut(0).as_mut().unwrap_unchecked();
-                    let sc = self.in_f32.get_unchecked(1).as_ref().unwrap_unchecked();
-                    ProcBufferLayout::SurroundInPlaceWithSidechain32 { in_out, sc }
-                }
-                CurrentBufferLayout::SurroundInPlaceWithSidechain64 => {
-                    let in_out = self.out_f64.get_unchecked_mut(0).as_mut().unwrap_unchecked();
-                    let sc = self.in_f64.get_unchecked(1).as_ref().unwrap_unchecked();
-                    ProcBufferLayout::SurroundInPlaceWithSidechain64 { in_out, sc }
-                }
-
-                CurrentBufferLayout::SurroundInOut32 => {
-                    let input = self.in_f32.get_unchecked(0).as_ref().unwrap_unchecked();
-                    let output = self.out_f32.get_unchecked_mut(0).as_mut().unwrap_unchecked();
-                    ProcBufferLayout::SurroundInOut32 { input, output }
-                }
-                CurrentBufferLayout::SurroundInOut64 => {
-                    let input = self.in_f64.get_unchecked(0).as_ref().unwrap_unchecked();
-                    let output = self.out_f64.get_unchecked_mut(0).as_mut().unwrap_unchecked();
-                    ProcBufferLayout::SurroundInOut64 { input, output }
-                }
-
-                CurrentBufferLayout::SurroundInOutWithSidechain32 => {
-                    let input = self.in_f32.get_unchecked(0).as_ref().unwrap_unchecked();
-                    let output = self.out_f32.get_unchecked_mut(0).as_mut().unwrap_unchecked();
-                    let sc = self.in_f32.get_unchecked(1).as_ref().unwrap_unchecked();
-                    ProcBufferLayout::SurroundInOutWithSidechai32 { input, output, sc }
-                }
-                CurrentBufferLayout::SurroundInOutWithSidechain64 => {
-                    let input = self.in_f64.get_unchecked(0).as_ref().unwrap_unchecked();
-                    let output = self.out_f64.get_unchecked_mut(0).as_mut().unwrap_unchecked();
-                    let sc = self.in_f64.get_unchecked(1).as_ref().unwrap_unchecked();
-                    ProcBufferLayout::SurroundInOutWithSidechain64 { input, output, sc }
-                }
-                */
-                CurrentBufferLayout::Custom => ProcBufferLayout::Custom(RawBufferLayout {
-                    in_f32: &self.in_f32,
-                    in_f64: &self.in_f64,
-
-                    out_f32: &mut self.out_f32,
-                    out_f64: &mut self.out_f64,
-                }),
-            }
+impl ProcMainBuffers {
+    /// This will always return `Some` if the plugin uses the `AudioPortsExtension`
+    /// and uses `MainPortsLayout::StereoIn`. This will always return `None`
+    /// otherwise.
+    pub fn stereo_in(&self, proc_info: &ProcInfo) -> Option<(&[f32], &[f32])> {
+        if let CurrentMainLayout::StereoIn32 = self.layout {
+            let (left, right) =
+                unsafe { self.in_f32.as_ref().unwrap_unchecked().stereo_unchecked(proc_info) };
+            Some((left, right))
+        } else {
+            None
         }
     }
 
-    /// Get the raw layout of audio buffers.
-    #[inline]
-    pub fn raw<'a>(&'a mut self) -> RawBufferLayout<'a> {
-        RawBufferLayout {
+    /// This will always return `Some` if the plugin uses the `AudioPortsExtension`
+    /// and uses `MainPortsLayout::StereoInPrefers64`. This will always return `None`
+    /// otherwise.
+    pub fn stereo_in_prefers_64<'a>(&'a self, proc_info: &ProcInfo) -> Option<StereoIn64Res<'a>> {
+        if let CurrentMainLayout::StereoIn64 = self.layout {
+            let (left, right) =
+                unsafe { self.in_f64.as_ref().unwrap_unchecked().stereo_unchecked(proc_info) };
+            Some(StereoIn64Res::F64 { left, right })
+        } else if let CurrentMainLayout::StereoIn32 = self.layout {
+            let (left, right) =
+                unsafe { self.in_f32.as_ref().unwrap_unchecked().stereo_unchecked(proc_info) };
+            Some(StereoIn64Res::F32 { left, right })
+        } else {
+            None
+        }
+    }
+
+    /// This will always return `Some` if the plugin uses the `AudioPortsExtension`
+    /// and uses `MainPortsLayout::StereoOut`. This will always return `None`
+    /// otherwise.
+    pub fn stereo_out(&mut self, proc_info: &ProcInfo) -> Option<(&mut [f32], &mut [f32])> {
+        if let CurrentMainLayout::StereoOut32 = self.layout {
+            let (left, right) =
+                unsafe { self.in_f32.as_mut().unwrap_unchecked().stereo_unchecked_mut(proc_info) };
+            Some((left, right))
+        } else {
+            None
+        }
+    }
+
+    /// This will always return `Some` if the plugin uses the `AudioPortsExtension`
+    /// and uses `MainPortsLayout::StereoOutPrefers64`. This will always return `None`
+    /// otherwise.
+    pub fn stereo_out_prefers_64<'a>(
+        &'a mut self,
+        proc_info: &ProcInfo,
+    ) -> Option<StereoOut64Res<'a>> {
+        if let CurrentMainLayout::StereoOut64 = self.layout {
+            let (left, right) =
+                unsafe { self.in_f64.as_mut().unwrap_unchecked().stereo_unchecked_mut(proc_info) };
+            Some(StereoOut64Res::F64 { left, right })
+        } else if let CurrentMainLayout::StereoOut32 = self.layout {
+            let (left, right) =
+                unsafe { self.in_f32.as_mut().unwrap_unchecked().stereo_unchecked_mut(proc_info) };
+            Some(StereoOut64Res::F32 { left, right })
+        } else {
+            None
+        }
+    }
+
+    /// This will always return `Some` if the plugin uses the `AudioPortsExtension`
+    /// and uses `MainPortsLayout::MonoIn`. This will always return `None`
+    /// otherwise.
+    pub fn mono_in(&self, proc_info: &ProcInfo) -> Option<&[f32]> {
+        if let CurrentMainLayout::MonoIn32 = self.layout {
+            let b = unsafe { self.in_f32.as_ref().unwrap_unchecked().mono(proc_info) };
+            Some(b)
+        } else {
+            None
+        }
+    }
+
+    /// This will always return `Some` if the plugin uses the `AudioPortsExtension`
+    /// and uses `MainPortsLayout::MonoInPrefers64`. This will always return `None`
+    /// otherwise.
+    pub fn mono_in_prefers_64<'a>(&'a self, proc_info: &ProcInfo) -> Option<MonoIn64Res<'a>> {
+        if let CurrentMainLayout::MonoIn64 = self.layout {
+            let b = unsafe { self.in_f64.as_ref().unwrap_unchecked().mono(proc_info) };
+            Some(MonoIn64Res::F64(b))
+        } else if let CurrentMainLayout::MonoIn32 = self.layout {
+            let b = unsafe { self.in_f32.as_ref().unwrap_unchecked().mono(proc_info) };
+            Some(MonoIn64Res::F32(b))
+        } else {
+            None
+        }
+    }
+
+    /// This will always return `Some` if the plugin uses the `AudioPortsExtension`
+    /// and uses `MainPortsLayout::MonoOut`. This will always return `None`
+    /// otherwise.
+    pub fn mono_out(&mut self, proc_info: &ProcInfo) -> Option<&mut [f32]> {
+        if let CurrentMainLayout::MonoOut32 = self.layout {
+            let b = unsafe { self.in_f32.as_mut().unwrap_unchecked().mono_mut(proc_info) };
+            Some(b)
+        } else {
+            None
+        }
+    }
+
+    /// This will always return `Some` if the plugin uses the `AudioPortsExtension`
+    /// and uses `MainPortsLayout::MonoOutPrefers64`. This will always return `None`
+    /// otherwise.
+    pub fn mono_out_prefers_64<'a>(&'a mut self, proc_info: &ProcInfo) -> Option<MonoOut64Res<'a>> {
+        if let CurrentMainLayout::MonoOut64 = self.layout {
+            let b = unsafe { self.in_f64.as_mut().unwrap_unchecked().mono_mut(proc_info) };
+            Some(MonoOut64Res::F64(b))
+        } else if let CurrentMainLayout::MonoOut32 = self.layout {
+            let b = unsafe { self.in_f32.as_mut().unwrap_unchecked().mono_mut(proc_info) };
+            Some(MonoOut64Res::F32(b))
+        } else {
+            None
+        }
+    }
+
+    /// If the plugin uses the default for the `AudioPortsExtension`, then this will
+    /// always return `Some`.
+    ///
+    /// If the plugin does not use the default for the `AudioPortsExtension` and it
+    /// does not use `MainPortsLayout::StereoInPlace`, then this will return `None`.
+    pub fn stereo_in_place<'a>(
+        &'a mut self,
+        proc_info: &ProcInfo,
+    ) -> Option<StereoInPlace32Res<'a>> {
+        if let CurrentMainLayout::StereoInPlace32 = self.layout {
+            let (left, right) =
+                unsafe { self.out_f32.as_mut().unwrap_unchecked().stereo_unchecked_mut(proc_info) };
+            Some(StereoInPlace32Res::InPlace { left, right })
+        } else if let CurrentMainLayout::StereoInOut32 = self.layout {
+            let (in_left, in_right) =
+                unsafe { self.in_f32.as_ref().unwrap_unchecked().stereo_unchecked(proc_info) };
+            let (out_left, out_right) =
+                unsafe { self.out_f32.as_mut().unwrap_unchecked().stereo_unchecked_mut(proc_info) };
+            Some(StereoInPlace32Res::Separate { in_left, in_right, out_left, out_right })
+        } else {
+            None
+        }
+    }
+
+    /// This will always return `Some` if the plugin uses the `AudioPortsExtension`
+    /// and uses `MainPortsLayout::StereoInPlacePrefersF64`. This will always return
+    /// `None` otherwise.
+    pub fn stereo_in_place_prefers_64<'a>(
+        &'a mut self,
+        proc_info: &ProcInfo,
+    ) -> Option<StereoInPlace64Res<'a>> {
+        if let CurrentMainLayout::StereoInPlace64 = self.layout {
+            let (left, right) =
+                unsafe { self.out_f64.as_mut().unwrap_unchecked().stereo_unchecked_mut(proc_info) };
+            Some(StereoInPlace64Res::InPlace64 { left, right })
+        } else if let CurrentMainLayout::StereoInOut64 = self.layout {
+            let (in_left, in_right) =
+                unsafe { self.in_f64.as_ref().unwrap_unchecked().stereo_unchecked(proc_info) };
+            let (out_left, out_right) =
+                unsafe { self.out_f64.as_mut().unwrap_unchecked().stereo_unchecked_mut(proc_info) };
+            Some(StereoInPlace64Res::Separate64 { in_left, in_right, out_left, out_right })
+        } else if let CurrentMainLayout::StereoInPlace32 = self.layout {
+            let (left, right) =
+                unsafe { self.out_f32.as_mut().unwrap_unchecked().stereo_unchecked_mut(proc_info) };
+            Some(StereoInPlace64Res::InPlace32 { left, right })
+        } else if let CurrentMainLayout::StereoInOut32 = self.layout {
+            let (in_left, in_right) =
+                unsafe { self.in_f32.as_ref().unwrap_unchecked().stereo_unchecked(proc_info) };
+            let (out_left, out_right) =
+                unsafe { self.out_f32.as_mut().unwrap_unchecked().stereo_unchecked_mut(proc_info) };
+            Some(StereoInPlace64Res::Separate32 { in_left, in_right, out_left, out_right })
+        } else {
+            None
+        }
+    }
+
+    /// This will always return `Some` if the plugin uses the `AudioPortsExtension`
+    /// and uses `MainPortsLayout::StereoInOut`. This will always return `None`
+    /// otherwise.
+    pub fn stereo_in_out(
+        &mut self,
+        proc_info: &ProcInfo,
+    ) -> Option<(&[f32], &[f32], &mut [f32], &mut [f32])> {
+        if let CurrentMainLayout::StereoInOut32 = self.layout {
+            let (in_left, in_right) =
+                unsafe { self.in_f32.as_ref().unwrap_unchecked().stereo_unchecked(proc_info) };
+            let (out_left, out_right) =
+                unsafe { self.out_f32.as_mut().unwrap_unchecked().stereo_unchecked_mut(proc_info) };
+            Some((in_left, in_right, out_left, out_right))
+        } else {
+            None
+        }
+    }
+
+    /// This will always return `Some` if the plugin uses the `AudioPortsExtension`
+    /// and uses `MainPortsLayout::StereoInOutPrefers64`. This will always return `None`
+    /// otherwise.
+    pub fn stereo_in_out_prefers_64<'a>(
+        &'a mut self,
+        proc_info: &ProcInfo,
+    ) -> Option<StereoInOut64Res<'a>> {
+        if let CurrentMainLayout::StereoInOut64 = self.layout {
+            let (in_left, in_right) =
+                unsafe { self.in_f64.as_ref().unwrap_unchecked().stereo_unchecked(proc_info) };
+            let (out_left, out_right) =
+                unsafe { self.out_f64.as_mut().unwrap_unchecked().stereo_unchecked_mut(proc_info) };
+            Some(StereoInOut64Res::F64 { in_left, in_right, out_left, out_right })
+        } else if let CurrentMainLayout::StereoInOut32 = self.layout {
+            let (in_left, in_right) =
+                unsafe { self.in_f32.as_ref().unwrap_unchecked().stereo_unchecked(proc_info) };
+            let (out_left, out_right) =
+                unsafe { self.out_f32.as_mut().unwrap_unchecked().stereo_unchecked_mut(proc_info) };
+            Some(StereoInOut64Res::F32 { in_left, in_right, out_left, out_right })
+        } else {
+            None
+        }
+    }
+
+    /// If the plugin uses the default for the `AudioPortsExtension`, then this will
+    /// always return `Some`.
+    ///
+    /// If the plugin does not use the default for the `AudioPortsExtension` and it
+    /// does not use `MainPortsLayout::MonoInPlace`, then this will return `None`.
+    pub fn mono_in_place<'a>(&'a mut self, proc_info: &ProcInfo) -> Option<MonoInPlace32Res<'a>> {
+        if let CurrentMainLayout::MonoInPlace32 = self.layout {
+            let b = unsafe { self.out_f32.as_mut().unwrap_unchecked().mono_mut(proc_info) };
+            Some(MonoInPlace32Res::InPlace(b))
+        } else if let CurrentMainLayout::MonoInOut32 = self.layout {
+            let input = unsafe { self.in_f32.as_ref().unwrap_unchecked().mono(proc_info) };
+            let output = unsafe { self.out_f32.as_mut().unwrap_unchecked().mono_mut(proc_info) };
+            Some(MonoInPlace32Res::Separate { input, output })
+        } else {
+            None
+        }
+    }
+
+    /// This will always return `Some` if the plugin uses the `AudioPortsExtension`
+    /// and uses `MainPortsLayout::MonoInPlacePrefersF64`. This will always return
+    /// `None` otherwise.
+    pub fn mono_in_place_prefers_64<'a>(
+        &'a mut self,
+        proc_info: &ProcInfo,
+    ) -> Option<MonoInPlace64Res<'a>> {
+        if let CurrentMainLayout::MonoInPlace64 = self.layout {
+            let b = unsafe { self.out_f64.as_mut().unwrap_unchecked().mono_mut(proc_info) };
+            Some(MonoInPlace64Res::InPlace64(b))
+        } else if let CurrentMainLayout::MonoInOut64 = self.layout {
+            let input = unsafe { self.in_f64.as_ref().unwrap_unchecked().mono(proc_info) };
+            let output = unsafe { self.out_f64.as_mut().unwrap_unchecked().mono_mut(proc_info) };
+            Some(MonoInPlace64Res::Separate64 { input, output })
+        } else if let CurrentMainLayout::MonoInPlace32 = self.layout {
+            let b = unsafe { self.out_f32.as_mut().unwrap_unchecked().mono_mut(proc_info) };
+            Some(MonoInPlace64Res::InPlace32(b))
+        } else if let CurrentMainLayout::MonoInOut32 = self.layout {
+            let input = unsafe { self.in_f32.as_ref().unwrap_unchecked().mono(proc_info) };
+            let output = unsafe { self.out_f32.as_mut().unwrap_unchecked().mono_mut(proc_info) };
+            Some(MonoInPlace64Res::Separate32 { input, output })
+        } else {
+            None
+        }
+    }
+
+    /// This will always return `Some` if the plugin uses the `AudioPortsExtension`
+    /// and uses `MainPortsLayout::MonoInOut`. This will always return `None`
+    /// otherwise.
+    pub fn mono_in_out(&mut self, proc_info: &ProcInfo) -> Option<(&[f32], &mut [f32])> {
+        if let CurrentMainLayout::MonoInOut32 = self.layout {
+            let input = unsafe { self.in_f32.as_ref().unwrap_unchecked().mono(proc_info) };
+            let output = unsafe { self.out_f32.as_mut().unwrap_unchecked().mono_mut(proc_info) };
+            Some((input, output))
+        } else {
+            None
+        }
+    }
+
+    /// This will always return `Some` if the plugin uses the `AudioPortsExtension`
+    /// and uses `MainPortsLayout::MonoInOutPrefers64`. This will always return `None`
+    /// otherwise.
+    pub fn mono_in_out_prefers_64<'a>(
+        &'a mut self,
+        proc_info: &ProcInfo,
+    ) -> Option<MonoInOut64Res<'a>> {
+        if let CurrentMainLayout::MonoInOut64 = self.layout {
+            let input = unsafe { self.in_f64.as_ref().unwrap_unchecked().mono(proc_info) };
+            let output = unsafe { self.out_f64.as_mut().unwrap_unchecked().mono_mut(proc_info) };
+            Some(MonoInOut64Res::F64 { input, output })
+        } else if let CurrentMainLayout::MonoInOut32 = self.layout {
+            let input = unsafe { self.in_f32.as_ref().unwrap_unchecked().mono(proc_info) };
+            let output = unsafe { self.out_f32.as_mut().unwrap_unchecked().mono_mut(proc_info) };
+            Some(MonoInOut64Res::F32 { input, output })
+        } else {
+            None
+        }
+    }
+
+    /// This will always return `Some` if the plugin uses the `AudioPortsExtension`
+    /// and uses `MainPortsLayout::MonoInStereoOut`. This will always return `None`
+    /// otherwise.
+    pub fn mono_in_stereo_out(
+        &mut self,
+        proc_info: &ProcInfo,
+    ) -> Option<(&[f32], &mut [f32], &mut [f32])> {
+        if let CurrentMainLayout::MonoInStereoOut32 = self.layout {
+            let input = unsafe { self.in_f32.as_ref().unwrap_unchecked().mono(proc_info) };
+            let (out_left, out_right) =
+                unsafe { self.out_f32.as_mut().unwrap_unchecked().stereo_unchecked_mut(proc_info) };
+            Some((input, out_left, out_right))
+        } else {
+            None
+        }
+    }
+
+    /// This will always return `Some` if the plugin uses the `AudioPortsExtension`
+    /// and uses `MainPortsLayout::MonoInStereoOutPrefers64`. This will always return `None`
+    /// otherwise.
+    pub fn mono_in_stereo_out_prefers_64<'a>(
+        &'a mut self,
+        proc_info: &ProcInfo,
+    ) -> Option<MonoInStereOut64Res<'a>> {
+        if let CurrentMainLayout::MonoInStereoOut64 = self.layout {
+            let input = unsafe { self.in_f64.as_ref().unwrap_unchecked().mono(proc_info) };
+            let (out_left, out_right) =
+                unsafe { self.out_f64.as_mut().unwrap_unchecked().stereo_unchecked_mut(proc_info) };
+            Some(MonoInStereOut64Res::F64 { input, out_left, out_right })
+        } else if let CurrentMainLayout::MonoInStereoOut32 = self.layout {
+            let input = unsafe { self.in_f32.as_ref().unwrap_unchecked().mono(proc_info) };
+            let (out_left, out_right) =
+                unsafe { self.out_f32.as_mut().unwrap_unchecked().stereo_unchecked_mut(proc_info) };
+            Some(MonoInStereOut64Res::F32 { input, out_left, out_right })
+        } else {
+            None
+        }
+    }
+
+    /// This will always return `Some` if the plugin uses the `AudioPortsExtension`
+    /// and uses `MainPortsLayout::StereoInMonoOut`. This will always return `None`
+    /// otherwise.
+    pub fn stereo_in_mono_out(
+        &mut self,
+        proc_info: &ProcInfo,
+    ) -> Option<(&[f32], &[f32], &mut [f32])> {
+        if let CurrentMainLayout::StereoInMonoOut32 = self.layout {
+            let (in_left, in_right) =
+                unsafe { self.in_f32.as_ref().unwrap_unchecked().stereo_unchecked(proc_info) };
+            let output = unsafe { self.out_f32.as_mut().unwrap_unchecked().mono_mut(proc_info) };
+            Some((in_left, in_right, output))
+        } else {
+            None
+        }
+    }
+
+    /// This will always return `Some` if the plugin uses the `AudioPortsExtension`
+    /// and uses `MainPortsLayout::StereoInMonoOutPrefers64`. This will always return `None`
+    /// otherwise.
+    pub fn stereo_in_mono_out_prefers_64<'a>(
+        &'a mut self,
+        proc_info: &ProcInfo,
+    ) -> Option<StereoInMonoOut64Res> {
+        if let CurrentMainLayout::StereoInMonoOut64 = self.layout {
+            let (in_left, in_right) =
+                unsafe { self.in_f64.as_ref().unwrap_unchecked().stereo_unchecked(proc_info) };
+            let output = unsafe { self.out_f64.as_mut().unwrap_unchecked().mono_mut(proc_info) };
+            Some(StereoInMonoOut64Res::F64 { in_left, in_right, output })
+        } else if let CurrentMainLayout::StereoInMonoOut32 = self.layout {
+            let (in_left, in_right) =
+                unsafe { self.in_f32.as_ref().unwrap_unchecked().stereo_unchecked(proc_info) };
+            let output = unsafe { self.out_f32.as_mut().unwrap_unchecked().mono_mut(proc_info) };
+            Some(StereoInMonoOut64Res::F32 { in_left, in_right, output })
+        } else {
+            None
+        }
+    }
+
+    /// Get the raw buffers.
+    ///
+    /// Use this if the plugin uses the `AudioPortsExtension` and uses
+    /// `MainPortsLayout::Custom`.
+    pub fn raw<'a>(&'a mut self) -> RawMainBuffers<'a> {
+        RawMainBuffers {
             in_f32: &self.in_f32,
             in_f64: &self.in_f64,
-
             out_f32: &mut self.out_f32,
             out_f64: &mut self.out_f64,
         }
@@ -535,523 +412,213 @@ impl ProcAudioBuffers {
 
     /// NOT IMPLEMENTED YET
     ///
-    /// Returns `true` if the audio buffers for this input port
-    /// are silent (all zeros), `false` otherwise.
+    /// Returns `true` if the main audio input buffer exists and is silent (all zeros),
+    /// false otherwise.
+    pub fn in_port_is_silent(&self) -> bool {
+        false
+    }
+}
+
+pub struct ProcExtraBuffers {
+    in_f32: Vec<Option<AudioPortBuffer<f32>>>,
+    in_f64: Vec<Option<AudioPortBuffer<f64>>>,
+    out_f32: Vec<Option<AudioPortBuffer<f32>>>,
+    out_f64: Vec<Option<AudioPortBuffer<f64>>>,
+}
+
+impl ProcExtraBuffers {
+    pub fn raw<'a>(&'a mut self) -> RawExtraBuffers<'a> {
+        RawExtraBuffers {
+            in_f32: &self.in_f32,
+            in_f64: &self.in_f64,
+            out_f32: &mut self.out_f32,
+            out_f64: &mut self.out_f64,
+        }
+    }
+
+    /// NOT IMPLEMENTED YET
+    ///
+    /// Returns `true` if the extra audio input buffer exists and is silent (all zeros),
+    /// false otherwise.
     pub fn in_port_is_silent(&self, port_index: usize) -> bool {
         false
+    }
+}
+
+/// The raw audio buffers for the main audio ports.
+pub struct RawMainBuffers<'a> {
+    /// The `f32` audio buffer for the main audio input port.
+    ///
+    /// This can be `None` because of any of these conditions:
+    ///
+    /// * This plugin has no main input port.
+    /// * This input port has requested to use 64 bit buffers in
+    /// `AudioPortInfo::flags`, and the host has decided to give this port 64 bit
+    /// buffers. In that case the buffer will exist in `in_f64` instead.
+    /// * This input port is in an "in_place_pair" with the main output port, and
+    /// the host has decided to give a single buffer for both the main input and
+    /// output ports. In this case the buffer will exist in `out_f32` or `out_f64`
+    /// instead.
+    pub in_f32: &'a Option<AudioPortBuffer<f32>>,
+
+    /// The `f64` audio buffer for the main audio input port.
+    ///
+    /// This can be `None` because of any of these conditions:
+    ///
+    /// * This plugin has no main input port.
+    /// * This input port has requested to use 64 bit buffers in
+    /// `AudioPortInfo::flags`, but the host has decided to give this port 32 bit
+    /// buffers. In that case the buffer will exist in `in_f32` instead.
+    /// * This input port is in an "in_place_pair" with the main output port, and
+    /// the host has decided to give a single buffer for both the main input and
+    /// output ports. In this case the buffer will exist in `out_f32` or `out_f64`
+    /// instead.
+    pub in_f64: &'a Option<AudioPortBuffer<f64>>,
+
+    /// The `f32` audio buffer for the main audio output port.
+    ///
+    /// This can be `None` because of any of these conditions:
+    ///
+    /// * This plugin has no main output port.
+    /// * This output port has requested to use 64 bit buffers in
+    /// `AudioPortInfo::flags`, and the host has decided to give this port 64 bit
+    /// buffers. In that case the buffer will exist in `out_f64` instead.
+    ///
+    /// # SAFETY
+    ///
+    /// Undefined behavior may occur if you change any `None` to `Some` or
+    /// vice versa. So please don't do that.
+    pub out_f32: &'a mut Option<AudioPortBuffer<f32>>,
+
+    /// The `f64` audio buffer for the main audio output port.
+    ///
+    /// This can be `None` because of any of these conditions:
+    ///
+    /// * This plugin has no main output port.
+    /// * This output port has requested to use 64 bit buffers in
+    /// `AudioPortInfo::flags`, but the host has decided to give this port 32 bit
+    /// buffers. In that case the buffer will exist in `out_f32` instead.
+    ///
+    /// # SAFETY
+    ///
+    /// Undefined behavior may occur if you change any `None` to `Some` or
+    /// vice versa. So please don't do that.
+    pub out_f64: &'a mut Option<AudioPortBuffer<f64>>,
+}
+
+/// The raw audio buffers for the extra audio ports (**NOT** including
+/// the main ports).
+pub struct RawExtraBuffers<'a> {
+    /// The `f32` audio buffers for each extra audio input port (**NOT** including
+    /// the main port), in order.
+    ///
+    /// A buffer can be `None` because of any of these conditions:
+    ///
+    /// * This input port has requested to use 64 bit buffers in
+    /// `AudioPortInfo::flags`, and the host has decided to give this port 64 bit
+    /// buffers. In that case the buffer will exist in `in_f64` instead.
+    pub in_f32: &'a [Option<AudioPortBuffer<f32>>],
+
+    /// The `f64` audio buffers for each extra audio input port (**NOT** including
+    /// the main port), in order.
+    ///
+    /// A buffer can be `None` because of any of these conditions:
+    ///
+    /// * This input port has not requested to use 64 bit buffers in
+    /// `AudioPortInfo::flags` (if this plugin does not use the
+    /// `PluginAudioPortsExtension` then it does not request 64 bit buffers
+    /// by default). In this case this will always be `None`.
+    /// * This input port *has* requested to use 64 bit buffers in
+    /// `AudioPortInfo::flags`, but the host has decided to give this port 32
+    /// bit buffers anyway. In that case the buffer will exist in `in_f32`
+    /// instead.
+    pub in_f64: &'a [Option<AudioPortBuffer<f64>>],
+
+    /// The `f32` audio buffers for each extra audio output port (**NOT** including
+    /// the main port), in order.
+    ///
+    /// A buffer can be `None` because in this condition:
+    ///
+    /// * This output port has requested to use 64 bit buffers in
+    /// `AudioPortInfo::flags`, and the host has decided to give this port 64 bit
+    /// buffers. In that case the buffer will exist in `out_f64` instead.
+    ///
+    /// # SAFETY
+    ///
+    /// Undefined behavior may occur if you change any `None` to `Some` or
+    /// vice versa. So please don't do that.
+    pub out_f32: &'a mut [Option<AudioPortBuffer<f32>>],
+
+    /// The `f64` audio buffers for each extra audio output port (**NOT** including
+    /// the main port), in order.
+    ///
+    /// A buffer can be `None` because of any of these conditions:
+    ///
+    /// * This output port has not requested to use 64 bit buffers in
+    /// `AudioPortInfo::flags` (if this plugin does not use the
+    /// `PluginAudioPortsExtension` then it does not request 64 bit buffers
+    /// by default). In this case this will always be `None`.
+    /// * This output port *has* requested to use 64 bit buffers in
+    /// `AudioPortInfo::flags`, but the host has decided to give this port 32
+    /// bit buffers anyway. In that case the buffer will exist in `out_f32`
+    /// instead.
+    ///
+    /// # SAFETY
+    ///
+    /// Undefined behavior may occur if you change any `None` to `Some` or
+    /// vice versa. So please don't do that.
+    pub out_f64: &'a mut [Option<AudioPortBuffer<f64>>],
+}
+
+impl ProcAudioBuffers {
+    pub(crate) fn debug_fields(&self, f: &mut DebugStruct) {
+        f.field("main_layout", &self.main.layout);
+
+        if let Some(main_in_f32) = &self.main.in_f32 {
+            f.field("main_in_f32: {:?}", main_in_f32);
+        }
+        if let Some(main_in_f64) = &self.main.in_f64 {
+            f.field("main_in_f64: {:?}", main_in_f64);
+        }
+        if let Some(main_out_f32) = &self.main.out_f32 {
+            f.field("main_out_f32: {:?}", main_out_f32);
+        }
+        if let Some(main_out_f64) = &self.main.out_f64 {
+            f.field("main_out_f64: {:?}", main_out_f64);
+        }
+
+        if !self.extra.in_f32.is_empty() {
+            f.field("extra_in_f32: {}", &self.extra.in_f32);
+        }
+        if !self.extra.in_f64.is_empty() {
+            f.field("extra_in_f64: {}", &self.extra.in_f64);
+        }
+        if !self.extra.out_f32.is_empty() {
+            f.field("extra_out_f32: {}", &self.extra.out_f32);
+        }
+        if !self.extra.out_f64.is_empty() {
+            f.field("extra_out_f64: {}", &self.extra.out_f64);
+        }
     }
 
     /// Clear all of the output buffers to `0.0`.
     pub fn clear_all_outputs(&mut self, proc_info: &ProcInfo) {
-        for b in self.out_f32.iter_mut() {
+        if let Some(b) = &mut self.main.out_f32 {
+            b.clear(proc_info);
+        }
+        if let Some(b) = &mut self.main.out_f64 {
+            b.clear(proc_info);
+        }
+
+        for b in self.extra.out_f32.iter_mut() {
             if let Some(b) = b.as_mut() {
                 b.clear(proc_info);
             }
         }
-        for b in self.out_f64.iter_mut() {
+        for b in self.extra.out_f64.iter_mut() {
             if let Some(b) = b.as_mut() {
                 b.clear(proc_info);
             }
         }
-    }
-
-    pub(crate) fn assert_layout(&self) -> Result<(), ()> {
-        match self.layout {
-            CurrentBufferLayout::StereoOut32 => {
-                if self.out_f32.is_empty() {
-                    return Err(());
-                }
-                if self.out_f32[0].is_none() {
-                    return Err(());
-                }
-                if self.out_f32[0].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-            }
-            CurrentBufferLayout::StereoOut64 => {
-                if self.out_f64.is_empty() {
-                    return Err(());
-                }
-                if self.out_f64[0].is_none() {
-                    return Err(());
-                }
-                if self.out_f64[0].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-            }
-
-            CurrentBufferLayout::MonoOut32 => {
-                if self.out_f32.is_empty() {
-                    return Err(());
-                }
-                if self.out_f32[0].is_none() {
-                    return Err(());
-                }
-            }
-            CurrentBufferLayout::MonoOut64 => {
-                if self.out_f64.is_empty() {
-                    return Err(());
-                }
-                if self.out_f64[0].is_none() {
-                    return Err(());
-                }
-            }
-
-            CurrentBufferLayout::StereoInPlace32 => {
-                if self.out_f32.is_empty() {
-                    return Err(());
-                }
-                if self.out_f32[0].is_none() {
-                    return Err(());
-                }
-                if self.out_f32[0].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-            }
-            CurrentBufferLayout::StereoInPlace64 => {
-                if self.out_f64.is_empty() {
-                    return Err(());
-                }
-                if self.out_f64[0].is_none() {
-                    return Err(());
-                }
-                if self.out_f64[0].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-            }
-
-            CurrentBufferLayout::StereoInPlaceWithSidechain32 => {
-                if self.in_f32.len() < 2 {
-                    return Err(());
-                }
-                if self.in_f32[1].is_none() {
-                    return Err(());
-                }
-                if self.in_f32[1].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-
-                if self.out_f32.is_empty() {
-                    return Err(());
-                }
-                if self.out_f32[0].is_none() {
-                    return Err(());
-                }
-                if self.out_f32[0].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-            }
-            CurrentBufferLayout::StereoInPlaceWithSidechain64 => {
-                if self.in_f64.len() < 2 {
-                    return Err(());
-                }
-                if self.in_f64[1].is_none() {
-                    return Err(());
-                }
-                if self.in_f64[1].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-
-                if self.out_f64.is_empty() {
-                    return Err(());
-                }
-                if self.out_f64[0].is_none() {
-                    return Err(());
-                }
-                if self.out_f64[0].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-            }
-
-            CurrentBufferLayout::StereoInPlaceWithExtraOut32 => {
-                if self.out_f32.len() < 2 {
-                    return Err(());
-                }
-                if self.out_f32[0].is_none() {
-                    return Err(());
-                }
-                if self.out_f32[0].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-
-                if self.out_f32[1].is_none() {
-                    return Err(());
-                }
-                if self.out_f32[1].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-            }
-            CurrentBufferLayout::StereoInPlaceWithExtraOut64 => {
-                if self.out_f64.len() < 2 {
-                    return Err(());
-                }
-                if self.out_f64[0].is_none() {
-                    return Err(());
-                }
-                if self.out_f64[0].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-
-                if self.out_f64[1].as_ref().is_none() {
-                    return Err(());
-                }
-                if self.out_f64[1].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-            }
-
-            CurrentBufferLayout::MonoInPlace32 => {
-                if self.out_f32.is_empty() {
-                    return Err(());
-                }
-                if self.out_f32[0].is_none() {
-                    return Err(());
-                }
-            }
-            CurrentBufferLayout::MonoInPlace64 => {
-                if self.out_f64.is_empty() {
-                    return Err(());
-                }
-                if self.out_f64[0].is_none() {
-                    return Err(());
-                }
-            }
-
-            CurrentBufferLayout::MonoInPlaceWithSidechain32 => {
-                if self.in_f32.len() < 2 {
-                    return Err(());
-                }
-                if self.in_f32[1].is_none() {
-                    return Err(());
-                }
-
-                if self.out_f32.is_empty() {
-                    return Err(());
-                }
-                if self.out_f32[0].is_none() {
-                    return Err(());
-                }
-            }
-            CurrentBufferLayout::MonoInPlaceWithSidechain64 => {
-                if self.in_f64.len() < 2 {
-                    return Err(());
-                }
-                if self.in_f64[1].is_none() {
-                    return Err(());
-                }
-
-                if self.out_f64.is_empty() {
-                    return Err(());
-                }
-                if self.out_f64[0].is_none() {
-                    return Err(());
-                }
-            }
-
-            CurrentBufferLayout::StereoInOut32 => {
-                if self.in_f32.is_empty() {
-                    return Err(());
-                }
-                if self.in_f32[0].is_none() {
-                    return Err(());
-                }
-                if self.in_f32[0].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-
-                if self.out_f32.is_empty() {
-                    return Err(());
-                }
-                if self.out_f32[0].is_none() {
-                    return Err(());
-                }
-                if self.out_f32[0].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-            }
-            CurrentBufferLayout::StereoInOut64 => {
-                if self.in_f64.is_empty() {
-                    return Err(());
-                }
-                if self.in_f64[0].is_none() {
-                    return Err(());
-                }
-                if self.in_f64[0].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-
-                if self.out_f64.is_empty() {
-                    return Err(());
-                }
-                if self.out_f64[0].is_none() {
-                    return Err(());
-                }
-                if self.out_f64[0].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-            }
-
-            CurrentBufferLayout::StereoInOutWithSidechain32 => {
-                if self.in_f32.len() < 2 {
-                    return Err(());
-                }
-                if self.in_f32[0].is_none() {
-                    return Err(());
-                }
-                if self.in_f32[0].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-
-                if self.in_f32[1].is_none() {
-                    return Err(());
-                }
-                if self.in_f32[1].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-
-                if self.out_f32.is_empty() {
-                    return Err(());
-                }
-                if self.out_f32[0].is_none() {
-                    return Err(());
-                }
-                if self.out_f32[0].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-            }
-            CurrentBufferLayout::StereoInOutWithSidechain64 => {
-                if self.in_f64.len() < 2 {
-                    return Err(());
-                }
-                if self.in_f64[0].is_none() {
-                    return Err(());
-                }
-                if self.in_f64[0].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-
-                if self.in_f64[1].is_none() {
-                    return Err(());
-                }
-                if self.in_f64[1].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-
-                if self.out_f64.is_empty() {
-                    return Err(());
-                }
-                if self.out_f64[0].is_none() {
-                    return Err(());
-                }
-                if self.out_f64[0].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-            }
-
-            CurrentBufferLayout::StereoInOutWithExtraOut32 => {
-                if self.in_f32.is_empty() {
-                    return Err(());
-                }
-                if self.in_f32[0].is_none() {
-                    return Err(());
-                }
-                if self.in_f32[0].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-
-                if self.out_f32.len() < 2 {
-                    return Err(());
-                }
-                if self.out_f32[0].is_none() {
-                    return Err(());
-                }
-                if self.out_f32[0].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-
-                if self.out_f32[1].is_none() {
-                    return Err(());
-                }
-                if self.out_f32[1].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-            }
-            CurrentBufferLayout::StereoInOutWithExtraOut64 => {
-                if self.in_f64.is_empty() {
-                    return Err(());
-                }
-                if self.in_f64[0].is_none() {
-                    return Err(());
-                }
-                if self.in_f64[0].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-
-                if self.out_f64.len() < 2 {
-                    return Err(());
-                }
-                if self.out_f64[0].is_none() {
-                    return Err(());
-                }
-                if self.out_f64[0].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-
-                if self.out_f64[1].is_none() {
-                    return Err(());
-                }
-                if self.out_f64[1].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-            }
-
-            CurrentBufferLayout::MonoInOut32 => {
-                if self.in_f32.is_empty() {
-                    return Err(());
-                }
-                if self.in_f32[0].is_none() {
-                    return Err(());
-                }
-
-                if self.out_f32.is_empty() {
-                    return Err(());
-                }
-                if self.out_f32[0].is_none() {
-                    return Err(());
-                }
-            }
-            CurrentBufferLayout::MonoInOut64 => {
-                if self.in_f64.is_empty() {
-                    return Err(());
-                }
-                if self.in_f64[0].is_none() {
-                    return Err(());
-                }
-
-                if self.out_f64.is_empty() {
-                    return Err(());
-                }
-                if self.out_f64[0].is_none() {
-                    return Err(());
-                }
-            }
-
-            CurrentBufferLayout::MonoInOutWithSidechain32 => {
-                if self.in_f32.len() < 2 {
-                    return Err(());
-                }
-                if self.in_f32[0].is_none() {
-                    return Err(());
-                }
-
-                if self.in_f32[1].is_none() {
-                    return Err(());
-                }
-
-                if self.out_f32.is_empty() {
-                    return Err(());
-                }
-                if self.out_f32[0].is_none() {
-                    return Err(());
-                }
-            }
-            CurrentBufferLayout::MonoInOutWithSidechain64 => {
-                if self.in_f64.len() < 2 {
-                    return Err(());
-                }
-                if self.in_f64[0].is_none() {
-                    return Err(());
-                }
-
-                if self.in_f64[1].is_none() {
-                    return Err(());
-                }
-
-                if self.out_f64.is_empty() {
-                    return Err(());
-                }
-                if self.out_f64[0].is_none() {
-                    return Err(());
-                }
-            }
-
-            CurrentBufferLayout::MonoInStereoOut32 => {
-                if self.in_f32.is_empty() {
-                    return Err(());
-                }
-                if self.in_f32[0].is_none() {
-                    return Err(());
-                }
-
-                if self.out_f32.is_empty() {
-                    return Err(());
-                }
-                if self.out_f32[0].is_none() {
-                    return Err(());
-                }
-                if self.out_f32[0].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-            }
-            CurrentBufferLayout::MonoInStereoOut64 => {
-                if self.in_f64.is_empty() {
-                    return Err(());
-                }
-                if self.in_f64[0].is_none() {
-                    return Err(());
-                }
-
-                if self.out_f64.is_empty() {
-                    return Err(());
-                }
-                if self.out_f64[0].is_none() {
-                    return Err(());
-                }
-                if self.out_f64[0].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-            }
-
-            CurrentBufferLayout::StereoInMonoOut32 => {
-                if self.in_f32.is_empty() {
-                    return Err(());
-                }
-                if self.in_f32[0].is_none() {
-                    return Err(());
-                }
-                if self.in_f32[0].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-
-                if self.out_f32.is_empty() {
-                    return Err(());
-                }
-                if self.out_f32[0].is_none() {
-                    return Err(());
-                }
-            }
-            CurrentBufferLayout::StereoInMonoOut64 => {
-                if self.in_f64.is_empty() {
-                    return Err(());
-                }
-                if self.in_f64[0].is_none() {
-                    return Err(());
-                }
-                if self.in_f64[0].as_ref().unwrap().channel_count() < 2 {
-                    return Err(());
-                }
-
-                if self.out_f64.is_empty() {
-                    return Err(());
-                }
-                if self.out_f64[0].is_none() {
-                    return Err(());
-                }
-            }
-
-            CurrentBufferLayout::Custom => {}
-        }
-
-        Ok(())
     }
 }

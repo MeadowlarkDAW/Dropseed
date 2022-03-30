@@ -138,26 +138,14 @@ pub trait PluginMainThread {
     ///
     /// This will only be called while the plugin is inactive.
     ///
-    /// By default this returns `AudioPortLayout::StereoInPlace`, which has a 32 bit stereo input and
-    /// a 32 bit stereo output port that are tied together in an "in_place" pair. This means the host
-    /// may provide a single buffer for both the input and output ports, akin to `process_replacing()`
-    /// in VST. The host may still decide to send separate buffers though.
-    ///
-    /// When using the the default port layout of `AudioPortLayout::StereoInPlace`, the the host will
-    /// always send one of these options to the plugin's `process()` method:
-    ///
-    /// * `ProcBufferLayout::StereoInPlace32`
-    /// * `ProcBufferLayout::StereoInOut32`
-    ///
-    /// If using a different port layout then the default, then refer to the documentation in
-    /// [`AudioPortLayout`] to know what options the host may send to the plugin's `process()` method.
-    ///
-    /// [`AudioPortLayout`]: ../../plugin/ext/audio_ports/enum.AudioPortLayout.html
+    /// By default this returns a single 32 bit stereo input and a single 32 bit stereo output.
+    /// This input/output port pair is an "in_place" pair, meaning the host may send a single buffer
+    /// for both the main input and output port, akin to `process_replacing()` in VST.
     ///
     /// [main-thread & !active_state]
     #[allow(unused)]
-    fn audio_ports_extension(&self, host: &Host) -> &ext::audio_ports::AudioPortLayout {
-        &ext::audio_ports::AudioPortLayout::StereoInPlace
+    fn audio_ports_extension(&self, host: &Host) -> ext::audio_ports::AudioPortsExtension {
+        ext::audio_ports::AudioPortsExtension::default()
     }
 }
 
