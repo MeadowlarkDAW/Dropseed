@@ -1,27 +1,8 @@
-use clap_sys::{
-    audio_buffer::clap_audio_buffer,
-    process::{
-        clap_process, clap_process_status, CLAP_PROCESS_CONTINUE,
-        CLAP_PROCESS_CONTINUE_IF_NOT_QUIET, CLAP_PROCESS_ERROR, CLAP_PROCESS_SLEEP,
-    },
+use clap_sys::process::{
+    clap_process_status, CLAP_PROCESS_CONTINUE, CLAP_PROCESS_CONTINUE_IF_NOT_QUIET,
+    CLAP_PROCESS_ERROR, CLAP_PROCESS_SLEEP,
 };
 use rusty_daw_core::Frames;
-use smallvec::SmallVec;
-
-use crate::audio_buffer::{AudioPortBuffer, ClapAudioBuffer};
-
-pub type PortID = u32;
-pub type InPlacePairID = u32;
-
-mod buffer_layout;
-mod proc_audio_buffers;
-
-pub use buffer_layout::{
-    MonoIn64Res, MonoInOut64Res, MonoInPlace32Res, MonoInPlace64Res, MonoInStereOut64Res,
-    MonoOut64Res, StereoIn64Res, StereoInMonoOut64Res, StereoInOut64Res, StereoInPlace32Res,
-    StereoInPlace64Res, StereoOut64Res,
-};
-pub use proc_audio_buffers::ProcAudioBuffers;
 
 /// The status of a call to a plugin's `process()` method.
 #[non_exhaustive]
@@ -63,6 +44,22 @@ impl ProcessStatus {
     }
 }
 
+pub struct ProcInfo {
+    /// A steady sample time counter.
+    ///
+    /// This field can be used to calculate the sleep duration between two process calls.
+    /// This value may be specific to this plugin instance and have no relation to what
+    /// other plugin instances may receive.
+    ///
+    /// This will return `None` if not available, otherwise the value will be increased by
+    /// at least `frames_count` for the next call to process.
+    pub steady_time: Option<Frames>,
+
+    /// The number of frames to process.
+    pub frames: usize,
+}
+
+/*
 /// The port buffers (for use with external CLAP plugins).
 pub(crate) struct ClapProcAudioPorts {
     audio_inputs: SmallVec<[ClapAudioBuffer; 1]>,
@@ -156,18 +153,4 @@ impl ClapProcAudioPorts {
         proc.audio_outputs_count = self.audio_outputs_count;
     }
 }
-
-pub struct ProcInfo {
-    /// A steady sample time counter.
-    ///
-    /// This field can be used to calculate the sleep duration between two process calls.
-    /// This value may be specific to this plugin instance and have no relation to what
-    /// other plugin instances may receive.
-    ///
-    /// This will return `None` if not available, otherwise the value will be increased by
-    /// at least `frames_count` for the next call to process.
-    pub steady_time: Option<Frames>,
-
-    /// The number of frames to process.
-    pub frames: usize,
-}
+*/

@@ -4,9 +4,13 @@ use std::error::Error;
 use basedrop::Shared;
 
 use crate::host::{Host, HostInfo};
-use crate::process_info::{ProcAudioBuffers, ProcInfo, ProcessStatus};
+use crate::AudioPortBuffer;
 
 pub mod ext;
+
+pub(crate) mod process_info;
+
+use process_info::{ProcInfo, ProcessStatus};
 
 /// The description of a plugin.
 pub struct PluginDescriptor<'a> {
@@ -138,14 +142,15 @@ pub trait PluginMainThread {
     ///
     /// This will only be called while the plugin is inactive.
     ///
-    /// By default this returns a single 32 bit stereo input and a single 32 bit stereo output.
-    /// This input/output port pair is an "in_place" pair, meaning the host may send a single buffer
-    /// for both the main input and output port, akin to `process_replacing()` in VST.
+    /// If `None` is returned, then the default configuration of a main stereo input port and a main
+    /// stereo output port will be used.
+    ///
+    /// By default this is set to `None`.
     ///
     /// [main-thread & !active_state]
     #[allow(unused)]
-    fn audio_ports_extension(&self, host: &Host) -> ext::audio_ports::AudioPortsExtension {
-        ext::audio_ports::AudioPortsExtension::default()
+    fn audio_ports_extension(&self, host: &Host) -> Option<&ext::audio_ports::AudioPortsExtension> {
+        None
     }
 }
 
@@ -178,7 +183,8 @@ pub trait PluginAudioThread: Send + 'static {
     fn process(
         &mut self,
         info: &ProcInfo,
-        audio: &mut ProcAudioBuffers,
+        audio_in: &[AudioPortBuffer],
+        audio_out: &mut [AudioPortBuffer],
         host: &Host,
     ) -> ProcessStatus;
 }

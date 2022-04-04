@@ -1,5 +1,6 @@
 use std::error::Error;
 
+/*
 use crate::clap_plugin_host::{PluginState, ThreadState};
 
 #[derive(Debug, Clone, Copy)]
@@ -40,3 +41,4 @@ impl std::fmt::Display for ClapPluginActivationError {
         }
     }
 }
+*/

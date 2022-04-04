@@ -1,312 +1,242 @@
 pub const PORT_TYPE_MONO: &'static str = "mono";
 pub const PORT_TYPE_STEREO: &'static str = "stereo";
 
+pub const PORT_NAME_SIDECHAIN: &'static str = "sidechain";
+
 #[derive(Debug, Clone)]
 /// The layout of the audio ports of a plugin.
 ///
-/// By default this is set to use `MainPortsLayout::StereoInPlace`,
-/// `extra_layout: None`, meaning there is one main stereo input port and
-/// one main stereo output port which will always use 32 bit (`f32`) buffers.
-/// This input/output port pair is an "in_place" pair, meaning the host may
-/// send a single buffer for both the main input and output port, akin to
-/// `process_replacing()` in VST.
+/// By default this returns a configuration with a main stereo
+/// input port and a main stereo output port.
 pub struct AudioPortsExtension {
-    /// The layout of the main ports. By default this is set to
-    /// `MainPortsLayout::StereoInPlace`.
-    pub main_layout: MainPortsLayout,
+    /// The list of input audio ports, in order.
+    pub inputs: Vec<AudioPortInfo>,
 
-    /// The layout of any extra ports. By default this is set to
-    /// `None`.
-    pub extra_layout: Option<ExtraPortsLayout>,
+    /// The list of output audio ports, in order.
+    pub outputs: Vec<AudioPortInfo>,
+
+    /// Specifies which audio ports are "main" ports.
+    pub main_ports_layout: MainPortsLayout,
 }
 
 impl Default for AudioPortsExtension {
     fn default() -> Self {
-        AudioPortsExtension { main_layout: MainPortsLayout::default(), extra_layout: None }
+        AudioPortsExtension::stereo_in_out()
     }
 }
 
-#[derive(Debug, Clone)]
-/// The layout of the main audio ports of a plugin.
-pub enum MainPortsLayout {
-    /// This plugin has no main input or output ports.
-    NoMainPorts,
-
-    /// This plugin has a main stereo input port and a main stereo output
-    /// port.
-    ///
-    /// In addition, these ports are tied together in an "in_place" pair,
-    /// meaning this plugin supports processing the input port and output
-    /// port in a single buffer, akin to `process_replacing()` in VST.
-    ///
-    /// Note that the host may still decide to send separate buffers for
-    /// the input/output pair.
-    ///
-    /// These buffers will always be 32 bit (`f32`).
-    ///
-    /// This is the default option.
-    StereoInPlace,
-
-    /// This plugin has a main stereo input port and a main stereo output
-    /// port.
-    ///
-    /// In addition, these ports are tied together in an "in_place" pair,
-    /// meaning this plugin supports processing the input port and output
-    /// port in a single buffer, akin to `process_replacing()` in VST.
-    ///
-    /// Note that the host may still decide to send separate buffers for
-    /// the input/output pair.
-    ///
-    /// In addition, this tell the host that this plugin prefers to use
-    /// 64 bit (`f64`) buffers for this port. Note that the host may still
-    /// decide to send 32 bit (`f32`) buffers regardless.
-    StereoInPlacePrefers64,
-
-    /// This plugin has a main stereo input port and a main stereo output
-    /// port.
-    ///
-    /// Unlike `MainPortsLayout::StereoInPlace`, the host will always
-    /// send separate buffers for the input and output port.
-    ///
-    /// These buffers will always be 32 bit (`f32`).
-    StereoInOut,
-
-    /// This plugin has a main stereo input port and a main stereo output
-    /// port.
-    ///
-    /// Unlike `MainPortsLayout::StereoInPlace`, the host will always
-    /// send separate buffers for the input and output port.
-    ///
-    /// In addition, this tell the host that this plugin prefers to use
-    /// 64 bit (`f64`) buffers for this port. Note that the host may still
-    /// decide to send 32 bit (`f32`) buffers regardless.
-    StereoInOutPrefers64,
-
-    /// This plugin only has a main stereo input port and no main output
-    /// port.
-    ///
-    /// These buffers will always be 32 bit (`f32`).
-    StereoInOnly,
-
-    /// This plugin only has a main stereo input port and no main output
-    /// port.
-    ///
-    /// In addition, this tell the host that this plugin prefers to use
-    /// 64 bit (`f64`) buffers for this port. Note that the host may still
-    /// decide to send 32 bit (`f32`) buffers regardless.
-    StereoInOnlyPrefers64,
-
-    /// This plugin only has a main stereo output port and no main input
-    /// port.
-    ///
-    /// These buffers will always be 32 bit (`f32`).
-    StereoOutOnly,
-
-    /// This plugin only has a main stereo output port and no main input
-    /// port.
-    ///
-    /// In addition, this tell the host that this plugin prefers to use
-    /// 64 bit (`f64`) buffers for this port. Note that the host may still
-    /// decide to send 32 bit (`f32`) buffers regardless.
-    StereoOutOnlyPrefers64,
-
-    /// This plugin has a main mono input port and a main mono output
-    /// port.
-    ///
-    /// In addition, these ports are tied together in an "in_place" pair,
-    /// meaning this plugin supports processing the input port and output
-    /// port in a single buffer, akin to `process_replacing()` in VST.
-    ///
-    /// Note that the host may still decide to send separate buffers for
-    /// the input/output pair.
-    ///
-    /// These buffers will always be 32 bit (`f32`).
-    MonoInPlace,
-
-    /// This plugin has a main mono input port and a main mono output
-    /// port.
-    ///
-    /// In addition, these ports are tied together in an "in_place" pair,
-    /// meaning this plugin supports processing the input port and output
-    /// port in a single buffer, akin to `process_replacing()` in VST.
-    ///
-    /// Note that the host may still decide to send separate buffers for
-    /// the input/output pair.
-    ///
-    /// In addition, this tell the host that this plugin prefers to use
-    /// 64 bit (`f64`) buffers for this port. Note that the host may still
-    /// decide to send 32 bit (`f32`) buffers regardless.
-    MonoInPlacePrefers64,
-
-    /// This plugin has a main mono input port and a main mono output
-    /// port.
-    ///
-    /// Unlike `MainPortsLayout::MonoInPlace`, the host will always
-    /// send separate buffers for the input and output port.
-    ///
-    /// These buffers will always be 32 bit (`f32`).
-    MonoInOut,
-
-    /// This plugin has a main mono input port and a main mono output
-    /// port.
-    ///
-    /// Unlike `MainPortsLayout::MonoInPlace`, the host will always
-    /// send separate buffers for the input and output port.
-    ///
-    /// In addition, this tell the host that this plugin prefers to use
-    /// 64 bit (`f64`) buffers for this port. Note that the host may still
-    /// decide to send 32 bit (`f32`) buffers regardless.
-    MonoInOutPrefers64,
-
-    /// This plugin only has a main mono input port and no main output
-    /// port.
-    ///
-    /// These buffers will always be 32 bit (`f32`).
-    MonoInOnly,
-
-    /// This plugin only has a main mono input port and no main output
-    /// port.
-    ///
-    /// In addition, this tell the host that this plugin prefers to use
-    /// 64 bit (`f64`) buffers for this port. Note that the host may still
-    /// decide to send 32 bit (`f32`) buffers regardless.
-    MonoInOnlyPrefers64,
-
-    /// This plugin only has a main mono output port and no main input
-    /// port.
-    ///
-    /// These buffers will always be 32 bit (`f32`).
-    MonoOutOnly,
-
-    /// This plugin only has a main mono output port and no main input
-    /// port.
-    ///
-    /// In addition, this tell the host that this plugin prefers to use
-    /// 64 bit (`f64`) buffers for this port. Note that the host may still
-    /// decide to send 32 bit (`f32`) buffers regardless.
-    MonoOutOnlyPrefers64,
-
-    /// This plugin has a main mono input port and a main stereo
-    /// output port.
-    ///
-    /// The host will always send separate buffers for the input
-    /// and output ports.
-    ///
-    /// These buffers will always be 32 bit (`f32`).
-    MonoInStereoOut,
-
-    /// This plugin has a main mono input port and a main stereo
-    /// output port.
-    ///
-    /// The host will always send separate buffers for the input
-    /// and output ports.
-    ///
-    /// In addition, this tell the host that this plugin prefers to use
-    /// 64 bit (`f64`) buffers for this port. Note that the host may still
-    /// decide to send 32 bit (`f32`) buffers regardless.
-    MonoInStereoOutPrefers64,
-
-    /// This plugin has a main stereo input port and a main mono
-    /// output port.
-    ///
-    /// The host will always send separate buffers for the input
-    /// and output ports.
-    ///
-    /// These buffers will always be 32 bit (`f32`).
-    StereoInMonoOut,
-
-    /// This plugin has a main stereo input port and a main mono
-    /// output port.
-    ///
-    /// The host will always send separate buffers for the input
-    /// and output ports.
-    ///
-    /// In addition, this tell the host that this plugin prefers to use
-    /// 64 bit (`f64`) buffers for this port. Note that the host may still
-    /// decide to send 32 bit (`f32`) buffers regardless.
-    StereoInMonoOutPrefers64,
-
-    /// Use a custom channel layout for the main ports.
-    Custom {
-        input: Option<CustomPortInfo>,
-        output: Option<CustomPortInfo>,
-
-        /// If `true`, then these main ports are tied together in an
-        /// "in_place" pair, meaning this plugin supports processing the
-        /// input port and output port in a single buffer, akin to
-        /// `process_replacing()` in VST.
-        ///
-        /// Note that the host may still decide to send separate buffers for
-        /// the input/output pair.
-        in_place: bool,
-    },
-}
-
-impl Default for MainPortsLayout {
-    fn default() -> Self {
-        MainPortsLayout::StereoInPlace
+impl AudioPortsExtension {
+    /// A main stereo input port and a main stereo output port.
+    pub fn stereo_in_out() -> Self {
+        AudioPortsExtension {
+            inputs: vec![AudioPortInfo {
+                stable_id: 0,
+                channels: 2,
+                port_type: Some(PORT_TYPE_STEREO.into()),
+                display_name: None,
+            }],
+            outputs: vec![AudioPortInfo {
+                stable_id: 0,
+                channels: 2,
+                port_type: Some(PORT_TYPE_STEREO.into()),
+                display_name: None,
+            }],
+            main_ports_layout: MainPortsLayout::InOut,
+        }
     }
-}
 
-impl MainPortsLayout {
-    /// The number of channels of the input port and output port.
-    ///
-    /// `(input port, output port)`
-    pub fn num_channels(&self) -> (usize, usize) {
-        match self {
-            MainPortsLayout::NoMainPorts => (0, 0),
+    /// A main mono input port and a main mono output port.
+    pub fn mono_in_out() -> Self {
+        AudioPortsExtension {
+            inputs: vec![AudioPortInfo {
+                stable_id: 0,
+                channels: 1,
+                port_type: Some(PORT_TYPE_MONO.into()),
+                display_name: None,
+            }],
+            outputs: vec![AudioPortInfo {
+                stable_id: 0,
+                channels: 1,
+                port_type: Some(PORT_TYPE_MONO.into()),
+                display_name: None,
+            }],
+            main_ports_layout: MainPortsLayout::InOut,
+        }
+    }
 
-            MainPortsLayout::StereoInPlace => (2, 2),
-            MainPortsLayout::StereoInPlacePrefers64 => (2, 2),
-            MainPortsLayout::StereoInOut => (2, 2),
-            MainPortsLayout::StereoInOutPrefers64 => (2, 2),
-            MainPortsLayout::StereoInOnly => (2, 0),
-            MainPortsLayout::StereoInOnlyPrefers64 => (2, 0),
-            MainPortsLayout::StereoOutOnly => (0, 2),
-            MainPortsLayout::StereoOutOnlyPrefers64 => (0, 2),
+    /// A main stereo output port only.
+    pub fn stereo_out() -> Self {
+        AudioPortsExtension {
+            inputs: vec![],
+            outputs: vec![AudioPortInfo {
+                stable_id: 0,
+                channels: 2,
+                port_type: Some(PORT_TYPE_STEREO.into()),
+                display_name: None,
+            }],
+            main_ports_layout: MainPortsLayout::OutOnly,
+        }
+    }
 
-            MainPortsLayout::MonoInPlace => (1, 1),
-            MainPortsLayout::MonoInPlacePrefers64 => (1, 1),
-            MainPortsLayout::MonoInOut => (1, 1),
-            MainPortsLayout::MonoInOutPrefers64 => (1, 1),
-            MainPortsLayout::MonoInOnly => (1, 0),
-            MainPortsLayout::MonoInOnlyPrefers64 => (1, 0),
-            MainPortsLayout::MonoOutOnly => (0, 1),
-            MainPortsLayout::MonoOutOnlyPrefers64 => (0, 1),
+    /// A main mono output port only.
+    pub fn mono_out() -> Self {
+        AudioPortsExtension {
+            inputs: vec![],
+            outputs: vec![AudioPortInfo {
+                stable_id: 0,
+                channels: 1,
+                port_type: Some(PORT_TYPE_MONO.into()),
+                display_name: None,
+            }],
+            main_ports_layout: MainPortsLayout::OutOnly,
+        }
+    }
 
-            MainPortsLayout::MonoInStereoOut => (1, 2),
-            MainPortsLayout::MonoInStereoOutPrefers64 => (1, 2),
-            MainPortsLayout::StereoInMonoOut => (2, 1),
-            MainPortsLayout::StereoInMonoOutPrefers64 => (2, 1),
+    /// A main stereo input port and a main stereo output port, with an
+    /// additional stereo sidechain input.
+    pub fn stereo_in_out_w_sidechain() -> Self {
+        AudioPortsExtension {
+            inputs: vec![
+                AudioPortInfo {
+                    stable_id: 0,
+                    channels: 2,
+                    port_type: Some(PORT_TYPE_STEREO.into()),
+                    display_name: None,
+                },
+                AudioPortInfo {
+                    stable_id: 1,
+                    channels: 2,
+                    port_type: Some(PORT_TYPE_STEREO.into()),
+                    display_name: Some(PORT_NAME_SIDECHAIN.into()),
+                },
+            ],
+            outputs: vec![AudioPortInfo {
+                stable_id: 0,
+                channels: 2,
+                port_type: Some(PORT_TYPE_STEREO.into()),
+                display_name: None,
+            }],
+            main_ports_layout: MainPortsLayout::InOut,
+        }
+    }
 
-            MainPortsLayout::Custom { input, output, .. } => (
-                input.as_ref().map(|p| p.channels).unwrap_or(0),
-                output.as_ref().map(|p| p.channels).unwrap_or(0),
-            ),
+    /// A main mono input port and a main mono output port, with an
+    /// additional mono sidechain input.
+    pub fn mono_in_out_w_sidechain() -> Self {
+        AudioPortsExtension {
+            inputs: vec![
+                AudioPortInfo {
+                    stable_id: 0,
+                    channels: 1,
+                    port_type: Some(PORT_TYPE_MONO.into()),
+                    display_name: None,
+                },
+                AudioPortInfo {
+                    stable_id: 1,
+                    channels: 1,
+                    port_type: Some(PORT_TYPE_MONO.into()),
+                    display_name: Some(PORT_NAME_SIDECHAIN.into()),
+                },
+            ],
+            outputs: vec![AudioPortInfo {
+                stable_id: 0,
+                channels: 1,
+                port_type: Some(PORT_TYPE_MONO.into()),
+                display_name: None,
+            }],
+            main_ports_layout: MainPortsLayout::InOut,
+        }
+    }
+
+    /// A main stereo output port with an additional stereo sidechain
+    /// input.
+    pub fn stereo_out_w_sidechain() -> Self {
+        AudioPortsExtension {
+            inputs: vec![AudioPortInfo {
+                stable_id: 0,
+                channels: 2,
+                port_type: Some(PORT_TYPE_STEREO.into()),
+                display_name: Some(PORT_NAME_SIDECHAIN.into()),
+            }],
+            outputs: vec![AudioPortInfo {
+                stable_id: 0,
+                channels: 2,
+                port_type: Some(PORT_TYPE_STEREO.into()),
+                display_name: None,
+            }],
+            main_ports_layout: MainPortsLayout::OutOnly,
+        }
+    }
+
+    /// A main mono output port with an additional mono sidechain
+    /// input.
+    pub fn mono_out_w_sidechain() -> Self {
+        AudioPortsExtension {
+            inputs: vec![AudioPortInfo {
+                stable_id: 0,
+                channels: 1,
+                port_type: Some(PORT_TYPE_MONO.into()),
+                display_name: Some(PORT_NAME_SIDECHAIN.into()),
+            }],
+            outputs: vec![AudioPortInfo {
+                stable_id: 0,
+                channels: 1,
+                port_type: Some(PORT_TYPE_MONO.into()),
+                display_name: None,
+            }],
+            main_ports_layout: MainPortsLayout::OutOnly,
+        }
+    }
+
+    /// A main mono input port and a main stereo output port.
+    pub fn mono_in_stereo_out() -> Self {
+        AudioPortsExtension {
+            inputs: vec![AudioPortInfo {
+                stable_id: 0,
+                channels: 1,
+                port_type: Some(PORT_TYPE_MONO.into()),
+                display_name: None,
+            }],
+            outputs: vec![AudioPortInfo {
+                stable_id: 0,
+                channels: 2,
+                port_type: Some(PORT_TYPE_STEREO.into()),
+                display_name: None,
+            }],
+            main_ports_layout: MainPortsLayout::InOut,
+        }
+    }
+
+    /// A main stereo input port and a main mono output port.
+    pub fn stereo_in_mono_out() -> Self {
+        AudioPortsExtension {
+            inputs: vec![AudioPortInfo {
+                stable_id: 0,
+                channels: 2,
+                port_type: Some(PORT_TYPE_STEREO.into()),
+                display_name: None,
+            }],
+            outputs: vec![AudioPortInfo {
+                stable_id: 0,
+                channels: 1,
+                port_type: Some(PORT_TYPE_MONO.into()),
+                display_name: None,
+            }],
+            main_ports_layout: MainPortsLayout::InOut,
         }
     }
 }
 
 #[derive(Debug, Clone)]
-/// The layout of any extra input and output audio ports. (i.e. sidechain and
-/// bus ports)
-pub struct ExtraPortsLayout {
-    pub extra_inputs: Vec<CustomPortInfo>,
-    pub extra_outputs: Vec<CustomPortInfo>,
-}
-
-#[derive(Debug, Clone)]
 /// Information about a custom audio port.
-pub struct CustomPortInfo {
+pub struct AudioPortInfo {
+    /// Stable identifier
+    pub stable_id: u32,
+
     /// The number of channels in this port.
     ///
     /// This cannot be `0`.
     pub channels: usize,
-
-    /// If `true`, then it tells the host that this plugin prefers to use 64 bit
-    /// (`f64`) buffers for this port. Note the host may still decide to send
-    /// 32 bit (`f32`) buffers to this port regardless.
-    pub prefers_64_bit: bool,
 
     /// If `None` or empty then it is unspecified (arbitrary audio).
     ///
@@ -324,4 +254,26 @@ pub struct CustomPortInfo {
     ///
     /// Set this to `None` to use the default name.
     pub display_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+/// Specifies which audio ports are "main" ports.
+pub enum MainPortsLayout {
+    /// Both the first input port and the first output port are main ports.
+    InOut,
+
+    /// The first input port is a main port, and there are no main output ports.
+    InOnly,
+
+    /// The first output port is a main port, and there are no main input ports.
+    OutOnly,
+
+    /// There are no main input or output ports.
+    NoMainPorts,
+}
+
+impl Default for MainPortsLayout {
+    fn default() -> Self {
+        MainPortsLayout::InOut
+    }
 }

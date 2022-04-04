@@ -1,13 +1,14 @@
-mod clap_plugin_host;
+//mod clap_plugin_host;
 
-pub mod audio_buffer;
-pub mod c_char_helpers;
 pub mod engine;
 pub mod error;
+pub mod graph;
 pub mod host;
 pub mod plugin;
-pub mod process_info;
-pub mod schedule;
+
+pub use graph::audio_buffer_pool::AudioPortBuffer;
+pub use plugin::process_info::{ProcInfo, ProcessStatus};
+pub use host::Host;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum EngineState {

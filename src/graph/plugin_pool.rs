@@ -6,7 +6,7 @@ use fnv::FnvHashMap;
 
 use crate::host::Host;
 use crate::plugin::{PluginAudioThread, PluginMainThread};
-use crate::process_info::ProcessStatus;
+use crate::ProcessStatus;
 
 /// Used for debugging and verifying purposes.
 #[repr(u32)]

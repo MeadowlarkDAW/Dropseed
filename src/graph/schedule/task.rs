@@ -1,11 +1,9 @@
 use basedrop::Shared;
 use clap_sys::process::clap_process;
+use smallvec::SmallVec;
 
-use super::plugin_pool::SharedPluginAudioThreadInstance;
-use crate::{
-    host::Host,
-    process_info::{ClapProcAudioPorts, ProcAudioBuffers, ProcInfo, ProcessStatus},
-};
+use crate::graph::plugin_pool::SharedPluginAudioThreadInstance;
+use crate::{host::Host, AudioPortBuffer, ProcInfo, ProcessStatus};
 
 pub(crate) enum Task {
     InternalProcessor(InternalPluginTask),
@@ -20,7 +18,23 @@ impl std::fmt::Debug for Task {
 
                 f.field("id", &t.plugin.id());
 
-                t.audio_buffers.debug_fields(&mut f);
+                if !t.audio_in.is_empty() {
+                    let mut s = String::new();
+                    for b in t.audio_in.iter() {
+                        s.push_str(&format!("{:?}, ", b))
+                    }
+
+                    f.field("audio_in", &s);
+                }
+
+                if !t.audio_out.is_empty() {
+                    let mut s = String::new();
+                    for b in t.audio_out.iter() {
+                        s.push_str(&format!("{:?}, ", b))
+                    }
+
+                    f.field("audio_out", &s);
+                }
 
                 f.finish()
             }
@@ -29,9 +43,20 @@ impl std::fmt::Debug for Task {
 
                 // TODO: Processor ID
 
-                t.ports.debug_fields(&mut f);
+                //t.ports.debug_fields(&mut f);
 
                 f.finish()
+            }
+        }
+    }
+}
+
+impl Task {
+    pub fn process(&mut self, info: &ProcInfo, host: &mut Host) -> ProcessStatus {
+        match self {
+            Task::InternalProcessor(task) => task.process(info, host),
+            Task::ClapProcessor(task) => {
+                todo!()
             }
         }
     }
@@ -40,13 +65,14 @@ impl std::fmt::Debug for Task {
 pub(crate) struct InternalPluginTask {
     plugin: SharedPluginAudioThreadInstance,
 
-    audio_buffers: ProcAudioBuffers,
+    audio_in: SmallVec<[AudioPortBuffer; 2]>,
+    audio_out: SmallVec<[AudioPortBuffer; 2]>,
 }
 
 impl InternalPluginTask {
     #[inline]
-    pub fn process(&mut self, info: &ProcInfo, host: &mut Host) -> ProcessStatus {
-        let Self { plugin, audio_buffers } = self;
+    fn process(&mut self, info: &ProcInfo, host: &mut Host) -> ProcessStatus {
+        let Self { plugin, audio_in, audio_out } = self;
 
         // This is safe because the audio thread counterpart of a plugin is only ever
         // borrowed mutably in this method. Also, the verifier has verified that no
@@ -62,7 +88,7 @@ impl InternalPluginTask {
         let status = if let Err(_) = plugin.plugin.start_processing(host) {
             ProcessStatus::Error
         } else {
-            let status = plugin.plugin.process(info, audio_buffers, host);
+            let status = plugin.plugin.process(info, audio_in, audio_out, host);
 
             plugin.plugin.stop_processing(host);
 
@@ -71,7 +97,9 @@ impl InternalPluginTask {
 
         if let ProcessStatus::Error = status {
             // As per the spec, we must clear all output buffers.
-            audio_buffers.clear_all_outputs(info);
+            for b in audio_out.iter_mut() {
+                b.clear(info);
+            }
         }
 
         // TODO: output event stuff
@@ -82,14 +110,14 @@ impl InternalPluginTask {
 
 pub(crate) struct ClapPluginTask {
     // TODO: clap processor
-    ports: ClapProcAudioPorts,
+//ports: ClapProcAudioPorts,
 }
 
 impl ClapPluginTask {
     #[inline]
-    pub fn process(&mut self, proc: &mut clap_process) -> ProcessStatus {
+    fn process(&mut self, proc: &mut clap_process) -> ProcessStatus {
         // Prepare the buffers to be sent to the external plugin.
-        self.ports.prepare(proc);
+        //self.ports.prepare(proc);
 
         // TODO: process clap plugin
 

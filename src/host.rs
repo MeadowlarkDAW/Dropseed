@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 
 use basedrop::Shared;
 
-use crate::schedule::plugin_pool::PluginInstanceChannel;
+use crate::graph::plugin_pool::PluginInstanceChannel;
 
 pub struct HostInfo {
     /// The name of this host (mandatory).

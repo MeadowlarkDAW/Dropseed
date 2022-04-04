@@ -5,7 +5,7 @@ use smallvec::SmallVec;
 
 use clap_sys::audio_buffer::clap_audio_buffer;
 
-use crate::process_info::ProcInfo;
+use crate::ProcInfo;
 
 // ----- SAFETY NOTE  -------------------------------------------------------
 //
@@ -53,15 +53,13 @@ use crate::process_info::ProcInfo;
 // --------------------------------------------------------------------------
 
 #[derive(Clone)]
-pub(crate) struct SharedAudioBuffer<T: Sized + Copy + Clone + Send + Default + 'static> {
-    buffer: Shared<(UnsafeCell<Vec<T>>, UniqueBufferID)>,
+pub(crate) struct SharedAudioBuffer {
+    buffer: Shared<(UnsafeCell<Vec<f32>>, UniqueBufferID)>,
 }
 
-impl<T: Sized + Copy + Clone + Send + Default + 'static> SharedAudioBuffer<T> {
+impl SharedAudioBuffer {
     fn new(id: UniqueBufferID, max_frames: usize, coll_handle: &basedrop::Handle) -> Self {
-        Self {
-            buffer: Shared::new(coll_handle, (UnsafeCell::new(vec![T::default(); max_frames]), id)),
-        }
+        Self { buffer: Shared::new(coll_handle, (UnsafeCell::new(vec![0.0; max_frames]), id)) }
     }
 
     pub fn unique_id(&self) -> UniqueBufferID {
@@ -69,7 +67,7 @@ impl<T: Sized + Copy + Clone + Send + Default + 'static> SharedAudioBuffer<T> {
     }
 
     #[inline]
-    fn borrow(&self, proc_info: &ProcInfo) -> &[T] {
+    fn borrow(&self, proc_info: &ProcInfo) -> &[f32] {
         // Please refer to the "SAFETY NOTE" above on why this is safe.
         //
         // In addition the host will never set `proc_info.frames` to something
@@ -81,7 +79,7 @@ impl<T: Sized + Copy + Clone + Send + Default + 'static> SharedAudioBuffer<T> {
     }
 
     #[inline]
-    fn borrow_mut(&self, proc_info: &ProcInfo) -> &mut [T] {
+    fn borrow_mut(&self, proc_info: &ProcInfo) -> &mut [f32] {
         // Please refer to the "SAFETY NOTE" above on why this is safe.
         //
         // In addition the host will never set `proc_info.frames` to something
@@ -100,35 +98,27 @@ impl<T: Sized + Copy + Clone + Send + Default + 'static> SharedAudioBuffer<T> {
 pub(crate) struct ClapAudioBuffer {
     raw: clap_audio_buffer,
 
-    is_float: bool,
-
-    raw_buffers_f32: SmallVec<[*const f32; 2]>,
-    raw_buffers_f64: SmallVec<[*const f64; 2]>,
+    raw_buffers: SmallVec<[*const f32; 2]>,
 
     /// We keep a reference-counted pointer to the same buffers in `raw` so
     /// the garbage collector can know when it is safe to deallocate unused
     /// buffers.
-    rc_buffers_f32: SmallVec<[SharedAudioBuffer<f32>; 2]>,
-    rc_buffers_f64: SmallVec<[SharedAudioBuffer<f64>; 2]>,
+    rc_buffers: SmallVec<[SharedAudioBuffer; 2]>,
 
     frames: usize,
 }
 
 impl std::fmt::Debug for ClapAudioBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.is_float {
-            f.debug_list().entries(self.rc_buffers_f32.iter().map(|b| b.buffer.1)).finish()
-        } else {
-            f.debug_list().entries(self.rc_buffers_f64.iter().map(|b| b.buffer.1)).finish()
-        }
+        f.debug_list().entries(self.rc_buffers.iter().map(|b| b.buffer.1)).finish()
     }
 }
 
 impl ClapAudioBuffer {
-    pub(crate) fn new_f32(buffers: SmallVec<[SharedAudioBuffer<f32>; 2]>, latency: u32) -> Self {
+    pub(crate) fn new(buffers: SmallVec<[SharedAudioBuffer; 2]>, latency: u32) -> Self {
         assert_ne!(buffers.len(), 0);
 
-        let raw_buffers_f32: SmallVec<[*const f32; 2]> = buffers
+        let raw_buffers: SmallVec<[*const f32; 2]> = buffers
             .iter()
             .map(|b| {
                 // Please refer to the "SAFETY NOTE" above on why this is safe.
@@ -146,87 +136,31 @@ impl ClapAudioBuffer {
             constant_mask: 0,
         };
 
-        Self {
-            raw,
-
-            is_float: true,
-
-            raw_buffers_f32,
-            raw_buffers_f64: SmallVec::new(),
-
-            rc_buffers_f32: buffers,
-            rc_buffers_f64: SmallVec::new(),
-
-            frames: 0,
-        }
-    }
-
-    pub(crate) fn new_f64(buffers: SmallVec<[SharedAudioBuffer<f64>; 2]>, latency: u32) -> Self {
-        assert_ne!(buffers.len(), 0);
-
-        let raw_buffers_f64: SmallVec<[*const f64; 2]> = buffers
-            .iter()
-            .map(|b| {
-                // Please refer to the "SAFETY NOTE" above on why this is safe.
-                //
-                // Also, basedrop's `Shared` pointer never moves its contents.
-                unsafe { (*b.buffer.0.get()).as_ptr() }
-            })
-            .collect();
-
-        let raw = clap_audio_buffer {
-            data32: std::ptr::null(),
-            data64: std::ptr::null(),
-            channel_count: buffers.len() as u32,
-            latency,
-            constant_mask: 0,
-        };
-
-        Self {
-            raw,
-
-            is_float: false,
-
-            raw_buffers_f32: SmallVec::new(),
-            raw_buffers_f64,
-
-            rc_buffers_f32: SmallVec::new(),
-            rc_buffers_f64: buffers,
-
-            frames: 0,
-        }
+        Self { raw, raw_buffers, rc_buffers: buffers, frames: 0 }
     }
 
     pub(crate) fn as_raw(&mut self) -> *const clap_audio_buffer {
-        // While it might be possible to use `Pin` to avoid needing to do this
-        // small check and assign the pointer every time, I'm unsure how reliable
-        // `Pin` is for `SmallVec`.
-        if self.is_float {
-            self.raw.data32 = self.raw_buffers_f32.as_ptr();
-        } else {
-            self.raw.data64 = self.raw_buffers_f64.as_ptr();
-        }
-
+        self.raw.data32 = self.raw_buffers.as_ptr();
         &self.raw
     }
 }
 
 /// An audio port buffer for use with internal plugins.
-pub struct AudioPortBuffer<T: Sized + Copy + Clone + Send + Default + 'static> {
+pub struct AudioPortBuffer {
     latency: u32,     // latency from/to the audio interface
     silent_mask: u64, // mask & (1 << N) to test if channel N is silent
 
-    rc_buffers: SmallVec<[SharedAudioBuffer<T>; 2]>,
+    rc_buffers: SmallVec<[SharedAudioBuffer; 2]>,
 }
 
-impl<T: Sized + Copy + Clone + Send + Default + 'static> std::fmt::Debug for AudioPortBuffer<T> {
+impl std::fmt::Debug for AudioPortBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_list().entries(self.rc_buffers.iter().map(|b| b.buffer.1)).finish()
     }
 }
 
-impl<T: Sized + Copy + Clone + Send + Default + 'static> AudioPortBuffer<T> {
-    pub(crate) fn new(buffers: SmallVec<[SharedAudioBuffer<T>; 2]>, latency: u32) -> Self {
+impl AudioPortBuffer {
+    pub(crate) fn new(buffers: SmallVec<[SharedAudioBuffer; 2]>, latency: u32) -> Self {
         assert_ne!(buffers.len(), 0);
         buffers.len() as u32;
 
@@ -257,13 +191,13 @@ impl<T: Sized + Copy + Clone + Send + Default + 'static> AudioPortBuffer<T> {
     ///
     /// This will return `None` if the channel with the given index does not exist.
     #[inline]
-    pub fn channel(&self, channel: usize, proc_info: &ProcInfo) -> Option<&[T]> {
+    pub fn channel(&self, channel: usize, proc_info: &ProcInfo) -> Option<&[f32]> {
         self.rc_buffers.get(channel).map(|b| b.borrow(proc_info))
     }
 
     /// Immutably borrow a channel without checking that the channel with the given index exists.
     #[inline]
-    pub unsafe fn channel_unchecked(&self, channel: usize, proc_info: &ProcInfo) -> &[T] {
+    pub unsafe fn channel_unchecked(&self, channel: usize, proc_info: &ProcInfo) -> &[f32] {
         self.rc_buffers.get_unchecked(channel).borrow(proc_info)
     }
 
@@ -271,7 +205,7 @@ impl<T: Sized + Copy + Clone + Send + Default + 'static> AudioPortBuffer<T> {
     ///
     /// This will return `None` if the channel with the given index does not exist.
     #[inline]
-    pub fn channel_mut(&mut self, channel: usize, proc_info: &ProcInfo) -> Option<&mut [T]> {
+    pub fn channel_mut(&mut self, channel: usize, proc_info: &ProcInfo) -> Option<&mut [f32]> {
         self.rc_buffers.get(channel).map(|b| b.borrow_mut(proc_info))
     }
 
@@ -281,13 +215,13 @@ impl<T: Sized + Copy + Clone + Send + Default + 'static> AudioPortBuffer<T> {
         &mut self,
         channel: usize,
         proc_info: &ProcInfo,
-    ) -> &mut [T] {
+    ) -> &mut [f32] {
         self.rc_buffers.get_unchecked(channel).borrow_mut(proc_info)
     }
 
     /// Immutably borrow the first/only channel in this buffer.
     #[inline]
-    pub fn mono(&self, proc_info: &ProcInfo) -> &[T] {
+    pub fn mono(&self, proc_info: &ProcInfo) -> &[f32] {
         // This is safe because we assert in the constructor that the number of
         // buffers is never 0.
         unsafe { self.rc_buffers.get_unchecked(0).borrow(proc_info) }
@@ -295,7 +229,7 @@ impl<T: Sized + Copy + Clone + Send + Default + 'static> AudioPortBuffer<T> {
 
     /// Mutably borrow the first/only channel in this buffer.
     #[inline]
-    pub fn mono_mut(&mut self, proc_info: &ProcInfo) -> &mut [T] {
+    pub fn mono_mut(&mut self, proc_info: &ProcInfo) -> &mut [f32] {
         // This is safe because we assert in the constructor that the number of
         // buffers is never 0.
         unsafe { self.rc_buffers.get_unchecked(0).borrow_mut(proc_info) }
@@ -305,7 +239,7 @@ impl<T: Sized + Copy + Clone + Send + Default + 'static> AudioPortBuffer<T> {
     ///
     /// This will return an error if the buffer is mono.
     #[inline]
-    pub fn stereo(&self, proc_info: &ProcInfo) -> Option<(&[T], &[T])> {
+    pub fn stereo(&self, proc_info: &ProcInfo) -> Option<(&[f32], &[f32])> {
         if self.rc_buffers.len() > 1 {
             Some((self.rc_buffers[0].borrow(proc_info), self.rc_buffers[1].borrow(proc_info)))
         } else {
@@ -316,7 +250,7 @@ impl<T: Sized + Copy + Clone + Send + Default + 'static> AudioPortBuffer<T> {
     /// Immutably borrow the first two (or only two) channels in this buffer without
     /// checking if the buffer is not mono.
     #[inline]
-    pub unsafe fn stereo_unchecked(&self, proc_info: &ProcInfo) -> (&[T], &[T]) {
+    pub unsafe fn stereo_unchecked(&self, proc_info: &ProcInfo) -> (&[f32], &[f32]) {
         (
             self.rc_buffers.get_unchecked(0).borrow(proc_info),
             self.rc_buffers.get_unchecked(1).borrow(proc_info),
@@ -327,7 +261,7 @@ impl<T: Sized + Copy + Clone + Send + Default + 'static> AudioPortBuffer<T> {
     ///
     /// This will return an error if the buffer is mono.
     #[inline]
-    pub fn stereo_mut(&mut self, proc_info: &ProcInfo) -> Option<(&mut [T], &mut [T])> {
+    pub fn stereo_mut(&mut self, proc_info: &ProcInfo) -> Option<(&mut [f32], &mut [f32])> {
         if self.rc_buffers.len() > 1 {
             Some((
                 self.rc_buffers[0].borrow_mut(proc_info),
@@ -341,7 +275,10 @@ impl<T: Sized + Copy + Clone + Send + Default + 'static> AudioPortBuffer<T> {
     /// Mutably borrow the first two (or only two) channels in this buffer without
     /// checking if the buffer is not mono.
     #[inline]
-    pub unsafe fn stereo_unchecked_mut(&mut self, proc_info: &ProcInfo) -> (&mut [T], &mut [T]) {
+    pub unsafe fn stereo_unchecked_mut(
+        &mut self,
+        proc_info: &ProcInfo,
+    ) -> (&mut [f32], &mut [f32]) {
         (
             self.rc_buffers.get_unchecked(0).borrow_mut(proc_info),
             self.rc_buffers.get_unchecked(1).borrow_mut(proc_info),
@@ -351,7 +288,7 @@ impl<T: Sized + Copy + Clone + Send + Default + 'static> AudioPortBuffer<T> {
     #[inline]
     pub fn clear(&mut self, proc_info: &ProcInfo) {
         for b in self.rc_buffers.iter() {
-            b.borrow_mut(proc_info).fill(T::default());
+            b.borrow_mut(proc_info).fill(0.0);
         }
     }
 
@@ -362,17 +299,12 @@ impl<T: Sized + Copy + Clone + Send + Default + 'static> AudioPortBuffer<T> {
 #[repr(u32)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UniqueBufferType {
-    /// An f32 audio buffer directly referenced by the AudioGraph
+    /// An audio buffer directly referenced by the AudioGraph
     /// compiler (by buffer index).
-    AudioF32,
-    /// An f64 audio buffer directly referenced by the AudioGraph
-    /// compiler (by buffer index).
-    AudioF64,
+    Graph,
 
-    /// An f32 audio buffer created for any intermediary steps.
-    IntermediaryAudioF32,
-    /// An f64 audio buffer created for any intermediary steps.
-    IntermediaryAudioF64,
+    /// An audio buffer created for any intermediary steps.
+    Intermediary,
 }
 
 impl std::fmt::Debug for UniqueBufferType {
@@ -381,10 +313,8 @@ impl std::fmt::Debug for UniqueBufferType {
             f,
             "{}",
             match self {
-                UniqueBufferType::AudioF32 => "A32",
-                UniqueBufferType::AudioF64 => "A64",
-                UniqueBufferType::IntermediaryAudioF32 => "IA32",
-                UniqueBufferType::IntermediaryAudioF64 => "IA64",
+                UniqueBufferType::Graph => "G",
+                UniqueBufferType::Intermediary => "I",
             }
         )
     }
@@ -404,11 +334,9 @@ impl std::fmt::Debug for UniqueBufferID {
 }
 
 pub(crate) struct AudioBufferPool {
-    audio_f32: Vec<SharedAudioBuffer<f32>>,
-    audio_f64: Vec<SharedAudioBuffer<f64>>,
+    graph_buffers: Vec<SharedAudioBuffer>,
 
-    intermediary_audio_f32: Vec<SharedAudioBuffer<f32>>,
-    intermediary_audio_f64: Vec<SharedAudioBuffer<f64>>,
+    intermediary_buffers: Vec<SharedAudioBuffer>,
 
     max_block_size: usize,
     coll_handle: basedrop::Handle,
@@ -417,27 +345,25 @@ pub(crate) struct AudioBufferPool {
 impl AudioBufferPool {
     pub fn new(coll_handle: basedrop::Handle, max_block_size: usize) -> Self {
         Self {
-            audio_f32: Vec::new(),
-            audio_f64: Vec::new(),
+            graph_buffers: Vec::new(),
 
-            intermediary_audio_f32: Vec::new(),
-            intermediary_audio_f64: Vec::new(),
+            intermediary_buffers: Vec::new(),
 
             max_block_size,
             coll_handle,
         }
     }
 
-    /// Retrieve an f32 audio buffer directly referenced by the AudioGraph
+    /// Retrieve an audio buffer directly referenced by the AudioGraph
     /// compiler (by buffer index).
-    pub fn get_audio_buffer_f32(&mut self, buffer_index: usize) -> SharedAudioBuffer<f32> {
+    pub fn get_graph_buffer(&mut self, buffer_index: usize) -> SharedAudioBuffer {
         // Resize if buffer does not exist.
-        if self.audio_f32.len() <= buffer_index {
-            let n_new_buffers = (buffer_index + 1) - self.audio_f32.len();
+        if self.graph_buffers.len() <= buffer_index {
+            let n_new_buffers = (buffer_index + 1) - self.graph_buffers.len();
             for _ in 0..n_new_buffers {
-                self.audio_f32.push(SharedAudioBuffer::new(
+                self.graph_buffers.push(SharedAudioBuffer::new(
                     UniqueBufferID {
-                        buffer_type: UniqueBufferType::AudioF32,
+                        buffer_type: UniqueBufferType::Graph,
                         index: buffer_index as u32,
                     },
                     self.max_block_size,
@@ -446,19 +372,18 @@ impl AudioBufferPool {
             }
         }
 
-        self.audio_f32[buffer_index].clone()
+        self.graph_buffers[buffer_index].clone()
     }
 
-    /// Retrieve an f64 audio buffer directly referenced by the AudioGraph
-    /// compiler (by buffer index).
-    pub fn get_audio_buffer_f64(&mut self, buffer_index: usize) -> SharedAudioBuffer<f64> {
+    /// Retrieve an audio buffer used for any intermediary steps.
+    pub fn get_intermediary_buffer(&mut self, buffer_index: usize) -> SharedAudioBuffer {
         // Resize if buffer does not exist.
-        if self.audio_f64.len() <= buffer_index {
-            let n_new_buffers = (buffer_index + 1) - self.audio_f64.len();
+        if self.intermediary_buffers.len() <= buffer_index {
+            let n_new_buffers = (buffer_index + 1) - self.intermediary_buffers.len();
             for _ in 0..n_new_buffers {
-                self.audio_f64.push(SharedAudioBuffer::new(
+                self.intermediary_buffers.push(SharedAudioBuffer::new(
                     UniqueBufferID {
-                        buffer_type: UniqueBufferType::AudioF64,
+                        buffer_type: UniqueBufferType::Intermediary,
                         index: buffer_index as u32,
                     },
                     self.max_block_size,
@@ -467,80 +392,20 @@ impl AudioBufferPool {
             }
         }
 
-        self.audio_f64[buffer_index].clone()
+        self.intermediary_buffers[buffer_index].clone()
     }
 
-    /// Retrieve an f32 audio buffer used for any intermediary steps.
-    pub fn get_intermediary_audio_buffer_f32(
-        &mut self,
-        buffer_index: usize,
-    ) -> SharedAudioBuffer<f32> {
-        // Resize if buffer does not exist.
-        if self.intermediary_audio_f32.len() <= buffer_index {
-            let n_new_buffers = (buffer_index + 1) - self.intermediary_audio_f32.len();
-            for _ in 0..n_new_buffers {
-                self.intermediary_audio_f32.push(SharedAudioBuffer::new(
-                    UniqueBufferID {
-                        buffer_type: UniqueBufferType::IntermediaryAudioF32,
-                        index: buffer_index as u32,
-                    },
-                    self.max_block_size,
-                    &self.coll_handle,
-                ));
-            }
-        }
-
-        self.intermediary_audio_f32[buffer_index].clone()
-    }
-
-    /// Retrieve an f64 audio buffer used for any intermediary steps.
-    pub fn get_intermediary_audio_buffer_f64(
-        &mut self,
-        buffer_index: usize,
-    ) -> SharedAudioBuffer<f64> {
-        // Resize if buffer does not exist.
-        if self.intermediary_audio_f64.len() <= buffer_index {
-            let n_new_buffers = (buffer_index + 1) - self.intermediary_audio_f64.len();
-            for _ in 0..n_new_buffers {
-                self.intermediary_audio_f64.push(SharedAudioBuffer::new(
-                    UniqueBufferID {
-                        buffer_type: UniqueBufferType::IntermediaryAudioF64,
-                        index: buffer_index as u32,
-                    },
-                    self.max_block_size,
-                    &self.coll_handle,
-                ));
-            }
-        }
-
-        self.intermediary_audio_f64[buffer_index].clone()
-    }
-
-    pub fn remove_audio_buffers_f32(&mut self, n_to_remove: usize) {
-        let n = n_to_remove.min(self.audio_f32.len());
+    pub fn remove_graph_buffers(&mut self, n_to_remove: usize) {
+        let n = n_to_remove.min(self.graph_buffers.len());
         for _ in 0..n {
-            let _ = self.audio_f32.pop();
+            let _ = self.graph_buffers.pop();
         }
     }
 
-    pub fn remove_audio_buffers_f64(&mut self, n_to_remove: usize) {
-        let n = n_to_remove.min(self.audio_f64.len());
+    pub fn remove_intermediary_buffers(&mut self, n_to_remove: usize) {
+        let n = n_to_remove.min(self.intermediary_buffers.len());
         for _ in 0..n {
-            let _ = self.audio_f64.pop();
-        }
-    }
-
-    pub fn remove_intermediary_audio_buffers_f32(&mut self, n_to_remove: usize) {
-        let n = n_to_remove.min(self.intermediary_audio_f32.len());
-        for _ in 0..n {
-            let _ = self.intermediary_audio_f32.pop();
-        }
-    }
-
-    pub fn remove_intermediary_audio_buffers_f64(&mut self, n_to_remove: usize) {
-        let n = n_to_remove.min(self.intermediary_audio_f64.len());
-        for _ in 0..n {
-            let _ = self.intermediary_audio_f64.pop();
+            let _ = self.intermediary_buffers.pop();
         }
     }
 }
