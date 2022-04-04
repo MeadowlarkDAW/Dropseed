@@ -1,11 +1,12 @@
+use audio_graph::NodeRef;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{cell::UnsafeCell, hash::Hash};
 
 use basedrop::Shared;
-use fnv::FnvHashMap;
 
 use crate::host::Host;
 use crate::plugin::{PluginAudioThread, PluginMainThread};
+use crate::plugin_scanner::PluginType;
 use crate::ProcessStatus;
 
 /// Used for debugging and verifying purposes.
@@ -13,6 +14,7 @@ use crate::ProcessStatus;
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PluginInstanceType {
     Internal,
+    Clap,
     Sum,
     DelayComp,
 }
@@ -24,6 +26,7 @@ impl std::fmt::Debug for PluginInstanceType {
             "{}",
             match self {
                 PluginInstanceType::Internal => "Int",
+                PluginInstanceType::Clap => "CLAP",
                 PluginInstanceType::Sum => "Sum",
                 PluginInstanceType::DelayComp => "Dly",
             }
@@ -31,38 +34,49 @@ impl std::fmt::Debug for PluginInstanceType {
     }
 }
 
-/// Used to uniquely identify a plugin instance and for debugging purposes.
-#[derive(Clone, Copy)]
-pub struct PluginInstanceID {
-    id: u64,
-    plugin_type: PluginInstanceType,
-    name: &'static str,
+impl From<PluginType> for PluginInstanceType {
+    fn from(p: PluginType) -> Self {
+        match p {
+            PluginType::Internal => PluginInstanceType::Internal,
+            PluginType::Clap => PluginInstanceType::Clap,
+        }
+    }
 }
 
-impl PluginInstanceID {
-    pub fn new(accumulator: &mut u64, plugin_type: PluginInstanceType, name: &'static str) -> Self {
-        *accumulator += 1;
-
-        Self { id: *accumulator, plugin_type, name }
-    }
+/// Used to uniquely identify a plugin instance and for debugging purposes.
+pub struct PluginInstanceID {
+    pub(crate) node_id: NodeRef,
+    plugin_type: PluginInstanceType,
+    name: Option<Shared<String>>,
 }
 
 impl std::fmt::Debug for PluginInstanceID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let id: usize = self.node_id.into();
         match self.plugin_type {
             PluginInstanceType::Internal => {
-                write!(f, "Int({})_{}", self.name, self.id)
+                write!(f, "Int({})_{}", &**self.name.as_ref().unwrap(), id)
             }
             _ => {
-                write!(f, "{:?}_{}", self.plugin_type, self.id)
+                write!(f, "{:?}_{}", self.plugin_type, id)
             }
+        }
+    }
+}
+
+impl Clone for PluginInstanceID {
+    fn clone(&self) -> Self {
+        Self {
+            node_id: self.node_id,
+            plugin_type: self.plugin_type,
+            name: self.name.as_ref().map(|n| Shared::clone(n)),
         }
     }
 }
 
 impl PartialEq for PluginInstanceID {
     fn eq(&self, other: &Self) -> bool {
-        self.id.eq(&other.id)
+        self.node_id.eq(&other.node_id)
     }
 }
 
@@ -70,7 +84,7 @@ impl Eq for PluginInstanceID {}
 
 impl Hash for PluginInstanceID {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.id.hash(state)
+        self.node_id.hash(state)
     }
 }
 
@@ -139,25 +153,33 @@ struct PluginInstance {
 }
 
 pub(crate) struct PluginInstancePool {
-    plugin_instances: FnvHashMap<PluginInstanceID, PluginInstance>,
-    id_accumulator: u64,
+    graph_plugins: Vec<Option<PluginInstance>>,
+
+    free_graph_plugins: Vec<NodeRef>,
 
     coll_handle: basedrop::Handle,
 }
 
 impl PluginInstancePool {
     pub fn new(coll_handle: basedrop::Handle) -> Self {
-        Self { plugin_instances: FnvHashMap::default(), id_accumulator: 0, coll_handle }
+        Self { graph_plugins: Vec::new(), free_graph_plugins: Vec::new(), coll_handle }
     }
 
-    pub fn new_plugin_instance_from_main(
+    pub fn add_graph_plugin(
         &mut self,
         plugin: Box<dyn PluginMainThread>,
-        plugin_type: PluginInstanceType,
-        plugin_name: &'static str,
+        plugin_type: PluginType,
+        debug_name: Shared<String>,
     ) -> PluginInstanceID {
-        let id = PluginInstanceID { id: self.id_accumulator, plugin_type, name: plugin_name };
-        self.id_accumulator += 1;
+        let node_id = if let Some(node_id) = self.free_graph_plugins.pop() {
+            node_id
+        } else {
+            self.graph_plugins.push(None);
+            NodeRef::new(self.graph_plugins.len())
+        };
+
+        let id =
+            PluginInstanceID { node_id, plugin_type: plugin_type.into(), name: Some(debug_name) };
 
         let channel = Shared::new(
             &self.coll_handle,
@@ -169,21 +191,22 @@ impl PluginInstancePool {
             },
         );
 
-        let main_thread = Some(PluginMainThreadInstance { plugin, channel, id });
+        let main_thread = Some(PluginMainThreadInstance { plugin, channel, id: id.clone() });
 
-        let _ =
-            self.plugin_instances.insert(id, PluginInstance { main_thread, audio_thread: None });
+        let node_i: usize = node_id.into();
+        self.graph_plugins[node_i] = Some(PluginInstance { main_thread, audio_thread: None });
 
         id
     }
 
+    /*
     /// Only used for the special `Sum` and `DelayComp` types.
     pub fn new_plugin_instance_from_audio(
         &mut self,
         plugin: Box<dyn PluginAudioThread>,
         plugin_type: PluginInstanceType,
     ) -> PluginInstanceID {
-        let id = PluginInstanceID { id: self.id_accumulator, plugin_type, name: "" };
+        let id = PluginInstanceID { id: self.id_accumulator, plugin_type, name: None };
         self.id_accumulator += 1;
 
         let channel = Shared::new(
@@ -197,37 +220,46 @@ impl PluginInstancePool {
         );
 
         let audio_thread =
-            SharedPluginAudioThreadInstance::new(plugin, id, channel, &self.coll_handle);
+            SharedPluginAudioThreadInstance::new(plugin, id.clone(), channel, &self.coll_handle);
 
-        let _ = self
-            .plugin_instances
-            .insert(id, PluginInstance { main_thread: None, audio_thread: Some(audio_thread) });
+        let _ = self.plugin_instances.insert(
+            id.clone(),
+            PluginInstance { main_thread: None, audio_thread: Some(audio_thread) },
+        );
 
         id
     }
+    */
 
-    pub fn remove_plugin_instance(&mut self, id: PluginInstanceID, host: &mut Host) {
+    pub fn remove_graph_plugin(&mut self, id: &PluginInstanceID, host: &mut Host) {
         // Deactivate the plugin first.
         self.deactivate_plugin_instance(id, host);
 
-        if let Some(plugin_instance) = self.plugin_instances.remove(&id) {
+        let node_i: usize = id.node_id.into();
+        if let Some(plugin_instance) = self.graph_plugins[node_i].take() {
             // Drop the plugin instance here.
             let _ = plugin_instance;
+
+            // Re-use this node ID for the next new plugin.
+            self.free_graph_plugins.push(id.node_id);
         }
     }
 
     // TODO: custom error type
     pub fn activate_plugin_instance(
         &mut self,
-        id: PluginInstanceID,
+        id: &PluginInstanceID,
         host: &mut Host,
         sample_rate: f64,
         min_frames: usize,
         max_frames: usize,
     ) -> Result<SharedPluginAudioThreadInstance, ()> {
-        if let Some(plugin_instance) = self.plugin_instances.get_mut(&id) {
+        let node_i: usize = id.node_id.into();
+        if let Some(plugin_instance) = &mut self.graph_plugins[node_i] {
             if let Some(plugin_main_thread) = &mut plugin_instance.main_thread {
                 if plugin_main_thread.channel.active.load(Ordering::Relaxed) {
+                    log::warn!("Tried to activate plugin that is already active");
+
                     // Cannot activate plugin that is already active.
                     return Err(());
                 }
@@ -245,7 +277,7 @@ impl PluginInstancePool {
                     Ok(plugin_audio_thread) => {
                         let new_audio_thread = SharedPluginAudioThreadInstance::new(
                             plugin_audio_thread,
-                            plugin_main_thread.id,
+                            plugin_main_thread.id.clone(),
                             Shared::clone(&plugin_main_thread.channel),
                             &self.coll_handle,
                         );
@@ -272,8 +304,9 @@ impl PluginInstancePool {
         return Err(());
     }
 
-    pub fn deactivate_plugin_instance(&mut self, id: PluginInstanceID, host: &mut Host) {
-        if let Some(plugin_instance) = self.plugin_instances.get_mut(&id) {
+    pub fn deactivate_plugin_instance(&mut self, id: &PluginInstanceID, host: &mut Host) {
+        let node_i: usize = id.node_id.into();
+        if let Some(plugin_instance) = &mut self.graph_plugins[node_i] {
             if let Some(plugin_main_thread) = &mut plugin_instance.main_thread {
                 if !plugin_main_thread.channel.active.load(Ordering::Relaxed) {
                     // Plugin is already inactive.
@@ -295,5 +328,13 @@ impl PluginInstancePool {
                 let _ = plugin_audio_thread;
             }
         }
+    }
+
+    pub fn get_graph_plugin_audio_thread(
+        &self,
+        node_id: NodeRef,
+    ) -> Option<&SharedPluginAudioThreadInstance> {
+        let node_i: usize = node_id.into();
+        self.graph_plugins[node_i].as_ref().unwrap().audio_thread.as_ref()
     }
 }

@@ -53,13 +53,18 @@ use crate::ProcInfo;
 // --------------------------------------------------------------------------
 
 #[derive(Clone)]
-pub(crate) struct SharedAudioBuffer {
-    buffer: Shared<(UnsafeCell<Vec<f32>>, UniqueBufferID)>,
+pub(crate) struct SharedAudioBuffer<T: Clone + Copy + Send + Default + 'static> {
+    buffer: Shared<(UnsafeCell<Vec<T>>, UniqueBufferID)>,
 }
 
-impl SharedAudioBuffer {
+impl<T: Clone + Copy + Send + Default + 'static> SharedAudioBuffer<T> {
     fn new(id: UniqueBufferID, max_frames: usize, coll_handle: &basedrop::Handle) -> Self {
-        Self { buffer: Shared::new(coll_handle, (UnsafeCell::new(vec![0.0; max_frames]), id)) }
+        Self {
+            buffer: Shared::new(
+                coll_handle,
+                (UnsafeCell::new(vec![Default::default(); max_frames]), id),
+            ),
+        }
     }
 
     pub fn unique_id(&self) -> UniqueBufferID {
@@ -67,7 +72,7 @@ impl SharedAudioBuffer {
     }
 
     #[inline]
-    fn borrow(&self, proc_info: &ProcInfo) -> &[f32] {
+    fn borrow(&self, proc_info: &ProcInfo) -> &[T] {
         // Please refer to the "SAFETY NOTE" above on why this is safe.
         //
         // In addition the host will never set `proc_info.frames` to something
@@ -79,7 +84,7 @@ impl SharedAudioBuffer {
     }
 
     #[inline]
-    fn borrow_mut(&self, proc_info: &ProcInfo) -> &mut [f32] {
+    fn borrow_mut(&self, proc_info: &ProcInfo) -> &mut [T] {
         // Please refer to the "SAFETY NOTE" above on why this is safe.
         //
         // In addition the host will never set `proc_info.frames` to something
@@ -103,7 +108,7 @@ pub(crate) struct ClapAudioBuffer {
     /// We keep a reference-counted pointer to the same buffers in `raw` so
     /// the garbage collector can know when it is safe to deallocate unused
     /// buffers.
-    rc_buffers: SmallVec<[SharedAudioBuffer; 2]>,
+    rc_buffers: SmallVec<[SharedAudioBuffer<f32>; 2]>,
 
     frames: usize,
 }
@@ -115,7 +120,7 @@ impl std::fmt::Debug for ClapAudioBuffer {
 }
 
 impl ClapAudioBuffer {
-    pub(crate) fn new(buffers: SmallVec<[SharedAudioBuffer; 2]>, latency: u32) -> Self {
+    pub(crate) fn new(buffers: SmallVec<[SharedAudioBuffer<f32>; 2]>, latency: u32) -> Self {
         assert_ne!(buffers.len(), 0);
 
         let raw_buffers: SmallVec<[*const f32; 2]> = buffers
@@ -150,7 +155,7 @@ pub struct AudioPortBuffer {
     latency: u32,     // latency from/to the audio interface
     silent_mask: u64, // mask & (1 << N) to test if channel N is silent
 
-    rc_buffers: SmallVec<[SharedAudioBuffer; 2]>,
+    rc_buffers: SmallVec<[SharedAudioBuffer<f32>; 2]>,
 }
 
 impl std::fmt::Debug for AudioPortBuffer {
@@ -160,7 +165,7 @@ impl std::fmt::Debug for AudioPortBuffer {
 }
 
 impl AudioPortBuffer {
-    pub(crate) fn new(buffers: SmallVec<[SharedAudioBuffer; 2]>, latency: u32) -> Self {
+    pub(crate) fn new(buffers: SmallVec<[SharedAudioBuffer<f32>; 2]>, latency: u32) -> Self {
         assert_ne!(buffers.len(), 0);
         buffers.len() as u32;
 
@@ -334,9 +339,9 @@ impl std::fmt::Debug for UniqueBufferID {
 }
 
 pub(crate) struct AudioBufferPool {
-    graph_buffers: Vec<SharedAudioBuffer>,
+    graph_buffers: Vec<SharedAudioBuffer<f32>>,
 
-    intermediary_buffers: Vec<SharedAudioBuffer>,
+    intermediary_buffers: Vec<SharedAudioBuffer<f32>>,
 
     max_block_size: usize,
     coll_handle: basedrop::Handle,
@@ -356,7 +361,7 @@ impl AudioBufferPool {
 
     /// Retrieve an audio buffer directly referenced by the AudioGraph
     /// compiler (by buffer index).
-    pub fn get_graph_buffer(&mut self, buffer_index: usize) -> SharedAudioBuffer {
+    pub fn get_graph_buffer(&mut self, buffer_index: usize) -> SharedAudioBuffer<f32> {
         // Resize if buffer does not exist.
         if self.graph_buffers.len() <= buffer_index {
             let n_new_buffers = (buffer_index + 1) - self.graph_buffers.len();
@@ -376,7 +381,7 @@ impl AudioBufferPool {
     }
 
     /// Retrieve an audio buffer used for any intermediary steps.
-    pub fn get_intermediary_buffer(&mut self, buffer_index: usize) -> SharedAudioBuffer {
+    pub fn get_intermediary_buffer(&mut self, buffer_index: usize) -> SharedAudioBuffer<f32> {
         // Resize if buffer does not exist.
         if self.intermediary_buffers.len() <= buffer_index {
             let n_new_buffers = (buffer_index + 1) - self.intermediary_buffers.len();

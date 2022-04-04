@@ -6,14 +6,15 @@ use crate::graph::plugin_pool::SharedPluginAudioThreadInstance;
 use crate::{host::Host, AudioPortBuffer, ProcInfo, ProcessStatus};
 
 pub(crate) enum Task {
-    InternalProcessor(InternalPluginTask),
-    ClapProcessor(ClapPluginTask),
+    InternalPlugin(InternalPluginTask),
+    ClapPlugin(ClapPluginTask),
+    DeactivatedPlugin(DeactivatedPluginTask),
 }
 
 impl std::fmt::Debug for Task {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Task::InternalProcessor(t) => {
+            Task::InternalPlugin(t) => {
                 let mut f = f.debug_struct("InternalPlugin");
 
                 f.field("id", &t.plugin.id());
@@ -38,12 +39,26 @@ impl std::fmt::Debug for Task {
 
                 f.finish()
             }
-            Task::ClapProcessor(t) => {
+            Task::ClapPlugin(t) => {
                 let mut f = f.debug_struct("ClapPlugin");
 
                 // TODO: Processor ID
 
                 //t.ports.debug_fields(&mut f);
+
+                f.finish()
+            }
+            Task::DeactivatedPlugin(t) => {
+                let mut f = f.debug_struct("DeactivatedPlugin");
+
+                if !t.audio_out.is_empty() {
+                    let mut s = String::new();
+                    for b in t.audio_out.iter() {
+                        s.push_str(&format!("{:?}, ", b))
+                    }
+
+                    f.field("audio_out", &s);
+                }
 
                 f.finish()
             }
@@ -54,10 +69,11 @@ impl std::fmt::Debug for Task {
 impl Task {
     pub fn process(&mut self, info: &ProcInfo, host: &mut Host) -> ProcessStatus {
         match self {
-            Task::InternalProcessor(task) => task.process(info, host),
-            Task::ClapProcessor(task) => {
+            Task::InternalPlugin(task) => task.process(info, host),
+            Task::ClapPlugin(task) => {
                 todo!()
             }
+            Task::DeactivatedPlugin(task) => task.process(info, host),
         }
     }
 }
@@ -70,7 +86,6 @@ pub(crate) struct InternalPluginTask {
 }
 
 impl InternalPluginTask {
-    #[inline]
     fn process(&mut self, info: &ProcInfo, host: &mut Host) -> ProcessStatus {
         let Self { plugin, audio_in, audio_out } = self;
 
@@ -108,13 +123,27 @@ impl InternalPluginTask {
     }
 }
 
+pub(crate) struct DeactivatedPluginTask {
+    audio_out: SmallVec<[AudioPortBuffer; 2]>,
+}
+
+impl DeactivatedPluginTask {
+    fn process(&mut self, info: &ProcInfo, host: &mut Host) -> ProcessStatus {
+        // Clear any output buffers.
+        for b in self.audio_out.iter_mut() {
+            b.clear(info);
+        }
+
+        ProcessStatus::Sleep
+    }
+}
+
 pub(crate) struct ClapPluginTask {
     // TODO: clap processor
 //ports: ClapProcAudioPorts,
 }
 
 impl ClapPluginTask {
-    #[inline]
     fn process(&mut self, proc: &mut clap_process) -> ProcessStatus {
         // Prepare the buffers to be sent to the external plugin.
         //self.ports.prepare(proc);

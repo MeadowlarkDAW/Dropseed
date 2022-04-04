@@ -5,10 +5,11 @@ pub mod error;
 pub mod graph;
 pub mod host;
 pub mod plugin;
+pub mod plugin_scanner;
 
 pub use graph::audio_buffer_pool::AudioPortBuffer;
-pub use plugin::process_info::{ProcInfo, ProcessStatus};
 pub use host::Host;
+pub use plugin::process_info::{ProcInfo, ProcessStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum EngineState {

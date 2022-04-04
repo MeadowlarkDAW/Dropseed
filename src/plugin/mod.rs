@@ -78,7 +78,7 @@ pub trait PluginFactory {
     /// Get the description of this plugin.
     ///
     /// This must be fast to execute as this is used while scanning plugins.
-    fn description<'a>() -> PluginDescriptor<'a>;
+    fn description<'a>(&self) -> PluginDescriptor<'a>;
 
     /// Create a new instance of this plugin.
     ///
@@ -86,6 +86,7 @@ pub trait PluginFactory {
     ///
     /// `[main-thread]`
     fn new(
+        &mut self,
         host_info: Shared<HostInfo>,
         coll_handle: &basedrop::Handle,
     ) -> Result<Box<dyn PluginMainThread>, Box<dyn Error>>;
