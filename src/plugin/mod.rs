@@ -10,34 +10,39 @@ pub mod ext;
 
 pub(crate) mod process_info;
 
+mod save_state;
+
 use process_info::{ProcInfo, ProcessStatus};
 
+pub use save_state::PluginSaveState;
+
 /// The description of a plugin.
-pub struct PluginDescriptor<'a> {
+#[derive(Debug, Clone)]
+pub struct PluginDescriptor {
     /// The unique reverse-domain-name identifier of this plugin.
     ///
     /// eg: "org.rustydaw.spicysynth"
-    pub id: Cow<'a, str>,
+    pub id: String,
 
     /// The displayable name of this plugin.
     ///
     /// eg: "Spicy Synth"
-    pub name: Cow<'a, str>,
+    pub name: String,
 
     /// The vendor of this plugin.
     ///
     /// eg: "RustyDAW"
-    pub vendor: Cow<'a, str>,
+    pub vendor: String,
 
     /// The version of this plugin.
     ///
     /// eg: "1.4.4" or "1.1.2_beta"
-    pub version: Cow<'a, str>,
+    pub version: String,
 
     /// A displayable short description of this plugin.
     ///
     /// eg: "Create flaming-hot sounds!"
-    pub description: Cow<'a, str>,
+    pub description: String,
 
     /// Arbitrary list of keywords, separated by `;'.
     ///
@@ -55,22 +60,22 @@ pub struct PluginDescriptor<'a> {
     /// - "equalizer;analyzer;stereo;mono"
     /// - "compressor;analog;character;mono"
     /// - "reverb;plate;stereo"
-    pub features: Option<Cow<'a, str>>,
+    pub features: Option<String>,
 
     /// The url to the product page of this plugin.
     ///
     /// Set to `None` if there is no product page.
-    pub url: Option<Cow<'a, str>>,
+    pub url: Option<String>,
 
     /// The url to the online manual for this plugin.
     ///
     /// Set to `None` if there is no online manual.
-    pub manual_url: Option<Cow<'a, str>>,
+    pub manual_url: Option<String>,
 
     /// The url to the online support page for this plugin.
     ///
     /// Set to `None` if there is no online support page.
-    pub support_url: Option<Cow<'a, str>>,
+    pub support_url: Option<String>,
 }
 
 /// The methods of an audio plugin which are used to create new instances of the plugin.
@@ -78,7 +83,7 @@ pub trait PluginFactory {
     /// Get the description of this plugin.
     ///
     /// This must be fast to execute as this is used while scanning plugins.
-    fn description<'a>(&self) -> PluginDescriptor<'a>;
+    fn description(&self) -> &PluginDescriptor;
 
     /// Create a new instance of this plugin.
     ///

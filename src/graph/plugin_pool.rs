@@ -5,8 +5,8 @@ use std::{cell::UnsafeCell, hash::Hash};
 use basedrop::Shared;
 
 use crate::host::Host;
-use crate::plugin::{PluginAudioThread, PluginMainThread};
-use crate::plugin_scanner::PluginFormat;
+use crate::plugin::{PluginAudioThread, PluginMainThread, PluginSaveState};
+use crate::plugin_scanner::{PluginFormat, ScannedPluginKey};
 use crate::ProcessStatus;
 
 /// Used for debugging and verifying purposes.
@@ -150,26 +150,35 @@ impl SharedPluginAudioThreadInstance {
 struct PluginInstance {
     main_thread: Option<PluginMainThreadInstance>,
     audio_thread: Option<SharedPluginAudioThreadInstance>,
+
+    save_state: PluginSaveState,
 }
 
 pub(crate) struct PluginInstancePool {
     graph_plugins: Vec<Option<PluginInstance>>,
-
     free_graph_plugins: Vec<NodeRef>,
 
     coll_handle: basedrop::Handle,
+
+    num_plugins: usize,
 }
 
 impl PluginInstancePool {
     pub fn new(coll_handle: basedrop::Handle) -> Self {
-        Self { graph_plugins: Vec::new(), free_graph_plugins: Vec::new(), coll_handle }
+        Self {
+            graph_plugins: Vec::new(),
+            free_graph_plugins: Vec::new(),
+            coll_handle,
+            num_plugins: 0,
+        }
     }
 
     pub fn add_graph_plugin(
         &mut self,
         plugin: Box<dyn PluginMainThread>,
-        format: PluginFormat,
+        key: &ScannedPluginKey,
         debug_name: Shared<String>,
+        activate: bool,
     ) -> PluginInstanceID {
         let node_id = if let Some(node_id) = self.free_graph_plugins.pop() {
             node_id
@@ -178,7 +187,7 @@ impl PluginInstancePool {
             NodeRef::new(self.graph_plugins.len())
         };
 
-        let id = PluginInstanceID { node_id, format: format.into(), name: Some(debug_name) };
+        let id = PluginInstanceID { node_id, format: key.format.into(), name: Some(debug_name) };
 
         let channel = Shared::new(
             &self.coll_handle,
@@ -192,8 +201,21 @@ impl PluginInstancePool {
 
         let main_thread = Some(PluginMainThreadInstance { plugin, channel, id: id.clone() });
 
+        let save_state = PluginSaveState {
+            key: key.clone(),
+            activated: false,
+            _preset: (), // TODO
+        };
+
         let node_i: usize = node_id.into();
-        self.graph_plugins[node_i] = Some(PluginInstance { main_thread, audio_thread: None });
+        self.graph_plugins[node_i] =
+            Some(PluginInstance { main_thread, audio_thread: None, save_state });
+
+        self.num_plugins += 1;
+
+        if activate {
+            // TODO
+        }
 
         id
     }
@@ -241,6 +263,8 @@ impl PluginInstancePool {
 
             // Re-use this node ID for the next new plugin.
             self.free_graph_plugins.push(id.node_id);
+
+            self.num_plugins -= 1;
         }
     }
 
@@ -258,6 +282,8 @@ impl PluginInstancePool {
             if let Some(plugin_main_thread) = &mut plugin_instance.main_thread {
                 if plugin_main_thread.channel.active.load(Ordering::Relaxed) {
                     log::warn!("Tried to activate plugin that is already active");
+
+                    // Make sure plugin is activated in the save state
 
                     // Cannot activate plugin that is already active.
                     return Err(());
@@ -285,6 +311,8 @@ impl PluginInstancePool {
 
                         // Store the plugin audio thread instance for future schedules.
                         plugin_instance.audio_thread = Some(new_audio_thread.clone());
+
+                        plugin_instance.save_state.activated = true;
 
                         return Ok(new_audio_thread);
                     }
@@ -318,6 +346,8 @@ impl PluginInstancePool {
                 plugin_main_thread.plugin.deactivate(host);
 
                 plugin_main_thread.channel.active.store(false, Ordering::Relaxed);
+
+                plugin_instance.save_state.activated = false;
             }
 
             if let Some(plugin_audio_thread) = plugin_instance.audio_thread.take() {
@@ -329,11 +359,31 @@ impl PluginInstancePool {
         }
     }
 
+    pub fn num_plugins(&self) -> usize {
+        self.num_plugins
+    }
+
     pub fn get_graph_plugin_audio_thread(
         &self,
         node_id: NodeRef,
     ) -> Option<&SharedPluginAudioThreadInstance> {
         let node_i: usize = node_id.into();
         self.graph_plugins[node_i].as_ref().unwrap().audio_thread.as_ref()
+    }
+
+    pub fn iter_plugin_ids(&self) -> impl Iterator<Item = NodeRef> + '_ {
+        self.graph_plugins
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| p.as_ref().map(|_| NodeRef::new(i)))
+    }
+
+    pub fn get_graph_plugin_save_state(&self, node_id: NodeRef) -> Result<&PluginSaveState, ()> {
+        let node_i: usize = node_id.into();
+        if let Some(plugin) = self.graph_plugins[node_i].as_ref() {
+            Ok(&plugin.save_state)
+        } else {
+            Err(())
+        }
     }
 }

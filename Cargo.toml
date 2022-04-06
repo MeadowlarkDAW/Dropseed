@@ -15,7 +15,8 @@ readme = "README.md"
 
 [dependencies]
 rusty-daw-core = { path = "../rusty-daw-core" }
-audio-graph = { git = "https://github.com/MeadowlarkDAW/audio-graph", branch = "main" }
+#audio-graph = { git = "https://github.com/MeadowlarkDAW/audio-graph", branch = "main" }
+audio-graph = { path = "../audio-graph" }
 clap-sys = { git = "https://github.com/glowcoil/clap-sys.git", branch = "master" }
 raw-window-handle = "0.4"
 basedrop = "0.1"

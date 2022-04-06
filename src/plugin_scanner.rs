@@ -17,7 +17,7 @@ pub struct ScannedPlugin {
 }
 
 impl ScannedPlugin {
-    pub fn description<'a>(&self) -> PluginDescriptor<'a> {
+    pub fn description(&self) -> &PluginDescriptor {
         self.plugin_factory.description()
     }
 

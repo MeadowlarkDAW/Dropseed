@@ -11,6 +11,8 @@ pub use graph::audio_buffer_pool::AudioPortBuffer;
 pub use host::Host;
 pub use plugin::process_info::{ProcInfo, ProcessStatus};
 
+pub mod event;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum EngineState {
     Stopped,
