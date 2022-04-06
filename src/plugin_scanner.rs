@@ -4,8 +4,8 @@ use std::{collections::HashMap, error::Error};
 use crate::host::HostInfo;
 use crate::plugin::{PluginDescriptor, PluginFactory, PluginMainThread};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PluginType {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PluginFormat {
     Internal,
     Clap,
 }
@@ -13,7 +13,7 @@ pub enum PluginType {
 pub struct ScannedPlugin {
     plugin_factory: Box<dyn PluginFactory>,
     rdn: Shared<String>,
-    plugin_type: PluginType,
+    format: PluginFormat,
 }
 
 impl ScannedPlugin {
@@ -21,8 +21,8 @@ impl ScannedPlugin {
         self.plugin_factory.description()
     }
 
-    pub fn plugin_type(&self) -> PluginType {
-        self.plugin_type
+    pub fn format(&self) -> PluginFormat {
+        self.format
     }
 
     pub fn rdn(&self) -> String {
@@ -30,8 +30,14 @@ impl ScannedPlugin {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ScannedPluginKey {
+    pub rdn: String,
+    pub format: PluginFormat,
+}
+
 pub struct PluginScanner {
-    pub scanned_plugins: HashMap<String, ScannedPlugin>,
+    pub scanned_plugins: HashMap<ScannedPluginKey, ScannedPlugin>,
 
     coll_handle: basedrop::Handle,
 }
@@ -41,37 +47,106 @@ impl PluginScanner {
         Self { scanned_plugins: HashMap::default(), coll_handle }
     }
 
-    pub fn scan_internal_plugin(&mut self, plugin_factory: Box<dyn PluginFactory>) -> String {
-        let rdn = plugin_factory.description().id.to_string();
+    pub fn scan_internal_plugin(
+        &mut self,
+        plugin_factory: Box<dyn PluginFactory>,
+    ) -> ScannedPluginKey {
+        let key = ScannedPluginKey {
+            rdn: plugin_factory.description().id.to_string(),
+            format: PluginFormat::Internal,
+        };
 
-        if self.scanned_plugins.contains_key(&rdn) {
-            log::warn!("Already scanned plugin with id: {}", &rdn);
+        if self.scanned_plugins.contains_key(&key) {
+            log::warn!("Already scanned plugin: {:?}", &key);
         }
 
         let instance = ScannedPlugin {
             plugin_factory,
-            rdn: Shared::new(&self.coll_handle, rdn.clone()),
-            plugin_type: PluginType::Internal,
+            rdn: Shared::new(&self.coll_handle, key.rdn.clone()),
+            format: PluginFormat::Internal,
         };
 
-        let _ = self.scanned_plugins.insert(rdn.clone(), instance);
+        let _ = self.scanned_plugins.insert(key.clone(), instance);
 
-        rdn
+        key
     }
 
     pub(crate) fn new_instance(
         &mut self,
-        rdn: &str,
+        key: &ScannedPluginKey,
         host_info: Shared<HostInfo>,
-    ) -> Result<(Box<dyn PluginMainThread>, Shared<String>, PluginType), NewPluginInstanceError>
+        fallback_to_other_formats: bool,
+    ) -> Result<(Box<dyn PluginMainThread>, Shared<String>, PluginFormat), NewPluginInstanceError>
     {
-        if let Some(plugin_factory) = self.scanned_plugins.get_mut(rdn) {
+        if let Some(plugin_factory) = self.scanned_plugins.get_mut(key) {
             match plugin_factory.plugin_factory.new(host_info, &self.coll_handle) {
-                Ok(p) => Ok((p, Shared::clone(&plugin_factory.rdn), plugin_factory.plugin_type)),
-                Err(e) => Err(NewPluginInstanceError::InstantiationError(rdn.to_string(), e)),
+                Ok(p) => Ok((p, Shared::clone(&plugin_factory.rdn), plugin_factory.format)),
+                Err(e) => Err(NewPluginInstanceError::InstantiationError(key.rdn.clone(), e)),
             }
         } else {
-            Err(NewPluginInstanceError::NotFound(rdn.to_string()))
+            // First check if the plugin has an internal format.
+            if key.format != PluginFormat::Internal {
+                let internal_key =
+                    ScannedPluginKey { rdn: key.rdn.clone(), format: PluginFormat::Internal };
+
+                if let Some(plugin_factory) = self.scanned_plugins.get_mut(&internal_key) {
+                    if fallback_to_other_formats {
+                        match plugin_factory.plugin_factory.new(host_info, &self.coll_handle) {
+                            Ok(p) => {
+                                return Ok((
+                                    p,
+                                    Shared::clone(&plugin_factory.rdn),
+                                    PluginFormat::Internal,
+                                ))
+                            }
+                            Err(e) => {
+                                return Err(NewPluginInstanceError::InstantiationError(
+                                    key.rdn.clone(),
+                                    e,
+                                ))
+                            }
+                        }
+                    } else {
+                        return Err(NewPluginInstanceError::FormatNotFound(
+                            key.rdn.clone(),
+                            key.format,
+                        ));
+                    }
+                }
+            }
+
+            // Next check if the plugin has a CLAP format.
+            if key.format != PluginFormat::Clap {
+                let clap_key =
+                    ScannedPluginKey { rdn: key.rdn.clone(), format: PluginFormat::Clap };
+
+                if let Some(plugin_factory) = self.scanned_plugins.get_mut(&clap_key) {
+                    if fallback_to_other_formats {
+                        match plugin_factory.plugin_factory.new(host_info, &self.coll_handle) {
+                            Ok(p) => {
+                                return Ok((
+                                    p,
+                                    Shared::clone(&plugin_factory.rdn),
+                                    PluginFormat::Clap,
+                                ))
+                            }
+                            Err(e) => {
+                                return Err(NewPluginInstanceError::InstantiationError(
+                                    key.rdn.clone(),
+                                    e,
+                                ))
+                            }
+                        }
+                    } else {
+                        return Err(NewPluginInstanceError::FormatNotFound(
+                            key.rdn.clone(),
+                            key.format,
+                        ));
+                    }
+                }
+            }
+
+            Err(NewPluginInstanceError::NotFound(key.rdn.clone()))
         }
     }
 }
@@ -80,6 +155,7 @@ impl PluginScanner {
 pub enum NewPluginInstanceError {
     InstantiationError(String, Box<dyn Error>),
     NotFound(String),
+    FormatNotFound(String, PluginFormat),
 }
 
 impl Error for NewPluginInstanceError {}
@@ -95,6 +171,14 @@ impl std::fmt::Display for NewPluginInstanceError {
                     f,
                     "Failed to create instance of plugin {}: not in list of scanned plugins",
                     n
+                )
+            }
+            NewPluginInstanceError::FormatNotFound(n, p) => {
+                write!(
+                    f,
+                    "Failed to create instance of plugin {}: the format {:?} not found for this plugin",
+                    n,
+                    p
                 )
             }
         }

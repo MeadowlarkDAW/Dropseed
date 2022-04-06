@@ -17,7 +17,7 @@ pub(crate) struct PortID(pub u64);
 use crate::{
     host::HostInfo,
     plugin::{PluginAudioThread, PluginFactory, PluginMainThread},
-    plugin_scanner::{NewPluginInstanceError, PluginScanner},
+    plugin_scanner::{NewPluginInstanceError, PluginFormat, PluginScanner, ScannedPluginKey},
 };
 
 pub struct AudioGraph {
@@ -44,13 +44,17 @@ impl AudioGraph {
 
     pub fn add_new_plugin_instance(
         &mut self,
-        rdn: &str,
+        key: &ScannedPluginKey,
         plugin_scanner: &mut PluginScanner,
+        fallback_to_other_formats: bool,
     ) -> Result<PluginInstanceID, NewPluginInstanceError> {
-        match plugin_scanner.new_instance(rdn, Shared::clone(&self.host_info)) {
-            Ok((plugin, debug_name, plugin_type)) => {
-                let instance_id =
-                    self.plugin_pool.add_graph_plugin(plugin, plugin_type, debug_name);
+        match plugin_scanner.new_instance(
+            key,
+            Shared::clone(&self.host_info),
+            fallback_to_other_formats,
+        ) {
+            Ok((plugin, debug_name, format)) => {
+                let instance_id = self.plugin_pool.add_graph_plugin(plugin, format, debug_name);
 
                 let node_ref = self.graph.node(instance_id.node_id);
 

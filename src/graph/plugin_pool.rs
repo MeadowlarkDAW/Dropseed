@@ -6,13 +6,13 @@ use basedrop::Shared;
 
 use crate::host::Host;
 use crate::plugin::{PluginAudioThread, PluginMainThread};
-use crate::plugin_scanner::PluginType;
+use crate::plugin_scanner::PluginFormat;
 use crate::ProcessStatus;
 
 /// Used for debugging and verifying purposes.
 #[repr(u32)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PluginInstanceType {
+pub(crate) enum PluginInstanceType {
     Internal,
     Clap,
     Sum,
@@ -34,11 +34,11 @@ impl std::fmt::Debug for PluginInstanceType {
     }
 }
 
-impl From<PluginType> for PluginInstanceType {
-    fn from(p: PluginType) -> Self {
+impl From<PluginFormat> for PluginInstanceType {
+    fn from(p: PluginFormat) -> Self {
         match p {
-            PluginType::Internal => PluginInstanceType::Internal,
-            PluginType::Clap => PluginInstanceType::Clap,
+            PluginFormat::Internal => PluginInstanceType::Internal,
+            PluginFormat::Clap => PluginInstanceType::Clap,
         }
     }
 }
@@ -46,19 +46,19 @@ impl From<PluginType> for PluginInstanceType {
 /// Used to uniquely identify a plugin instance and for debugging purposes.
 pub struct PluginInstanceID {
     pub(crate) node_id: NodeRef,
-    plugin_type: PluginInstanceType,
+    format: PluginInstanceType,
     name: Option<Shared<String>>,
 }
 
 impl std::fmt::Debug for PluginInstanceID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let id: usize = self.node_id.into();
-        match self.plugin_type {
+        match self.format {
             PluginInstanceType::Internal => {
                 write!(f, "Int({})_{}", &**self.name.as_ref().unwrap(), id)
             }
             _ => {
-                write!(f, "{:?}_{}", self.plugin_type, id)
+                write!(f, "{:?}_{}", self.format, id)
             }
         }
     }
@@ -68,7 +68,7 @@ impl Clone for PluginInstanceID {
     fn clone(&self) -> Self {
         Self {
             node_id: self.node_id,
-            plugin_type: self.plugin_type,
+            format: self.format,
             name: self.name.as_ref().map(|n| Shared::clone(n)),
         }
     }
@@ -168,7 +168,7 @@ impl PluginInstancePool {
     pub fn add_graph_plugin(
         &mut self,
         plugin: Box<dyn PluginMainThread>,
-        plugin_type: PluginType,
+        format: PluginFormat,
         debug_name: Shared<String>,
     ) -> PluginInstanceID {
         let node_id = if let Some(node_id) = self.free_graph_plugins.pop() {
@@ -178,8 +178,7 @@ impl PluginInstancePool {
             NodeRef::new(self.graph_plugins.len())
         };
 
-        let id =
-            PluginInstanceID { node_id, plugin_type: plugin_type.into(), name: Some(debug_name) };
+        let id = PluginInstanceID { node_id, format: format.into(), name: Some(debug_name) };
 
         let channel = Shared::new(
             &self.coll_handle,
@@ -204,9 +203,9 @@ impl PluginInstancePool {
     pub fn new_plugin_instance_from_audio(
         &mut self,
         plugin: Box<dyn PluginAudioThread>,
-        plugin_type: PluginInstanceType,
+        format: PluginInstanceType,
     ) -> PluginInstanceID {
-        let id = PluginInstanceID { id: self.id_accumulator, plugin_type, name: None };
+        let id = PluginInstanceID { id: self.id_accumulator, format, name: None };
         self.id_accumulator += 1;
 
         let channel = Shared::new(
