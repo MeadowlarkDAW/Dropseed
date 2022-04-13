@@ -1,13 +1,13 @@
 use crate::plugin::PluginSaveState;
-
-use super::PortID;
+use audio_graph::DefaultPortType;
 
 #[derive(Debug, Clone, Copy)]
 pub struct EdgeSaveState {
+    pub edge_type: DefaultPortType,
     pub src_plugin_i: usize,
     pub dst_plugin_i: usize,
-    pub src_port: PortID,
-    pub dst_port: PortID,
+    pub src_port: u16,
+    pub dst_port: u16,
 }
 
 #[derive(Debug, Clone)]

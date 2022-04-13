@@ -26,6 +26,20 @@ impl Default for AudioPortsExtension {
 }
 
 impl AudioPortsExtension {
+    pub fn total_in_out_channels(&self) -> (usize, usize) {
+        let mut num_inputs = 0;
+        let mut num_outputs = 0;
+
+        for input in self.inputs.iter() {
+            num_inputs += input.channels;
+        }
+        for output in self.outputs.iter() {
+            num_outputs += output.channels;
+        }
+
+        (num_inputs, num_outputs)
+    }
+
     /// A main stereo input port and a main stereo output port.
     pub fn stereo_in_out() -> Self {
         AudioPortsExtension {
