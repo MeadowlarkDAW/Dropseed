@@ -1,5 +1,5 @@
-use std::borrow::Cow;
 use std::error::Error;
+use std::path::PathBuf;
 
 use basedrop::Shared;
 
@@ -80,10 +80,24 @@ pub struct PluginDescriptor {
 
 /// The methods of an audio plugin which are used to create new instances of the plugin.
 pub trait PluginFactory {
-    /// Get the description of this plugin.
+    /// This function is always called first and only once.
     ///
-    /// This must be fast to execute as this is used while scanning plugins.
-    fn description(&self) -> &PluginDescriptor;
+    /// * `plugin_path` - The path to the shared library that was loaded. This will be `None`
+    /// for internal plugins.
+    ///
+    /// This method should be as fast as possible, in order to perform very quick scan of the plugin
+    /// descriptors.
+    ///
+    /// It is forbidden to display graphical user interface in this call.
+    /// It is forbidden to perform user inter-action in this call.
+    ///
+    /// If the initialization depends upon expensive computation, maybe try to do them ahead of time
+    /// and cache the result.
+    #[allow(unused_attributes)]
+    fn entry_init(
+        &mut self,
+        plugin_path: Option<&PathBuf>,
+    ) -> Result<PluginDescriptor, Box<dyn Error>>;
 
     /// Create a new instance of this plugin.
     ///

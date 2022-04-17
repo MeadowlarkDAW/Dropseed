@@ -73,7 +73,7 @@ impl AudioGraph {
         plugin_scanner: &mut PluginScanner,
         fallback_to_other_formats: bool,
     ) -> (PluginInstanceID, Result<(), NewPluginInstanceError>) {
-        let (plugin, debug_name, format, res) = match plugin_scanner.new_instance(
+        let (plugin, debug_name, format, res) = match plugin_scanner.create_plugin(
             &save_state.key,
             Shared::clone(&self.host_info),
             fallback_to_other_formats,
@@ -130,8 +130,8 @@ impl AudioGraph {
                     edge_type: DefaultPortType::Audio,
                     src_plugin_i: *node_id_to_index.get(&edge.src_node).unwrap(),
                     dst_plugin_i: *node_id_to_index.get(&edge.dst_node).unwrap(),
-                    src_port: self.graph.port_ident(edge.src_port).unwrap().as_index() as u16,
-                    dst_port: self.graph.port_ident(edge.dst_port).unwrap().as_index() as u16,
+                    src_channel: self.graph.port_ident(edge.src_port).unwrap().as_index() as u16,
+                    dst_channel: self.graph.port_ident(edge.dst_port).unwrap().as_index() as u16,
                 });
             }
         }
@@ -186,36 +186,38 @@ impl AudioGraph {
                     let src_plugin_id = &plugin_ids[edge_save_state.src_plugin_i];
                     let dst_plugin_id = &plugin_ids[edge_save_state.dst_plugin_i];
 
-                    let src_port_refs =
+                    let src_channel_refs =
                         self.plugin_pool.get_audio_out_port_refs(src_plugin_id).unwrap();
-                    let dst_port_refs =
+                    let dst_channel_refs =
                         self.plugin_pool.get_audio_in_port_refs(dst_plugin_id).unwrap();
 
-                    if usize::from(edge_save_state.src_port) >= src_port_refs.len() {
+                    if usize::from(edge_save_state.src_channel) >= src_channel_refs.len() {
                         edge_errors.push((
                             i,
-                            ConnectEdgeError::SrcPortOutOfBounds(
-                                edge_save_state.src_port,
-                                src_port_refs.len() as u16,
+                            ConnectEdgeError::SrcChannelOutOfBounds(
+                                edge_save_state.src_channel,
+                                src_channel_refs.len() as u16,
                             ),
                         ));
                         continue;
                     }
-                    if usize::from(edge_save_state.dst_port) >= dst_port_refs.len() {
+                    if usize::from(edge_save_state.dst_channel) >= dst_channel_refs.len() {
                         edge_errors.push((
                             i,
-                            ConnectEdgeError::DstPortOutOfBounds(
-                                edge_save_state.dst_port,
-                                dst_port_refs.len() as u16,
+                            ConnectEdgeError::DstChannelOutOfBounds(
+                                edge_save_state.dst_channel,
+                                dst_channel_refs.len() as u16,
                             ),
                         ));
                         continue;
                     }
 
-                    let src_port_ref = src_port_refs[usize::from(edge_save_state.src_port)];
-                    let dst_port_ref = dst_port_refs[usize::from(edge_save_state.dst_port)];
+                    let src_channel_ref =
+                        src_channel_refs[usize::from(edge_save_state.src_channel)];
+                    let dst_channel_ref =
+                        dst_channel_refs[usize::from(edge_save_state.dst_channel)];
 
-                    match self.graph.connect(src_port_ref, dst_port_ref) {
+                    match self.graph.connect(src_channel_ref, dst_channel_ref) {
                         Ok(()) => {
                             log::trace!(
                                 "Successfully connected edge: {:?}",
@@ -223,8 +225,8 @@ impl AudioGraph {
                                     edge_type: DefaultPortType::Audio,
                                     src_plugin_id: src_plugin_id.clone(),
                                     dst_plugin_id: dst_plugin_id.clone(),
-                                    src_plugin_port: edge_save_state.src_port,
-                                    dst_plugin_port: edge_save_state.dst_port,
+                                    src_channel: edge_save_state.src_channel,
+                                    dst_channel: edge_save_state.dst_channel,
                                 }
                             )
                         }
@@ -259,16 +261,16 @@ pub struct Edge {
     pub src_plugin_id: PluginInstanceID,
     pub dst_plugin_id: PluginInstanceID,
 
-    pub src_plugin_port: u16,
-    pub dst_plugin_port: u16,
+    pub src_channel: u16,
+    pub dst_channel: u16,
 }
 
 #[derive(Debug)]
 pub enum ConnectEdgeError {
     SrcPluginDoesNotExist,
     DstPluginDoesNotExist,
-    SrcPortOutOfBounds(u16, u16),
-    DstPortOutOfBounds(u16, u16),
+    SrcChannelOutOfBounds(u16, u16),
+    DstChannelOutOfBounds(u16, u16),
     Cycle,
     Unkown,
 }
@@ -284,11 +286,11 @@ impl std::fmt::Display for ConnectEdgeError {
             ConnectEdgeError::DstPluginDoesNotExist => {
                 write!(f, "Could not add edge to graph: Destination plugin does not exist")
             }
-            ConnectEdgeError::SrcPortOutOfBounds(i, max_i) => {
-                write!(f, "Could not add edge to graph: Source plugin with {} output ports does not have port with index {}", i, max_i)
+            ConnectEdgeError::SrcChannelOutOfBounds(i, max_i) => {
+                write!(f, "Could not add edge to graph: Source plugin with {} output channels does not have channel with index {}", i, max_i)
             }
-            ConnectEdgeError::DstPortOutOfBounds(i, max_i) => {
-                write!(f, "Could not add edge to graph: Destination plugin with {} input ports does not have port with index {}", i, max_i)
+            ConnectEdgeError::DstChannelOutOfBounds(i, max_i) => {
+                write!(f, "Could not add edge to graph: Destination plugin with {} input channels does not have channel with index {}", i, max_i)
             }
             ConnectEdgeError::Cycle => {
                 write!(f, "Could not add edge to graph: Cycle detected")

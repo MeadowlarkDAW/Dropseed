@@ -6,8 +6,8 @@ pub struct EdgeSaveState {
     pub edge_type: DefaultPortType,
     pub src_plugin_i: usize,
     pub dst_plugin_i: usize,
-    pub src_port: u16,
-    pub dst_port: u16,
+    pub src_channel: u16,
+    pub dst_channel: u16,
 }
 
 #[derive(Debug, Clone)]
