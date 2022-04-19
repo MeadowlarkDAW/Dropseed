@@ -155,8 +155,8 @@ struct PluginInstance {
     audio_thread: Option<SharedPluginAudioThreadInstance>,
 
     save_state: PluginSaveState,
-    audio_in_port_refs: Vec<PortRef>,
-    audio_out_port_refs: Vec<PortRef>,
+    audio_in_channel_refs: Vec<PortRef>,
+    audio_out_channel_refs: Vec<PortRef>,
     audio_ports_ext: Option<AudioPortsExtension>,
     format: PluginFormat,
 }
@@ -188,7 +188,7 @@ impl PluginInstancePool {
         plugin: Option<Box<dyn PluginMainThread>>,
         mut save_state: PluginSaveState,
         debug_name: Shared<String>,
-        graph: &mut Graph<NodeRef, PortID, DefaultPortType>,
+        graph: &mut Graph<PluginInstanceID, PortID, DefaultPortType>,
         format: PluginFormat,
         activate: bool,
     ) -> PluginInstanceID {
@@ -199,15 +199,15 @@ impl PluginInstancePool {
             NodeRef::new(self.graph_plugins.len())
         };
 
-        let node_ref = graph.node(node_id);
-        // If this isn't right then I did something wrong.
-        assert_eq!(node_ref, node_id);
-
         let id = PluginInstanceID {
             node_id,
             format: save_state.key.format.into(),
             name: Some(debug_name),
         };
+
+        let node_ref = graph.node(id.clone());
+        // If this isn't right then I did something wrong.
+        assert_eq!(node_ref, id.node_id);
 
         let channel = Shared::new(
             &self.coll_handle,
@@ -241,18 +241,18 @@ impl PluginInstancePool {
 
         save_state.activated = false;
 
-        let mut audio_in_port_refs: Vec<PortRef> =
+        let mut audio_in_channel_refs: Vec<PortRef> =
             Vec::with_capacity(usize::from(save_state.audio_in_out_channels.0));
-        let mut audio_out_port_refs: Vec<PortRef> =
+        let mut audio_out_channel_refs: Vec<PortRef> =
             Vec::with_capacity(usize::from(save_state.audio_in_out_channels.1));
         for i in 0..save_state.audio_in_out_channels.0 {
             let port_ref = graph.port(node_id, DefaultPortType::Audio, PortID::AudioIn(i)).unwrap();
-            audio_in_port_refs.push(port_ref);
+            audio_in_channel_refs.push(port_ref);
         }
         for i in 0..save_state.audio_in_out_channels.1 {
             let port_ref =
                 graph.port(node_id, DefaultPortType::Audio, PortID::AudioOut(i)).unwrap();
-            audio_out_port_refs.push(port_ref);
+            audio_out_channel_refs.push(port_ref);
         }
 
         let node_i: usize = node_id.into();
@@ -260,8 +260,8 @@ impl PluginInstancePool {
             main_thread,
             audio_thread: None,
             save_state,
-            audio_in_port_refs,
-            audio_out_port_refs,
+            audio_in_channel_refs,
+            audio_out_channel_refs,
             audio_ports_ext,
             format,
         });
@@ -408,19 +408,19 @@ impl PluginInstancePool {
         }
     }
 
-    pub fn get_audio_in_port_refs(&self, id: &PluginInstanceID) -> Result<&[PortRef], ()> {
+    pub fn get_audio_in_channel_refs(&self, id: &PluginInstanceID) -> Result<&[PortRef], ()> {
         let node_i: usize = id.node_id.into();
         if let Some(plugin_instance) = &self.graph_plugins[node_i] {
-            Ok(&plugin_instance.audio_in_port_refs)
+            Ok(&plugin_instance.audio_in_channel_refs)
         } else {
             Err(())
         }
     }
 
-    pub fn get_audio_out_port_refs(&self, id: &PluginInstanceID) -> Result<&[PortRef], ()> {
+    pub fn get_audio_out_channel_refs(&self, id: &PluginInstanceID) -> Result<&[PortRef], ()> {
         let node_i: usize = id.node_id.into();
         if let Some(plugin_instance) = &self.graph_plugins[node_i] {
-            Ok(&plugin_instance.audio_out_port_refs)
+            Ok(&plugin_instance.audio_out_channel_refs)
         } else {
             Err(())
         }
