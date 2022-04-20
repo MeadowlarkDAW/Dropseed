@@ -17,6 +17,8 @@ pub(crate) fn compile_graph(
     plugin_pool: &mut PluginInstancePool,
     audio_buffer_pool: &mut AudioBufferPool,
     abstract_graph: &mut Graph<PluginInstanceID, PortID, DefaultPortType>,
+    graph_in_node_id: &PluginInstanceID,
+    graph_out_node_id: &PluginInstanceID,
 ) -> Result<Schedule, GraphCompilerError> {
     let mut tasks: Vec<Task> = Vec::with_capacity(plugin_pool.num_plugins() * 2);
 
@@ -181,6 +183,8 @@ pub(crate) fn compile_graph(
                 )));
             }
         }
+
+        if &abstract_task.node == graph_in_node_id {}
 
         if plugin_pool.is_plugin_active(&abstract_task.node).unwrap() {
             tasks.push(Task::InactivePlugin(InactivePluginTask {

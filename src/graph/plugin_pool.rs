@@ -22,6 +22,8 @@ pub(crate) enum PluginInstanceType {
     Clap,
     Sum,
     DelayComp,
+    GraphInput,
+    GraphOutput,
 }
 
 impl std::fmt::Debug for PluginInstanceType {
@@ -34,6 +36,8 @@ impl std::fmt::Debug for PluginInstanceType {
                 PluginInstanceType::Clap => "CLAP",
                 PluginInstanceType::Sum => "Sum",
                 PluginInstanceType::DelayComp => "Dly",
+                PluginInstanceType::GraphInput => "GraphIn",
+                PluginInstanceType::GraphOutput => "GraphOut",
             }
         )
     }
@@ -51,7 +55,7 @@ impl From<PluginFormat> for PluginInstanceType {
 /// Used to uniquely identify a plugin instance and for debugging purposes.
 pub struct PluginInstanceID {
     pub(crate) node_id: NodeRef,
-    format: PluginInstanceType,
+    pub(crate) format: PluginInstanceType,
     name: Option<Shared<String>>,
 }
 
@@ -156,7 +160,7 @@ struct PluginInstance {
     main_thread: Option<PluginMainThreadInstance>,
     audio_thread: Option<SharedPluginAudioThreadInstance>,
 
-    save_state: PluginSaveState,
+    save_state: Option<PluginSaveState>,
     audio_in_channel_refs: Vec<PortRef>,
     audio_out_channel_refs: Vec<PortRef>,
     audio_ports_ext: Option<AudioPortsExtension>,
@@ -205,15 +209,105 @@ pub(crate) struct PluginInstancePool {
 }
 
 impl PluginInstancePool {
-    pub fn new(coll_handle: basedrop::Handle, host_info: Shared<HostInfo>) -> Self {
-        Self {
+    pub fn new(
+        abstract_graph: &mut Graph<PluginInstanceID, PortID, DefaultPortType>,
+        num_graph_in_audio_channels: u16,
+        num_graph_out_audio_channels: u16,
+        coll_handle: basedrop::Handle,
+        host_info: Shared<HostInfo>,
+    ) -> (Self, PluginInstanceID, PluginInstanceID) {
+        let mut new_self = Self {
             delay_comp_nodes: FnvHashMap::default(),
             graph_plugins: Vec::new(),
             free_graph_plugins: Vec::new(),
             host_info,
             coll_handle,
             num_plugins: 0,
+        };
+
+        // --- Add the graph input node to the graph --------------------------
+
+        let graph_in_node_id = if let Some(node_id) = new_self.free_graph_plugins.pop() {
+            node_id
+        } else {
+            new_self.graph_plugins.push(None);
+            NodeRef::new(new_self.graph_plugins.len())
+        };
+
+        let graph_in_id = PluginInstanceID {
+            node_id: graph_in_node_id,
+            format: PluginInstanceType::GraphInput,
+            name: None,
+        };
+
+        let graph_in_node_ref = abstract_graph.node(graph_in_id.clone());
+        // If this isn't right then I did something wrong.
+        assert_eq!(graph_in_node_ref, graph_in_id.node_id);
+
+        let mut graph_in_channel_refs: Vec<PortRef> =
+            Vec::with_capacity(usize::from(num_graph_in_audio_channels));
+        for i in 0..num_graph_in_audio_channels {
+            let port_ref = abstract_graph
+                .port(graph_in_node_ref, DefaultPortType::Audio, PortID::AudioOut(i))
+                .unwrap();
+            graph_in_channel_refs.push(port_ref);
         }
+
+        let node_i: usize = graph_in_id.node_id.into();
+        new_self.graph_plugins[node_i] = Some(PluginInstance {
+            main_thread: None,
+            audio_thread: None,
+            save_state: None,
+            audio_in_channel_refs: Vec::new(),
+            audio_out_channel_refs: graph_in_channel_refs,
+            audio_ports_ext: None,
+            format: PluginFormat::Internal,
+        });
+
+        new_self.num_plugins += 1;
+
+        // --- Add the graph output node to the graph --------------------------
+
+        let graph_out_node_id = if let Some(node_id) = new_self.free_graph_plugins.pop() {
+            node_id
+        } else {
+            new_self.graph_plugins.push(None);
+            NodeRef::new(new_self.graph_plugins.len())
+        };
+
+        let graph_out_id = PluginInstanceID {
+            node_id: graph_out_node_id,
+            format: PluginInstanceType::GraphOutput,
+            name: None,
+        };
+
+        let graph_out_node_ref = abstract_graph.node(graph_out_id.clone());
+        // If this isn't right then I did something wrong.
+        assert_eq!(graph_out_node_ref, graph_out_id.node_id);
+
+        let mut graph_out_channel_refs: Vec<PortRef> =
+            Vec::with_capacity(usize::from(num_graph_out_audio_channels));
+        for i in 0..num_graph_out_audio_channels {
+            let port_ref = abstract_graph
+                .port(graph_out_node_ref, DefaultPortType::Audio, PortID::AudioIn(i))
+                .unwrap();
+            graph_out_channel_refs.push(port_ref);
+        }
+
+        let node_i: usize = graph_out_id.node_id.into();
+        new_self.graph_plugins[node_i] = Some(PluginInstance {
+            main_thread: None,
+            audio_thread: None,
+            save_state: None,
+            audio_in_channel_refs: graph_out_channel_refs,
+            audio_out_channel_refs: Vec::new(),
+            audio_ports_ext: None,
+            format: PluginFormat::Internal,
+        });
+
+        new_self.num_plugins += 1;
+
+        (new_self, graph_in_id, graph_out_id)
     }
 
     pub fn add_graph_plugin(
@@ -222,7 +316,6 @@ impl PluginInstancePool {
         mut save_state: PluginSaveState,
         debug_name: Shared<String>,
         abstract_graph: &mut Graph<PluginInstanceID, PortID, DefaultPortType>,
-        format: PluginFormat,
         activate: bool,
     ) -> PluginInstanceID {
         let node_id = if let Some(node_id) = self.free_graph_plugins.pop() {
@@ -288,11 +381,13 @@ impl PluginInstancePool {
             audio_out_channel_refs.push(port_ref);
         }
 
+        let format = save_state.key.format;
+
         let node_i: usize = node_id.into();
         self.graph_plugins[node_i] = Some(PluginInstance {
             main_thread,
             audio_thread: None,
-            save_state,
+            save_state: Some(save_state),
             audio_in_channel_refs,
             audio_out_channel_refs,
             audio_ports_ext,
@@ -380,7 +475,7 @@ impl PluginInstancePool {
                         // Store the plugin audio thread instance for future schedules.
                         plugin_instance.audio_thread = Some(new_audio_thread.clone());
 
-                        plugin_instance.save_state.activated = true;
+                        plugin_instance.save_state.as_mut().unwrap().activated = true;
 
                         log::trace!("Successfully activated plugin instance {:?}", &id);
 
@@ -420,7 +515,7 @@ impl PluginInstancePool {
 
                 plugin_main_thread.channel.active.store(false, Ordering::Relaxed);
 
-                plugin_instance.save_state.activated = false;
+                plugin_instance.save_state.as_mut().unwrap().activated = false;
             }
 
             if let Some(plugin_audio_thread) = plugin_instance.audio_thread.take() {
@@ -526,7 +621,11 @@ impl PluginInstancePool {
     pub fn get_graph_plugin_save_state(&self, node_id: NodeRef) -> Result<&PluginSaveState, ()> {
         let node_i: usize = node_id.into();
         if let Some(plugin) = self.graph_plugins[node_i].as_ref() {
-            Ok(&plugin.save_state)
+            if let Some(save_state) = &plugin.save_state {
+                Ok(save_state)
+            } else {
+                Err(())
+            }
         } else {
             Err(())
         }

@@ -49,6 +49,12 @@ pub struct AudioGraph {
     coll_handle: basedrop::Handle,
 
     failed_plugin_debug_name: Shared<String>,
+
+    graph_in_node_id: PluginInstanceID,
+    graph_out_node_id: PluginInstanceID,
+
+    graph_in_channels: u16,
+    graph_out_channels: u16,
 }
 
 impl AudioGraph {
@@ -56,17 +62,40 @@ impl AudioGraph {
         coll_handle: basedrop::Handle,
         max_block_size: usize,
         host_info: Shared<HostInfo>,
+        graph_in_channels: u16,
+        graph_out_channels: u16,
     ) -> Self {
         let failed_plugin_debug_name = Shared::new(&coll_handle, String::from("failed_plugin"));
 
+        let mut abstract_graph = Graph::default();
+        let (plugin_pool, graph_in_node_id, graph_out_node_id) = PluginInstancePool::new(
+            &mut abstract_graph,
+            graph_in_channels,
+            graph_out_channels,
+            coll_handle.clone(),
+            Shared::clone(&host_info),
+        );
+
         Self {
-            plugin_pool: PluginInstancePool::new(coll_handle.clone(), Shared::clone(&host_info)),
+            plugin_pool,
             audio_buffer_pool: AudioBufferPool::new(coll_handle.clone(), max_block_size),
             host_info,
-            abstract_graph: Graph::default(),
+            abstract_graph,
             coll_handle,
             failed_plugin_debug_name,
+            graph_in_node_id,
+            graph_out_node_id,
+            graph_in_channels,
+            graph_out_channels,
         }
+    }
+
+    pub fn graph_in_node_id(&self) -> &PluginInstanceID {
+        &self.graph_in_node_id
+    }
+
+    pub fn graph_out_node_id(&self) -> &PluginInstanceID {
+        &self.graph_out_node_id
     }
 
     pub fn add_new_plugin_instance(
@@ -96,12 +125,14 @@ impl AudioGraph {
             }
         };
 
+        let mut new_save_state = save_state.clone();
+        new_save_state.key.format = format;
+
         let instance_id = self.plugin_pool.add_graph_plugin(
             plugin,
-            save_state.clone(),
+            new_save_state,
             debug_name,
             &mut self.abstract_graph,
-            format,
             false,
         );
 
@@ -112,8 +143,20 @@ impl AudioGraph {
     ///
     /// This will also automatically disconnect all edges that were connected to these
     /// plugins.
+    ///
+    /// Requests to remove the "graph input/output" nodes with the IDs `AudioGraph::graph_in_node_id()`
+    /// and `AudioGraph::graph_out_node_id()` will be ignored.
     pub fn remove_plugin_instances(&mut self, plugin_ids: &[PluginInstanceID]) {
         for id in plugin_ids.iter() {
+            if id == &self.graph_in_node_id || id == &self.graph_out_node_id {
+                if id == &self.graph_in_node_id {
+                    log::warn!("Ignored request to remove the graph in node from the audio graph");
+                } else {
+                    log::warn!("Ignored request to remove the graph in node from the audio graph");
+                }
+                continue;
+            }
+
             self.plugin_pool.remove_graph_plugin(id, &mut self.abstract_graph);
         }
     }
@@ -307,6 +350,11 @@ impl AudioGraph {
                 panic!("More than one plugin with node id: {:?}", node_id);
             }
 
+            if node_id == self.graph_in_node_id.node_id || node_id == self.graph_out_node_id.node_id
+            {
+                continue;
+            }
+
             let save_state = self.plugin_pool.get_graph_plugin_save_state(node_id).unwrap().clone();
             plugins.push(save_state);
         }
@@ -342,12 +390,24 @@ impl AudioGraph {
         log::info!("Restoring audio graph from save state...");
 
         self.abstract_graph = Graph::default();
-        self.plugin_pool =
-            PluginInstancePool::new(self.coll_handle.clone(), Shared::clone(&self.host_info));
+        let (plugin_pool, graph_in_id, graph_out_id) = PluginInstancePool::new(
+            &mut self.abstract_graph,
+            self.graph_in_channels,
+            self.graph_out_channels,
+            self.coll_handle.clone(),
+            Shared::clone(&self.host_info),
+        );
+        self.plugin_pool = plugin_pool;
+        self.graph_in_node_id = graph_in_id;
+        self.graph_out_node_id = graph_out_id;
 
-        let mut plugin_ids: Vec<PluginInstanceID> = Vec::with_capacity(save_state.plugins.len());
+        let mut plugin_ids: Vec<PluginInstanceID> =
+            Vec::with_capacity(save_state.plugins.len() + 2);
         let mut plugin_errors: Vec<(usize, NewPluginInstanceError)> = Vec::new();
         let mut edge_errors: Vec<(usize, ConnectEdgeError)> = Vec::new();
+
+        plugin_ids.push(self.graph_in_node_id.clone());
+        plugin_ids.push(self.graph_out_node_id.clone());
 
         for (i, plugin_save_state) in save_state.plugins.iter().enumerate() {
             let (id, res) = self.add_new_plugin_instance(

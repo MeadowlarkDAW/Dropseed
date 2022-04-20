@@ -94,19 +94,19 @@ impl std::fmt::Debug for Task {
 }
 
 impl Task {
-    pub fn process(&mut self, info: &ProcInfo, host: &mut Host) {
+    pub fn process(&mut self, proc_info: &ProcInfo, host: &mut Host) {
         match self {
             Task::InternalPlugin(task) => {
-                let status = task.process(info, host);
+                let status = task.process(proc_info, host);
 
                 // TODO: use process status
             }
             Task::ClapPlugin(task) => {
                 todo!()
             }
-            Task::DelayComp(task) => task.process(info),
-            Task::Sum(task) => task.process(info),
-            Task::InactivePlugin(task) => task.process(info, host),
+            Task::DelayComp(task) => task.process(proc_info),
+            Task::Sum(task) => task.process(proc_info),
+            Task::InactivePlugin(task) => task.process(proc_info, host),
         }
     }
 }
@@ -119,7 +119,7 @@ pub(crate) struct InternalPluginTask {
 }
 
 impl InternalPluginTask {
-    fn process(&mut self, info: &ProcInfo, host: &mut Host) -> ProcessStatus {
+    fn process(&mut self, proc_info: &ProcInfo, host: &mut Host) -> ProcessStatus {
         let Self { plugin, audio_in, audio_out } = self;
 
         // This is safe because the audio thread counterpart of a plugin is only ever
@@ -136,7 +136,7 @@ impl InternalPluginTask {
         let status = if let Err(_) = plugin.plugin.start_processing(host) {
             ProcessStatus::Error
         } else {
-            let status = plugin.plugin.process(info, audio_in, audio_out, host);
+            let status = plugin.plugin.process(proc_info, audio_in, audio_out, host);
 
             plugin.plugin.stop_processing(host);
 
@@ -146,7 +146,7 @@ impl InternalPluginTask {
         if let ProcessStatus::Error = status {
             // As per the spec, we must clear all output buffers.
             for b in audio_out.iter_mut() {
-                b.clear(info);
+                b.clear(proc_info);
             }
         }
 
@@ -164,13 +164,13 @@ pub(crate) struct DelayCompTask {
 }
 
 impl DelayCompTask {
-    fn process(&mut self, info: &ProcInfo) {
+    fn process(&mut self, proc_info: &ProcInfo) {
         // This is safe because this is only ever borrowed mutably in this method.
         // Also, the verifier has verified that no data races exist between parallel
         // audio threads (once we actually have multi-threaded schedules of course).
         let delay_comp_node = unsafe { &mut *self.delay_comp_node.shared.get() };
 
-        delay_comp_node.process(info, &self.audio_in, &self.audio_out);
+        delay_comp_node.process(proc_info, &self.audio_in, &self.audio_out);
     }
 }
 
@@ -180,32 +180,32 @@ pub(crate) struct SumTask {
 }
 
 impl SumTask {
-    fn process(&mut self, info: &ProcInfo) {
-        let out = self.audio_out.borrow_mut(info);
+    fn process(&mut self, proc_info: &ProcInfo) {
+        let out = self.audio_out.borrow_mut(proc_info);
 
         // Unroll loops for common number of inputs.
         match self.audio_in.len() {
             0 => return,
             1 => {
-                let in_0 = self.audio_in[0].borrow(info);
+                let in_0 = self.audio_in[0].borrow(proc_info);
                 out.copy_from_slice(&in_0);
             }
             2 => {
-                let in_0 = self.audio_in[0].borrow(info);
-                let in_1 = self.audio_in[1].borrow(info);
+                let in_0 = self.audio_in[0].borrow(proc_info);
+                let in_1 = self.audio_in[1].borrow(proc_info);
 
-                for i in 0..info.frames {
+                for i in 0..proc_info.frames {
                     unsafe {
                         *out.get_unchecked_mut(i) = *in_0.get_unchecked(i) + *in_1.get_unchecked(i);
                     }
                 }
             }
             3 => {
-                let in_0 = self.audio_in[0].borrow(info);
-                let in_1 = self.audio_in[1].borrow(info);
-                let in_2 = self.audio_in[2].borrow(info);
+                let in_0 = self.audio_in[0].borrow(proc_info);
+                let in_1 = self.audio_in[1].borrow(proc_info);
+                let in_2 = self.audio_in[2].borrow(proc_info);
 
-                for i in 0..info.frames {
+                for i in 0..proc_info.frames {
                     unsafe {
                         *out.get_unchecked_mut(i) = *in_0.get_unchecked(i)
                             + *in_1.get_unchecked(i)
@@ -214,12 +214,12 @@ impl SumTask {
                 }
             }
             4 => {
-                let in_0 = self.audio_in[0].borrow(info);
-                let in_1 = self.audio_in[1].borrow(info);
-                let in_2 = self.audio_in[2].borrow(info);
-                let in_3 = self.audio_in[3].borrow(info);
+                let in_0 = self.audio_in[0].borrow(proc_info);
+                let in_1 = self.audio_in[1].borrow(proc_info);
+                let in_2 = self.audio_in[2].borrow(proc_info);
+                let in_3 = self.audio_in[3].borrow(proc_info);
 
-                for i in 0..info.frames {
+                for i in 0..proc_info.frames {
                     unsafe {
                         *out.get_unchecked_mut(i) = *in_0.get_unchecked(i)
                             + *in_1.get_unchecked(i)
@@ -229,12 +229,12 @@ impl SumTask {
                 }
             }
             num_inputs => {
-                let in_0 = self.audio_in[0].borrow(info);
+                let in_0 = self.audio_in[0].borrow(proc_info);
 
                 out.copy_from_slice(in_0);
 
                 for i in 1..num_inputs {
-                    let input = self.audio_in[i].borrow(info);
+                    let input = self.audio_in[i].borrow(proc_info);
                     unsafe {
                         *out.get_unchecked_mut(i) += *input.get_unchecked(i);
                     }
@@ -249,10 +249,10 @@ pub(crate) struct InactivePluginTask {
 }
 
 impl InactivePluginTask {
-    fn process(&mut self, info: &ProcInfo, host: &mut Host) {
+    fn process(&mut self, proc_info: &ProcInfo, host: &mut Host) {
         // Make sure output buffers are cleared.
         for b in self.audio_out.iter() {
-            let b = b.borrow_mut(info);
+            let b = b.borrow_mut(proc_info);
             b.fill(0.0);
         }
     }
