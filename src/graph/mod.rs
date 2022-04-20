@@ -7,15 +7,16 @@ use fnv::FnvHashMap;
 pub(crate) mod audio_buffer_pool;
 pub(crate) mod plugin_pool;
 
+mod compiler;
 mod save_state;
-
-pub mod schedule;
+mod schedule;
 
 use audio_buffer_pool::AudioBufferPool;
 use plugin_pool::PluginInstancePool;
 
 pub use plugin_pool::PluginInstanceID;
 pub use save_state::{AudioGraphSaveState, EdgeSaveState};
+pub use schedule::Schedule;
 use smallvec::SmallVec;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -44,7 +45,7 @@ pub struct AudioGraph {
     audio_buffer_pool: AudioBufferPool,
     host_info: Shared<HostInfo>,
 
-    graph: Graph<PluginInstanceID, PortID, DefaultPortType>,
+    abstract_graph: Graph<PluginInstanceID, PortID, DefaultPortType>,
     coll_handle: basedrop::Handle,
 
     failed_plugin_debug_name: Shared<String>,
@@ -62,7 +63,7 @@ impl AudioGraph {
             plugin_pool: PluginInstancePool::new(coll_handle.clone(), Shared::clone(&host_info)),
             audio_buffer_pool: AudioBufferPool::new(coll_handle.clone(), max_block_size),
             host_info,
-            graph: Graph::default(),
+            abstract_graph: Graph::default(),
             coll_handle,
             failed_plugin_debug_name,
         }
@@ -99,12 +100,45 @@ impl AudioGraph {
             plugin,
             save_state.clone(),
             debug_name,
-            &mut self.graph,
+            &mut self.abstract_graph,
             format,
             false,
         );
 
         (instance_id, res)
+    }
+
+    /// Remove the given plugins from the graph.
+    ///
+    /// This will also automatically disconnect all edges that were connected to these
+    /// plugins.
+    pub fn remove_plugin_instances(&mut self, plugin_ids: &[PluginInstanceID]) {
+        for id in plugin_ids.iter() {
+            self.plugin_pool.remove_graph_plugin(id, &mut self.abstract_graph);
+        }
+    }
+
+    /// Try to connect multiple edges at once. Useful for connecting ports with multiple
+    /// channels (i.e. stereo audio ports).
+    ///
+    /// If any of the given edges fails to connect, then none of the given edges will be connected.
+    pub fn try_connect_edges(&mut self, edges: &[Edge]) -> Result<(), (usize, ConnectEdgeError)> {
+        let mut res = Ok(());
+        for (i, edge) in edges.iter().enumerate() {
+            if let Err(e) = self.connect_edge(edge) {
+                res = Err((i, e));
+                break;
+            }
+        }
+
+        // If there was an error, disconnect any edges that were connected.
+        if let Err((err_i, _)) = &res {
+            for i in 0..*err_i {
+                self.disconnect_edge(&edges[i]);
+            }
+        }
+
+        res
     }
 
     pub fn connect_edge(&mut self, edge: &Edge) -> Result<(), ConnectEdgeError> {
@@ -142,7 +176,7 @@ impl AudioGraph {
                 let src_channel_ref = src_channel_refs[usize::from(edge.src_channel)];
                 let dst_channel_ref = dst_channel_refs[usize::from(edge.dst_channel)];
 
-                match self.graph.connect(src_channel_ref, dst_channel_ref) {
+                match self.abstract_graph.connect(src_channel_ref, dst_channel_ref) {
                     Ok(()) => {
                         log::trace!(
                             "Successfully connected edge: {:?}",
@@ -173,9 +207,9 @@ impl AudioGraph {
         }
     }
 
-    pub fn remove_edge(&mut self, edge: &Edge) {
+    pub fn disconnect_edge(&mut self, edge: &Edge) {
         let mut found_ports = None;
-        if let Ok(edges) = self.graph.node_edges(edge.src_plugin_id.node_id) {
+        if let Ok(edges) = self.abstract_graph.node_edges(edge.src_plugin_id.node_id) {
             // Find the corresponding edge.
             for e in edges.iter() {
                 if e.dst_node != edge.dst_plugin_id.node_id {
@@ -187,12 +221,12 @@ impl AudioGraph {
                 if e.port_type != edge.edge_type {
                     continue;
                 }
-                if self.graph.port_ident(e.src_port).unwrap().as_index()
+                if self.abstract_graph.port_ident(e.src_port).unwrap().as_index()
                     != usize::from(edge.src_channel)
                 {
                     continue;
                 }
-                if self.graph.port_ident(e.dst_port).unwrap().as_index()
+                if self.abstract_graph.port_ident(e.dst_port).unwrap().as_index()
                     != usize::from(edge.dst_channel)
                 {
                     continue;
@@ -204,7 +238,7 @@ impl AudioGraph {
         }
 
         if let Some((src_port, dst_port)) = found_ports {
-            if let Err(e) = self.graph.disconnect(src_port, dst_port) {
+            if let Err(e) = self.abstract_graph.disconnect(src_port, dst_port) {
                 log::error!("Unexpected error while disconnecting edge {:?}: {}", edge, e);
             } else {
                 log::trace!("Successfully disconnected edge: {:?}", edge);
@@ -215,26 +249,36 @@ impl AudioGraph {
     }
 
     pub fn get_plugin_edges(&self, id: &PluginInstanceID) -> Result<PluginEdges, ()> {
-        if let Ok(edges) = self.graph.node_edges(id.node_id) {
+        if let Ok(edges) = self.abstract_graph.node_edges(id.node_id) {
             let mut incoming: SmallVec<[Edge; 8]> = SmallVec::new();
             let mut outgoing: SmallVec<[Edge; 8]> = SmallVec::new();
 
             for edge in edges.iter() {
-                let src_channel = self.graph.port_ident(edge.src_port).unwrap().as_index() as u16;
-                let dst_channel = self.graph.port_ident(edge.dst_port).unwrap().as_index() as u16;
+                let src_channel =
+                    self.abstract_graph.port_ident(edge.src_port).unwrap().as_index() as u16;
+                let dst_channel =
+                    self.abstract_graph.port_ident(edge.dst_port).unwrap().as_index() as u16;
 
                 if edge.src_node == id.node_id {
                     outgoing.push(Edge {
                         edge_type: edge.port_type,
                         src_plugin_id: id.clone(),
-                        dst_plugin_id: self.graph.node_ident(edge.dst_node).unwrap().clone(),
+                        dst_plugin_id: self
+                            .abstract_graph
+                            .node_ident(edge.dst_node)
+                            .unwrap()
+                            .clone(),
                         src_channel,
                         dst_channel,
                     });
                 } else {
                     incoming.push(Edge {
                         edge_type: edge.port_type,
-                        src_plugin_id: self.graph.node_ident(edge.src_node).unwrap().clone(),
+                        src_plugin_id: self
+                            .abstract_graph
+                            .node_ident(edge.src_node)
+                            .unwrap()
+                            .clone(),
                         dst_plugin_id: id.clone(),
                         src_channel,
                         dst_channel,
@@ -249,6 +293,8 @@ impl AudioGraph {
     }
 
     pub fn collect_save_state(&self) -> AudioGraphSaveState {
+        log::trace!("Collecting audio graph save state...");
+
         let mut plugins: Vec<PluginSaveState> = Vec::with_capacity(self.plugin_pool.num_plugins());
         let mut edges: Vec<EdgeSaveState> = Vec::with_capacity(self.plugin_pool.num_plugins() * 3);
 
@@ -267,13 +313,15 @@ impl AudioGraph {
 
         // Iterate again to get all the edges.
         for node_id in self.plugin_pool.iter_plugin_ids() {
-            for edge in self.graph.node_edges(node_id).unwrap() {
+            for edge in self.abstract_graph.node_edges(node_id).unwrap() {
                 edges.push(EdgeSaveState {
                     edge_type: DefaultPortType::Audio,
                     src_plugin_i: *node_id_to_index.get(&edge.src_node).unwrap(),
                     dst_plugin_i: *node_id_to_index.get(&edge.dst_node).unwrap(),
-                    src_channel: self.graph.port_ident(edge.src_port).unwrap().as_index() as u16,
-                    dst_channel: self.graph.port_ident(edge.dst_port).unwrap().as_index() as u16,
+                    src_channel: self.abstract_graph.port_ident(edge.src_port).unwrap().as_index()
+                        as u16,
+                    dst_channel: self.abstract_graph.port_ident(edge.dst_port).unwrap().as_index()
+                        as u16,
                 });
             }
         }
@@ -291,7 +339,9 @@ impl AudioGraph {
         Result<(), Vec<(usize, NewPluginInstanceError)>>,
         Result<(), Vec<(usize, ConnectEdgeError)>>,
     ) {
-        self.graph = Graph::default();
+        log::info!("Restoring audio graph from save state...");
+
+        self.abstract_graph = Graph::default();
         self.plugin_pool =
             PluginInstancePool::new(self.coll_handle.clone(), Shared::clone(&self.host_info));
 

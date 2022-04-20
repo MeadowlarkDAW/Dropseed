@@ -162,15 +162,12 @@ pub trait PluginMainThread {
     ///
     /// This will only be called while the plugin is inactive.
     ///
-    /// If `None` is returned, then the default configuration of a main stereo input port and a main
-    /// stereo output port will be used.
-    ///
-    /// By default this is set to `None`.
+    /// The default configuration is a main stereo input port and a main stereo output port.
     ///
     /// [main-thread & !active_state]
     #[allow(unused)]
-    fn audio_ports_extension(&self, host: &Host) -> Option<&ext::audio_ports::AudioPortsExtension> {
-        None
+    fn audio_ports_extension(&self, host: &Host) -> ext::audio_ports::AudioPortsExtension {
+        ext::audio_ports::AudioPortsExtension::default()
     }
 }
 

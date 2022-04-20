@@ -1,6 +1,8 @@
 use std::cell::UnsafeCell;
 
+use audio_graph::NodeRef;
 use basedrop::Shared;
+use fnv::FnvHashMap;
 use smallvec::SmallVec;
 
 use clap_sys::audio_buffer::clap_audio_buffer;
@@ -72,7 +74,7 @@ impl<T: Clone + Copy + Send + Default + 'static> SharedAudioBuffer<T> {
     }
 
     #[inline]
-    fn borrow(&self, proc_info: &ProcInfo) -> &[T] {
+    pub(crate) fn borrow(&self, proc_info: &ProcInfo) -> &[T] {
         // Please refer to the "SAFETY NOTE" above on why this is safe.
         //
         // In addition the host will never set `proc_info.frames` to something
@@ -84,7 +86,7 @@ impl<T: Clone + Copy + Send + Default + 'static> SharedAudioBuffer<T> {
     }
 
     #[inline]
-    fn borrow_mut(&self, proc_info: &ProcInfo) -> &mut [T] {
+    pub(crate) fn borrow_mut(&self, proc_info: &ProcInfo) -> &mut [T] {
         // Please refer to the "SAFETY NOTE" above on why this is safe.
         //
         // In addition the host will never set `proc_info.frames` to something
@@ -310,6 +312,9 @@ pub enum UniqueBufferType {
 
     /// An audio buffer created for any intermediary steps.
     Intermediary,
+
+    /// An audio buffer created for an unconnected input port.
+    EmptyInput,
 }
 
 impl std::fmt::Debug for UniqueBufferType {
@@ -320,6 +325,7 @@ impl std::fmt::Debug for UniqueBufferType {
             match self {
                 UniqueBufferType::Graph => "G",
                 UniqueBufferType::Intermediary => "I",
+                UniqueBufferType::EmptyInput => "E",
             }
         )
     }
@@ -339,20 +345,21 @@ impl std::fmt::Debug for UniqueBufferID {
 }
 
 pub(crate) struct AudioBufferPool {
-    graph_buffers: Vec<SharedAudioBuffer<f32>>,
+    pub coll_handle: basedrop::Handle,
 
+    graph_buffers: Vec<SharedAudioBuffer<f32>>,
     intermediary_buffers: Vec<SharedAudioBuffer<f32>>,
+    empty_input_buffers: Vec<SharedAudioBuffer<f32>>,
 
     max_block_size: usize,
-    coll_handle: basedrop::Handle,
 }
 
 impl AudioBufferPool {
     pub fn new(coll_handle: basedrop::Handle, max_block_size: usize) -> Self {
         Self {
             graph_buffers: Vec::new(),
-
             intermediary_buffers: Vec::new(),
+            empty_input_buffers: Vec::new(),
 
             max_block_size,
             coll_handle,
@@ -398,6 +405,26 @@ impl AudioBufferPool {
         }
 
         self.intermediary_buffers[buffer_index].clone()
+    }
+
+    /// Retrieve an audio buffer used for any intermediary steps.
+    pub fn get_empty_input_buffer(&mut self, buffer_index: usize) -> SharedAudioBuffer<f32> {
+        // Resize if buffer does not exist.
+        if self.empty_input_buffers.len() <= buffer_index {
+            let n_new_buffers = (buffer_index + 1) - self.empty_input_buffers.len();
+            for _ in 0..n_new_buffers {
+                self.empty_input_buffers.push(SharedAudioBuffer::new(
+                    UniqueBufferID {
+                        buffer_type: UniqueBufferType::EmptyInput,
+                        index: buffer_index as u32,
+                    },
+                    self.max_block_size,
+                    &self.coll_handle,
+                ));
+            }
+        }
+
+        self.empty_input_buffers[buffer_index].clone()
     }
 
     pub fn remove_graph_buffers(&mut self, n_to_remove: usize) {
