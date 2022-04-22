@@ -182,14 +182,16 @@ impl AudioPortBuffer {
         }
     }
 
+    pub(crate) fn rc_buffers(&self) -> &[SharedAudioBuffer<f32>] {
+        &self.rc_buffers
+    }
+
     /// The number of channels in this buffer.
-    #[inline]
     pub fn channel_count(&self) -> usize {
         self.rc_buffers.len()
     }
 
     /// The latency from/to the audio interface.
-    #[inline]
     pub fn latency(&self) -> u32 {
         self.latency
     }
@@ -427,17 +429,37 @@ impl AudioBufferPool {
         self.empty_input_buffers[buffer_index].clone()
     }
 
-    pub fn remove_graph_buffers(&mut self, n_to_remove: usize) {
-        let n = n_to_remove.min(self.graph_buffers.len());
-        for _ in 0..n {
-            let _ = self.graph_buffers.pop();
+    pub fn remove_unneeded_graph_buffers(
+        &mut self,
+        max_graph_audio_buffer_id: usize,
+    ) -> Result<(), usize> {
+        if max_graph_audio_buffer_id < self.graph_buffers.len() {
+            let n_to_remove = self.graph_buffers.len() - (max_graph_audio_buffer_id + 1);
+            for _ in 0..n_to_remove {
+                let _ = self.graph_buffers.pop();
+            }
+            Ok(())
+        } else {
+            Err(self.graph_buffers.len())
         }
     }
 
-    pub fn remove_intermediary_buffers(&mut self, n_to_remove: usize) {
-        let n = n_to_remove.min(self.intermediary_buffers.len());
-        for _ in 0..n {
-            let _ = self.intermediary_buffers.pop();
+    pub fn remove_unneeded_intermediary_buffers(
+        &mut self,
+        total_intermediary_buffers: usize,
+    ) -> Result<(), usize> {
+        if total_intermediary_buffers <= self.intermediary_buffers.len() {
+            let n_to_remove = self.intermediary_buffers.len() - total_intermediary_buffers;
+            for _ in 0..n_to_remove {
+                let _ = self.intermediary_buffers.pop();
+            }
+            Ok(())
+        } else {
+            Err(self.graph_buffers.len())
         }
+    }
+
+    pub fn max_block_size(&self) -> usize {
+        self.max_block_size
     }
 }

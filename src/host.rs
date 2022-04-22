@@ -7,6 +7,7 @@ use basedrop::Shared;
 
 use crate::graph::plugin_pool::PluginInstanceChannel;
 
+#[derive(Debug)]
 pub struct HostInfo {
     /// The name of this host (mandatory).
     ///

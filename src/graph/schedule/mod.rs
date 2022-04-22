@@ -1,6 +1,8 @@
+use basedrop::Shared;
 use smallvec::SmallVec;
 
-use crate::{Host, ProcInfo};
+use crate::host::HostInfo;
+use crate::ProcInfo;
 
 use super::audio_buffer_pool::SharedAudioBuffer;
 
@@ -12,13 +14,38 @@ use task::Task;
 pub struct Schedule {
     pub(crate) tasks: Vec<Task>,
 
-    pub(crate) graph_inputs: SmallVec<[SharedAudioBuffer<f32>; 4]>,
-    pub(crate) graph_outputs: SmallVec<[SharedAudioBuffer<f32>; 4]>,
+    pub(crate) graph_audio_in: SmallVec<[SharedAudioBuffer<f32>; 4]>,
+    pub(crate) graph_audio_out: SmallVec<[SharedAudioBuffer<f32>; 4]>,
 
     pub(crate) max_block_size: usize,
 
     /// Used to get info and request actions from the host.
-    pub(crate) host: Host,
+    pub(crate) host_info: Shared<HostInfo>,
+}
+
+impl std::fmt::Debug for Schedule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut f = f.debug_struct("Schedule");
+
+        f.field("tasks", &self.tasks);
+
+        let mut s = String::new();
+        for b in self.graph_audio_in.iter() {
+            s.push_str(&format!("{:?}, ", b.unique_id()))
+        }
+        f.field("graph_audio_in", &s);
+
+        let mut s = String::new();
+        for b in self.graph_audio_out.iter() {
+            s.push_str(&format!("{:?}, ", b.unique_id()))
+        }
+        f.field("graph_audio_out", &s);
+
+        f.field("max_block_size", &self.max_block_size);
+        f.field("host_info", &*self.host_info);
+
+        f.finish()
+    }
 }
 
 impl Schedule {
@@ -56,19 +83,19 @@ impl Schedule {
             };
 
             // We are ignoring sytem inputs with the CPAL backend for now.
-            for buffer in self.graph_inputs.iter() {
+            for buffer in self.graph_audio_in.iter() {
                 let buffer = buffer.borrow_mut(&proc_info);
                 buffer.fill(0.0);
             }
 
             for task in self.tasks.iter_mut() {
-                task.process(&proc_info, &mut self.host)
+                task.process(&proc_info, &self.host_info)
             }
 
             let out_part = &mut out[(processed_frames * num_out_channels)
                 ..((processed_frames + frames) * num_out_channels)];
             for ch_i in 0..num_out_channels {
-                if let Some(buffer) = self.graph_outputs.get(ch_i) {
+                if let Some(buffer) = self.graph_audio_out.get(ch_i) {
                     let buffer = buffer.borrow(&proc_info);
 
                     for i in 0..frames {

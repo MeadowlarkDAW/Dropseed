@@ -630,4 +630,8 @@ impl PluginInstancePool {
             Err(())
         }
     }
+
+    pub fn host_info(&self) -> &Shared<HostInfo> {
+        &self.host_info
+    }
 }

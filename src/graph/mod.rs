@@ -1,3 +1,4 @@
+use smallvec::SmallVec;
 use std::error::Error;
 
 use audio_graph::{DefaultPortType, Graph, NodeRef};
@@ -10,6 +11,7 @@ pub(crate) mod plugin_pool;
 mod compiler;
 mod save_state;
 mod schedule;
+pub mod verifier;
 
 use audio_buffer_pool::AudioBufferPool;
 use plugin_pool::PluginInstancePool;
@@ -17,7 +19,7 @@ use plugin_pool::PluginInstancePool;
 pub use plugin_pool::PluginInstanceID;
 pub use save_state::{AudioGraphSaveState, EdgeSaveState};
 pub use schedule::Schedule;
-use smallvec::SmallVec;
+pub use verifier::{Verifier, VerifyScheduleError};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PortID {
@@ -40,10 +42,13 @@ use crate::{
     plugin_scanner::{NewPluginInstanceError, PluginScanner},
 };
 
+use self::compiler::{compile_graph, GraphCompilerError};
+
 pub struct AudioGraph {
     plugin_pool: PluginInstancePool,
     audio_buffer_pool: AudioBufferPool,
     host_info: Shared<HostInfo>,
+    verifier: Verifier,
 
     abstract_graph: Graph<PluginInstanceID, PortID, DefaultPortType>,
     coll_handle: basedrop::Handle,
@@ -80,6 +85,7 @@ impl AudioGraph {
             plugin_pool,
             audio_buffer_pool: AudioBufferPool::new(coll_handle.clone(), max_block_size),
             host_info,
+            verifier: Verifier::new(),
             abstract_graph,
             coll_handle,
             failed_plugin_debug_name,
@@ -450,6 +456,21 @@ impl AudioGraph {
         let edge_errors = if !edge_errors.is_empty() { Err(edge_errors) } else { Ok(()) };
 
         (plugin_ids, plugin_errors, edge_errors)
+    }
+
+    /// Compile the audio graph into a schedule that is sent to the audio thread.
+    ///
+    /// If an error is returned then the graph **MUST** be restored with the previous
+    /// working save state.
+    pub(crate) fn compile(&mut self) -> Result<Schedule, GraphCompilerError> {
+        compile_graph(
+            &mut self.plugin_pool,
+            &mut self.audio_buffer_pool,
+            &mut self.abstract_graph,
+            &self.graph_in_node_id,
+            &self.graph_out_node_id,
+            &mut self.verifier,
+        )
     }
 }
 

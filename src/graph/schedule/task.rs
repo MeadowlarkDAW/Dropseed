@@ -1,14 +1,11 @@
-use std::borrow::Borrow;
-
 use basedrop::Shared;
 use clap_sys::process::clap_process;
 use smallvec::SmallVec;
 
 use crate::graph::audio_buffer_pool::SharedAudioBuffer;
 use crate::graph::plugin_pool::{SharedDelayCompNode, SharedPluginAudioThreadInstance};
-use crate::{host::Host, AudioPortBuffer, ProcInfo, ProcessStatus};
-
-use super::delay_comp_node::DelayCompNode;
+use crate::Host;
+use crate::{host::HostInfo, AudioPortBuffer, ProcInfo, ProcessStatus};
 
 pub(crate) enum Task {
     InternalPlugin(InternalPluginTask),
@@ -94,10 +91,10 @@ impl std::fmt::Debug for Task {
 }
 
 impl Task {
-    pub fn process(&mut self, proc_info: &ProcInfo, host: &mut Host) {
+    pub fn process(&mut self, proc_info: &ProcInfo, host_info: &Shared<HostInfo>) {
         match self {
             Task::InternalPlugin(task) => {
-                let status = task.process(proc_info, host);
+                let status = task.process(proc_info, host_info);
 
                 // TODO: use process status
             }
@@ -106,7 +103,7 @@ impl Task {
             }
             Task::DelayComp(task) => task.process(proc_info),
             Task::Sum(task) => task.process(proc_info),
-            Task::InactivePlugin(task) => task.process(proc_info, host),
+            Task::InactivePlugin(task) => task.process(proc_info),
         }
     }
 }
@@ -119,7 +116,7 @@ pub(crate) struct InternalPluginTask {
 }
 
 impl InternalPluginTask {
-    fn process(&mut self, proc_info: &ProcInfo, host: &mut Host) -> ProcessStatus {
+    fn process(&mut self, proc_info: &ProcInfo, host_info: &Shared<HostInfo>) -> ProcessStatus {
         let Self { plugin, audio_in, audio_out } = self;
 
         // This is safe because the audio thread counterpart of a plugin is only ever
@@ -129,16 +126,19 @@ impl InternalPluginTask {
         let plugin = unsafe { plugin.borrow_mut() };
 
         // Prepare the host handle to accept requests from the plugin.
-        host.current_plugin_channel = Shared::clone(&plugin.channel);
+        let mut host = Host {
+            info: Shared::clone(host_info),
+            current_plugin_channel: Shared::clone(&plugin.channel),
+        };
 
         // TODO: input event stuff
 
-        let status = if let Err(_) = plugin.plugin.start_processing(host) {
+        let status = if let Err(_) = plugin.plugin.start_processing(&mut host) {
             ProcessStatus::Error
         } else {
-            let status = plugin.plugin.process(proc_info, audio_in, audio_out, host);
+            let status = plugin.plugin.process(proc_info, audio_in, audio_out, &mut host);
 
-            plugin.plugin.stop_processing(host);
+            plugin.plugin.stop_processing(&mut host);
 
             status
         };
@@ -249,7 +249,7 @@ pub(crate) struct InactivePluginTask {
 }
 
 impl InactivePluginTask {
-    fn process(&mut self, proc_info: &ProcInfo, host: &mut Host) {
+    fn process(&mut self, proc_info: &ProcInfo) {
         // Make sure output buffers are cleared.
         for b in self.audio_out.iter() {
             let b = b.borrow_mut(proc_info);
