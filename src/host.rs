@@ -75,7 +75,7 @@ impl HostInfo {
 /// Used to get info and request actions from the host.
 pub struct Host {
     pub(crate) info: Shared<HostInfo>,
-    pub(crate) current_plugin_channel: Shared<PluginInstanceChannel>,
+    pub(crate) plugin_channel: Shared<PluginInstanceChannel>,
 }
 
 impl Host {
@@ -89,7 +89,7 @@ impl Host {
     ///
     /// `[thread-safe]`
     pub fn request_restart(&self) {
-        self.current_plugin_channel.restart_requested.store(true, Ordering::Relaxed);
+        self.plugin_channel.restart_requested.store(true, Ordering::Relaxed);
     }
 
     /// Request the host to activate and start processing the plugin.
@@ -97,13 +97,22 @@ impl Host {
     ///
     /// `[thread-safe]`
     pub fn request_process(&self) {
-        self.current_plugin_channel.process_requested.store(true, Ordering::Relaxed);
+        self.plugin_channel.process_requested.store(true, Ordering::Relaxed);
     }
 
     /// Request the host to schedule a call to `PluginMainThread::on_main_thread()` on the main thread.
     ///
     /// `[thread-safe]`
     pub fn request_callback(&self) {
-        self.current_plugin_channel.callback_requested.store(true, Ordering::Relaxed);
+        self.plugin_channel.callback_requested.store(true, Ordering::Relaxed);
+    }
+}
+
+impl Clone for Host {
+    fn clone(&self) -> Self {
+        Self {
+            info: Shared::clone(&self.info),
+            plugin_channel: Shared::clone(&self.plugin_channel),
+        }
     }
 }

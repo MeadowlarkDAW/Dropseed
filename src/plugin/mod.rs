@@ -1,7 +1,7 @@
+use basedrop::Shared;
+use rusty_daw_core::SampleRate;
 use std::error::Error;
 use std::path::PathBuf;
-
-use basedrop::Shared;
 
 use crate::host::{Host, HostInfo};
 use crate::AudioPortBuffer;
@@ -137,7 +137,7 @@ pub trait PluginMainThread {
     /// `[main-thread & !active_state]`
     fn activate(
         &mut self,
-        sample_rate: f64,
+        sample_rate: SampleRate,
         min_frames: usize,
         max_frames: usize,
         host: &Host,

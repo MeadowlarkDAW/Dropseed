@@ -89,7 +89,7 @@ impl Schedule {
             }
 
             for task in self.tasks.iter_mut() {
-                task.process(&proc_info, &self.host_info)
+                task.process(&proc_info)
             }
 
             let out_part = &mut out[(processed_frames * num_out_channels)

@@ -3,7 +3,7 @@ pub const PORT_TYPE_STEREO: &'static str = "stereo";
 
 pub const PORT_NAME_SIDECHAIN: &'static str = "sidechain";
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 /// The layout of the audio ports of a plugin.
 ///
 /// By default this returns a configuration with a main stereo
@@ -241,7 +241,7 @@ impl AudioPortsExtension {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 /// Information about a custom audio port.
 pub struct AudioPortInfo {
     /// Stable identifier

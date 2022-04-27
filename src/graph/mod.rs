@@ -1,9 +1,9 @@
-use smallvec::SmallVec;
-use std::error::Error;
-
 use audio_graph::{DefaultPortType, Graph, NodeRef};
 use basedrop::Shared;
 use fnv::FnvHashMap;
+use rusty_daw_core::SampleRate;
+use smallvec::SmallVec;
+use std::error::Error;
 
 pub(crate) mod audio_buffer_pool;
 pub(crate) mod plugin_pool;
@@ -60,15 +60,21 @@ pub struct AudioGraph {
 
     graph_in_channels: u16,
     graph_out_channels: u16,
+
+    sample_rate: SampleRate,
+    min_frames: usize,
+    max_frames: usize,
 }
 
 impl AudioGraph {
     pub(crate) fn new(
         coll_handle: basedrop::Handle,
-        max_block_size: usize,
         host_info: Shared<HostInfo>,
         graph_in_channels: u16,
         graph_out_channels: u16,
+        sample_rate: SampleRate,
+        min_frames: usize,
+        max_frames: usize,
     ) -> Self {
         let failed_plugin_debug_name = Shared::new(&coll_handle, String::from("failed_plugin"));
 
@@ -79,11 +85,14 @@ impl AudioGraph {
             graph_out_channels,
             coll_handle.clone(),
             Shared::clone(&host_info),
+            sample_rate,
+            min_frames,
+            max_frames,
         );
 
         Self {
             plugin_pool,
-            audio_buffer_pool: AudioBufferPool::new(coll_handle.clone(), max_block_size),
+            audio_buffer_pool: AudioBufferPool::new(coll_handle.clone(), max_frames),
             host_info,
             verifier: Verifier::new(),
             abstract_graph,
@@ -93,6 +102,9 @@ impl AudioGraph {
             graph_out_node_id,
             graph_in_channels,
             graph_out_channels,
+            sample_rate,
+            min_frames,
+            max_frames,
         }
     }
 
@@ -402,6 +414,9 @@ impl AudioGraph {
             self.graph_out_channels,
             self.coll_handle.clone(),
             Shared::clone(&self.host_info),
+            self.sample_rate,
+            self.min_frames,
+            self.max_frames,
         );
         self.plugin_pool = plugin_pool;
         self.graph_in_node_id = graph_in_id;

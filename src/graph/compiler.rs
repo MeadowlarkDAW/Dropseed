@@ -204,58 +204,46 @@ pub(crate) fn compile_graph(
             continue;
         }
 
-        if !plugin_pool.is_plugin_active(&abstract_task.node).unwrap() {
-            tasks.push(Task::InactivePlugin(InactivePluginTask {
-                audio_out: audio_out_channel_buffers,
-            }));
-
-            continue;
-        }
-
         match plugin_format {
             PluginFormat::Internal => {
                 let mut audio_in: SmallVec<[AudioPortBuffer; 2]> = SmallVec::new();
                 let mut audio_out: SmallVec<[AudioPortBuffer; 2]> = SmallVec::new();
 
-                // Unwrap won't panic because it can only be `None` when the plugin is inactive,
-                // and we already checked for that above.
-                let audio_ports_ext =
-                    plugin_pool.get_audio_ports_ext(&abstract_task.node).unwrap().as_ref().unwrap();
+                if let Some(audio_ports_ext) =
+                    plugin_pool.get_audio_ports_ext(&abstract_task.node).unwrap()
+                {
+                    let mut port_i = 0;
+                    for in_port in audio_ports_ext.inputs.iter() {
+                        let mut buffers: SmallVec<[SharedAudioBuffer<f32>; 2]> =
+                            SmallVec::with_capacity(in_port.channels);
+                        for _ in 0..in_port.channels {
+                            buffers.push(audio_in_channel_buffers[port_i].clone());
+                            port_i += 1;
+                        }
 
-                let mut port_i = 0;
-                for in_port in audio_ports_ext.inputs.iter() {
-                    let mut buffers: SmallVec<[SharedAudioBuffer<f32>; 2]> =
-                        SmallVec::with_capacity(in_port.channels);
-                    for _ in 0..in_port.channels {
-                        buffers.push(audio_in_channel_buffers[port_i].clone());
-                        port_i += 1;
+                        audio_in.push(AudioPortBuffer::new(buffers, 0)); // TODO: latency?
                     }
+                    port_i = 0;
+                    for out_port in audio_ports_ext.outputs.iter() {
+                        let mut buffers: SmallVec<[SharedAudioBuffer<f32>; 2]> =
+                            SmallVec::with_capacity(out_port.channels);
+                        for _ in 0..out_port.channels {
+                            buffers.push(audio_out_channel_buffers[port_i].clone());
+                            port_i += 1;
+                        }
 
-                    audio_in.push(AudioPortBuffer::new(buffers, 0)); // TODO: latency?
-                }
-                port_i = 0;
-                for out_port in audio_ports_ext.outputs.iter() {
-                    let mut buffers: SmallVec<[SharedAudioBuffer<f32>; 2]> =
-                        SmallVec::with_capacity(out_port.channels);
-                    for _ in 0..out_port.channels {
-                        buffers.push(audio_out_channel_buffers[port_i].clone());
-                        port_i += 1;
+                        audio_out.push(AudioPortBuffer::new(buffers, 0)); // TODO: latency?
                     }
+                } // else the plugin is deactivated
 
-                    audio_out.push(AudioPortBuffer::new(buffers, 0)); // TODO: latency?
-                }
-
-                // Unwrap won't panic because this is only `None` when the plugin is inactive,
-                // and we already checked for that above.
-                let plugin_audio_thread = plugin_pool
-                    .get_graph_plugin_audio_thread(&abstract_task.node)
-                    .unwrap()
-                    .unwrap();
+                let plugin_audio_thread =
+                    plugin_pool.get_graph_plugin_audio_thread(&abstract_task.node).unwrap();
 
                 tasks.push(Task::InternalPlugin(InternalPluginTask {
                     plugin: plugin_audio_thread.clone(),
                     audio_in,
                     audio_out,
+                    deactivated_audio_out: audio_out_channel_buffers,
                 }));
             }
             PluginFormat::Clap => {

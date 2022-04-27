@@ -12,7 +12,6 @@ pub(crate) enum Task {
     ClapPlugin(ClapPluginTask),
     DelayComp(DelayCompTask),
     Sum(SumTask),
-    InactivePlugin(InactivePluginTask),
 }
 
 impl std::fmt::Debug for Task {
@@ -74,36 +73,19 @@ impl std::fmt::Debug for Task {
 
                 f.finish()
             }
-            Task::InactivePlugin(t) => {
-                let mut f = f.debug_struct("InactivePlugin");
-
-                let mut s = String::new();
-                for b in t.audio_out.iter() {
-                    s.push_str(&format!("{:?}, ", b.unique_id()))
-                }
-
-                f.field("audio_out", &s);
-
-                f.finish()
-            }
         }
     }
 }
 
 impl Task {
-    pub fn process(&mut self, proc_info: &ProcInfo, host_info: &Shared<HostInfo>) {
+    pub fn process(&mut self, proc_info: &ProcInfo) {
         match self {
-            Task::InternalPlugin(task) => {
-                let status = task.process(proc_info, host_info);
-
-                // TODO: use process status
-            }
+            Task::InternalPlugin(task) => task.process(proc_info),
             Task::ClapPlugin(task) => {
                 todo!()
             }
             Task::DelayComp(task) => task.process(proc_info),
             Task::Sum(task) => task.process(proc_info),
-            Task::InactivePlugin(task) => task.process(proc_info),
         }
     }
 }
@@ -113,46 +95,57 @@ pub(crate) struct InternalPluginTask {
 
     pub audio_in: SmallVec<[AudioPortBuffer; 2]>,
     pub audio_out: SmallVec<[AudioPortBuffer; 2]>,
+
+    pub deactivated_audio_out: SmallVec<[SharedAudioBuffer<f32>; 4]>,
 }
 
 impl InternalPluginTask {
-    fn process(&mut self, proc_info: &ProcInfo, host_info: &Shared<HostInfo>) -> ProcessStatus {
-        let Self { plugin, audio_in, audio_out } = self;
+    fn process(&mut self, proc_info: &ProcInfo) {
+        let Self { plugin, audio_in, audio_out, deactivated_audio_out } = self;
 
-        // This is safe because the audio thread counterpart of a plugin is only ever
-        // borrowed mutably in this method. Also, the verifier has verified that no
-        // data races exist between parallel audio threads (once we actually have
-        // multi-threaded schedules of course).
-        let plugin = unsafe { plugin.borrow_mut() };
+        let plugin = &*plugin.shared.get();
 
-        // Prepare the host handle to accept requests from the plugin.
-        let mut host = Host {
-            info: Shared::clone(host_info),
-            current_plugin_channel: Shared::clone(&plugin.channel),
-        };
+        if let Some(plugin_audio_thread) = plugin.plugin.as_ref() {
+            // This is safe because the audio thread counterpart of a plugin is only ever
+            // borrowed mutably in this method. Also, the verifier has verified that no
+            // data races exist between parallel audio threads (once we actually have
+            // multi-threaded schedules of course).
+            let plugin_audio_thread = unsafe { &mut *plugin_audio_thread.get() };
 
-        // TODO: input event stuff
+            // TODO: input event stuff
 
-        let status = if let Err(_) = plugin.plugin.start_processing(&mut host) {
-            ProcessStatus::Error
-        } else {
-            let status = plugin.plugin.process(proc_info, audio_in, audio_out, &mut host);
+            let status = if let Err(_) = plugin_audio_thread.start_processing(&plugin.host_request)
+            {
+                ProcessStatus::Error
+            } else {
+                let status = plugin_audio_thread.process(
+                    proc_info,
+                    audio_in,
+                    audio_out,
+                    &plugin.host_request,
+                );
 
-            plugin.plugin.stop_processing(&mut host);
+                plugin_audio_thread.stop_processing(&plugin.host_request);
 
-            status
-        };
+                status
+            };
 
-        if let ProcessStatus::Error = status {
-            // As per the spec, we must clear all output buffers.
-            for b in audio_out.iter_mut() {
-                b.clear(proc_info);
+            // TODO: output event stuff
+
+            if let ProcessStatus::Error = status {
+                // As per the spec, we must clear all output buffers.
+                for b in audio_out.iter_mut() {
+                    b.clear(proc_info);
+                }
             }
-        }
 
-        // TODO: output event stuff
-
-        status
+            // TODO: Other process status stuff
+        } else {
+            // The plugin is deactivated. Clear all output buffers.
+            for b in deactivated_audio_out.iter_mut() {
+                b.borrow_mut(proc_info).fill(0.0);
+            }
+        };
     }
 }
 

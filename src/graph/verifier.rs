@@ -101,19 +101,6 @@ impl Verifier {
                         });
                     }
                 }
-                Task::InactivePlugin(t) => {
-                    // This verification step is probably overkill because this task simply just
-                    // clears these buffers one by one, so I don't think aliased buffers would
-                    // lead to a race condition issue.
-                    for b in t.audio_out.iter() {
-                        if !self.buffer_instances.insert(b.unique_id()) {
-                            return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                                buffer_id: b.unique_id().clone(),
-                                task_info: format!("{:?}", &task),
-                            });
-                        }
-                    }
-                }
             }
         }
 
