@@ -11,15 +11,18 @@ pub(crate) mod plugin_pool;
 mod compiler;
 mod save_state;
 mod schedule;
-pub mod verifier;
+mod verifier;
 
 use audio_buffer_pool::AudioBufferPool;
 use plugin_pool::PluginInstancePool;
+use schedule::Schedule;
+use verifier::Verifier;
 
-pub use plugin_pool::PluginInstanceID;
+pub use compiler::GraphCompilerError;
+pub use plugin_pool::{PluginActivatedInfo, PluginInstanceID};
 pub use save_state::{AudioGraphSaveState, EdgeSaveState};
-pub use schedule::Schedule;
-pub use verifier::{Verifier, VerifyScheduleError};
+pub use schedule::SharedSchedule;
+pub use verifier::VerifyScheduleError;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PortID {
@@ -42,9 +45,9 @@ use crate::{
     plugin_scanner::{NewPluginInstanceError, PluginScanner},
 };
 
-use self::compiler::{compile_graph, GraphCompilerError};
+use self::compiler::compile_graph;
 
-pub struct AudioGraph {
+pub(crate) struct AudioGraph {
     plugin_pool: PluginInstancePool,
     audio_buffer_pool: AudioBufferPool,
     host_info: Shared<HostInfo>,
@@ -52,6 +55,8 @@ pub struct AudioGraph {
 
     abstract_graph: Graph<PluginInstanceID, PortID, DefaultPortType>,
     coll_handle: basedrop::Handle,
+
+    shared_schedule: SharedSchedule,
 
     failed_plugin_debug_name: Shared<String>,
 
@@ -75,7 +80,7 @@ impl AudioGraph {
         sample_rate: SampleRate,
         min_frames: usize,
         max_frames: usize,
-    ) -> Self {
+    ) -> (Self, SharedSchedule) {
         let failed_plugin_debug_name = Shared::new(&coll_handle, String::from("failed_plugin"));
 
         let mut abstract_graph = Graph::default();
@@ -90,22 +95,31 @@ impl AudioGraph {
             max_frames,
         );
 
-        Self {
-            plugin_pool,
-            audio_buffer_pool: AudioBufferPool::new(coll_handle.clone(), max_frames),
-            host_info,
-            verifier: Verifier::new(),
-            abstract_graph,
-            coll_handle,
-            failed_plugin_debug_name,
-            graph_in_node_id,
-            graph_out_node_id,
-            graph_in_channels,
-            graph_out_channels,
-            sample_rate,
-            min_frames,
-            max_frames,
-        }
+        let (shared_schedule, shared_schedule_clone) = SharedSchedule::new(
+            Schedule::empty(max_frames, Shared::clone(&host_info)),
+            &coll_handle,
+        );
+
+        (
+            Self {
+                plugin_pool,
+                audio_buffer_pool: AudioBufferPool::new(coll_handle.clone(), max_frames),
+                host_info,
+                verifier: Verifier::new(),
+                abstract_graph,
+                coll_handle,
+                shared_schedule,
+                failed_plugin_debug_name,
+                graph_in_node_id,
+                graph_out_node_id,
+                graph_in_channels,
+                graph_out_channels,
+                sample_rate,
+                min_frames,
+                max_frames,
+            },
+            shared_schedule_clone,
+        )
     }
 
     pub fn graph_in_node_id(&self) -> &PluginInstanceID {
@@ -353,6 +367,10 @@ impl AudioGraph {
         }
     }
 
+    pub fn get_plugin_save_state(&self, id: &PluginInstanceID) -> Result<&PluginSaveState, ()> {
+        self.plugin_pool.get_graph_plugin_save_state(id.node_id)
+    }
+
     pub fn collect_save_state(&self) -> AudioGraphSaveState {
         log::trace!("Collecting audio graph save state...");
 
@@ -362,24 +380,26 @@ impl AudioGraph {
         let mut node_id_to_index: FnvHashMap<NodeRef, usize> = FnvHashMap::default();
         node_id_to_index.reserve(self.plugin_pool.num_plugins());
 
-        for (index, node_id) in self.plugin_pool.iter_plugin_ids().enumerate() {
-            if let Some(_) = node_id_to_index.insert(node_id, index) {
+        for (index, plugin_id) in self.plugin_pool.iter_plugin_ids().enumerate() {
+            if let Some(_) = node_id_to_index.insert(plugin_id.node_id, index) {
                 // In theory this should never happen.
-                panic!("More than one plugin with node id: {:?}", node_id);
+                panic!("More than one plugin with node id: {:?}", plugin_id.node_id);
             }
 
-            if node_id == self.graph_in_node_id.node_id || node_id == self.graph_out_node_id.node_id
+            if plugin_id.node_id == self.graph_in_node_id.node_id
+                || plugin_id.node_id == self.graph_out_node_id.node_id
             {
                 continue;
             }
 
-            let save_state = self.plugin_pool.get_graph_plugin_save_state(node_id).unwrap().clone();
+            let save_state =
+                self.plugin_pool.get_graph_plugin_save_state(plugin_id.node_id).unwrap().clone();
             plugins.push(save_state);
         }
 
         // Iterate again to get all the edges.
-        for node_id in self.plugin_pool.iter_plugin_ids() {
-            for edge in self.abstract_graph.node_edges(node_id).unwrap() {
+        for plugin_id in self.plugin_pool.iter_plugin_ids() {
+            for edge in self.abstract_graph.node_edges(plugin_id.node_id).unwrap() {
                 edges.push(EdgeSaveState {
                     edge_type: DefaultPortType::Audio,
                     src_plugin_i: *node_id_to_index.get(&edge.src_node).unwrap(),
@@ -400,11 +420,7 @@ impl AudioGraph {
         save_state: &AudioGraphSaveState,
         plugin_scanner: &mut PluginScanner,
         fallback_to_other_formats: bool,
-    ) -> (
-        Vec<PluginInstanceID>,
-        Result<(), Vec<(usize, NewPluginInstanceError)>>,
-        Result<(), Vec<(usize, ConnectEdgeError)>>,
-    ) {
+    ) -> AudioGraphRestoredInfo {
         log::info!("Restoring audio graph from save state...");
 
         self.abstract_graph = Graph::default();
@@ -467,26 +483,88 @@ impl AudioGraph {
             }
         }
 
-        let plugin_errors = if !plugin_errors.is_empty() { Err(plugin_errors) } else { Ok(()) };
-        let edge_errors = if !edge_errors.is_empty() { Err(edge_errors) } else { Ok(()) };
+        let mut plugin_instances: Vec<(PluginInstanceID, PluginEdges, PluginSaveState)> =
+            Vec::with_capacity(self.plugin_pool.num_plugins());
+        for plugin_id in self.plugin_pool.iter_plugin_ids() {
+            if plugin_id.node_id == self.graph_in_node_id.node_id
+                || plugin_id.node_id == self.graph_out_node_id.node_id
+            {
+                continue;
+            }
 
-        (plugin_ids, plugin_errors, edge_errors)
+            let edges = self.get_plugin_edges(plugin_id).unwrap();
+            let save_state =
+                self.plugin_pool.get_graph_plugin_save_state(plugin_id.node_id).unwrap().clone();
+
+            plugin_instances.push((plugin_id.clone(), edges, save_state));
+        }
+
+        let new_save_state = self.collect_save_state();
+
+        AudioGraphRestoredInfo {
+            requested_save_state: save_state.clone(),
+            save_state: new_save_state,
+            plugin_instances,
+            plugin_errors,
+            edge_errors,
+        }
     }
 
     /// Compile the audio graph into a schedule that is sent to the audio thread.
     ///
     /// If an error is returned then the graph **MUST** be restored with the previous
     /// working save state.
-    pub(crate) fn compile(&mut self) -> Result<Schedule, GraphCompilerError> {
-        compile_graph(
+    pub(crate) fn compile(&mut self) -> Result<(), GraphCompilerError> {
+        match compile_graph(
             &mut self.plugin_pool,
             &mut self.audio_buffer_pool,
             &mut self.abstract_graph,
             &self.graph_in_node_id,
             &self.graph_out_node_id,
             &mut self.verifier,
-        )
+        ) {
+            Ok(schedule) => {
+                self.shared_schedule.set_new_schedule(schedule, &self.coll_handle);
+                Ok(())
+            }
+            Err(e) => {
+                // Replace the current schedule with an emtpy one now that the graph
+                // is in an invalid state.
+                self.shared_schedule.set_new_schedule(
+                    Schedule::empty(self.max_frames, Shared::clone(&self.host_info)),
+                    &self.coll_handle,
+                );
+                Err(e)
+            }
+        }
     }
+
+    pub(crate) fn on_main_thread(&mut self) -> SmallVec<[(PluginInstanceID, bool); 4]> {
+        self.plugin_pool.on_main_thread(&mut self.abstract_graph)
+    }
+}
+
+#[derive(Debug)]
+pub struct AudioGraphRestoredInfo {
+    /// The save state the audio graph attempted to restore from.
+    pub requested_save_state: AudioGraphSaveState,
+
+    /// The new save state of this audio graph.
+    pub save_state: AudioGraphSaveState,
+
+    /// All of the plugin instances in the audio graph, along with their edges
+    /// and save state.
+    pub plugin_instances: Vec<(PluginInstanceID, PluginEdges, PluginSaveState)>,
+
+    /// All of the plugins which failed to load correctly
+    ///
+    /// (index into `requested_save_state.plugins`, error)
+    pub plugin_errors: Vec<(usize, NewPluginInstanceError)>,
+
+    /// All of the edges which failed to connect
+    ///
+    /// (index into `requested_save_state.edges`, error)
+    pub edge_errors: Vec<(usize, ConnectEdgeError)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

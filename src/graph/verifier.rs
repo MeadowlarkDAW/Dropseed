@@ -5,7 +5,7 @@ use std::error::Error;
 use super::PluginInstanceID;
 use super::{audio_buffer_pool::UniqueBufferID, schedule::task::Task, Schedule};
 
-pub struct Verifier {
+pub(crate) struct Verifier {
     plugin_instances: FnvHashSet<NodeRef>,
     buffer_instances: FnvHashSet<UniqueBufferID>,
 }

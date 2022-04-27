@@ -1,4 +1,6 @@
-use basedrop::Shared;
+use std::cell::UnsafeCell;
+
+use basedrop::{Shared, SharedCell};
 use smallvec::SmallVec;
 
 use crate::host::HostInfo;
@@ -21,6 +23,18 @@ pub struct Schedule {
 
     /// Used to get info and request actions from the host.
     pub(crate) host_info: Shared<HostInfo>,
+}
+
+impl Schedule {
+    pub(crate) fn empty(max_block_size: usize, host_info: Shared<HostInfo>) -> Self {
+        Self {
+            tasks: Vec::new(),
+            graph_audio_in: SmallVec::new(),
+            graph_audio_out: SmallVec::new(),
+            max_block_size,
+            host_info,
+        }
+    }
 }
 
 impl std::fmt::Debug for Schedule {
@@ -50,12 +64,12 @@ impl std::fmt::Debug for Schedule {
 
 impl Schedule {
     #[cfg(feature = "cpal-backend")]
-    pub fn process_cpal_output_interleaved<T: cpal::Sample>(
+    pub fn process_cpal_interleaved_output_only<T: cpal::Sample>(
         &mut self,
         num_out_channels: usize,
         out: &mut [T],
     ) {
-        if num_out_channels == 0 || out.len() == 0 {
+        if num_out_channels == 0 || out.is_empty() {
             for smp in out.iter_mut() {
                 *smp = T::from(&0.0);
             }
@@ -112,5 +126,53 @@ impl Schedule {
 
             processed_frames += frames;
         }
+    }
+}
+
+struct ScheduleWrapper {
+    schedule: UnsafeCell<Schedule>,
+}
+
+// Required because of basedrop's `SharedCell` container.
+//
+// The reason why rust flags this as unsafe is because of the `UnsafeCell`s in
+// the schedule. But this is safe because those `UnsafeCell`s only ever get
+// borrowed in the audio thread.
+unsafe impl Send for ScheduleWrapper {}
+unsafe impl Sync for ScheduleWrapper {}
+
+pub struct SharedSchedule {
+    schedule: Shared<SharedCell<ScheduleWrapper>>,
+}
+
+impl SharedSchedule {
+    pub(crate) fn new(schedule: Schedule, coll_handle: &basedrop::Handle) -> (Self, Self) {
+        let schedule = Shared::new(
+            coll_handle,
+            SharedCell::new(Shared::new(
+                coll_handle,
+                ScheduleWrapper { schedule: UnsafeCell::new(schedule) },
+            )),
+        );
+
+        (Self { schedule: schedule.clone() }, Self { schedule })
+    }
+
+    pub(crate) fn set_new_schedule(&mut self, schedule: Schedule, coll_handle: &basedrop::Handle) {
+        self.schedule
+            .set(Shared::new(coll_handle, ScheduleWrapper { schedule: UnsafeCell::new(schedule) }));
+    }
+
+    #[cfg(feature = "cpal-backend")]
+    pub fn process_cpal_interleaved_output_only<T: cpal::Sample>(
+        &mut self,
+        num_out_channels: usize,
+        out: &mut [T],
+    ) {
+        // This is safe because the schedule is only ever accessed by the
+        // audio thread.
+        let schedule = unsafe { &mut *(*self.schedule.get()).schedule.get() };
+
+        schedule.process_cpal_interleaved_output_only(num_out_channels, out);
     }
 }

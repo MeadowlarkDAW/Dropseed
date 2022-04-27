@@ -172,7 +172,7 @@ pub trait PluginMainThread {
 }
 
 /// The methods of an audio plugin instance which run in the "audio" thread.
-pub trait PluginAudioThread: Send + 'static {
+pub trait PluginAudioThread: Send + Sync + 'static {
     /// This will be called each time before a call to `process()`.
     ///
     /// Return an error if the plugin failed to start processing. In this case the host will not

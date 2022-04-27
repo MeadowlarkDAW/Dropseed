@@ -1,11 +1,13 @@
 use audio_graph::{DefaultPortType, Graph, NodeRef, PortRef};
 use basedrop::Shared;
+use crossbeam::channel::Sender;
 use fnv::FnvHashMap;
 use rusty_daw_core::SampleRate;
 use smallvec::SmallVec;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{cell::UnsafeCell, hash::Hash};
 
+use crate::event::DAWEngineEvent;
 use crate::host::{Host, HostInfo};
 use crate::plugin::ext::audio_ports::AudioPortsExtension;
 use crate::plugin::{PluginAudioThread, PluginMainThread, PluginSaveState};
@@ -13,7 +15,7 @@ use crate::plugin_scanner::PluginFormat;
 use crate::ProcessStatus;
 
 use super::schedule::delay_comp_node::DelayCompNode;
-use super::PortID;
+use super::{PluginEdges, PortID};
 
 // TODO: Clean this up.
 
@@ -178,6 +180,8 @@ struct PluginInstance {
     audio_in_channel_refs: Vec<PortRef>,
     audio_out_channel_refs: Vec<PortRef>,
     format: PluginFormat,
+
+    id: PluginInstanceID,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -282,6 +286,7 @@ impl PluginInstancePool {
             audio_in_channel_refs: Vec::new(),
             audio_out_channel_refs: graph_in_channel_refs,
             format: PluginFormat::Internal,
+            id: graph_in_id.clone(),
         });
 
         new_self.num_plugins += 1;
@@ -320,6 +325,7 @@ impl PluginInstancePool {
             audio_in_channel_refs: graph_out_channel_refs,
             audio_out_channel_refs: Vec::new(),
             format: PluginFormat::Internal,
+            id: graph_out_id.clone(),
         });
 
         new_self.num_plugins += 1;
@@ -417,9 +423,16 @@ impl PluginInstancePool {
                 audio_in_channel_refs,
                 audio_out_channel_refs,
                 format,
+                id: id.clone(),
             }
         } else {
-            PluginInstance { loaded: None, audio_in_channel_refs, audio_out_channel_refs, format }
+            PluginInstance {
+                loaded: None,
+                audio_in_channel_refs,
+                audio_out_channel_refs,
+                format,
+                id: id.clone(),
+            }
         };
         let node_i: usize = node_id.into();
         self.graph_plugins[node_i] = Some(new_instance);
@@ -707,11 +720,8 @@ impl PluginInstancePool {
         }
     }
 
-    pub fn iter_plugin_ids(&self) -> impl Iterator<Item = NodeRef> + '_ {
-        self.graph_plugins
-            .iter()
-            .enumerate()
-            .filter_map(|(i, p)| p.as_ref().map(|_| NodeRef::new(i)))
+    pub fn iter_plugin_ids(&self) -> impl Iterator<Item = &PluginInstanceID> + '_ {
+        self.graph_plugins.iter().filter_map(|p| p.as_ref().map(|p| &p.id))
     }
 
     pub fn get_graph_plugin_save_state(&self, node_id: NodeRef) -> Result<&PluginSaveState, ()> {
@@ -731,12 +741,11 @@ impl PluginInstancePool {
         &self.host_info
     }
 
-    pub fn update_main_thread(
+    pub fn on_main_thread(
         &mut self,
         abstract_graph: &mut Graph<PluginInstanceID, PortID, DefaultPortType>,
-    ) -> bool {
-        let mut recompile_audio_graph = false;
-        let mut plugins_to_restart: SmallVec<[PluginInstanceID; 8]> = SmallVec::new();
+    ) -> SmallVec<[(PluginInstanceID, bool); 4]> {
+        let mut plugins_to_restart: SmallVec<[(PluginInstanceID, bool); 4]> = SmallVec::new();
 
         // TODO: Find a more optimal way to poll for requests? We can't just use an spsc message
         // channel because CLAP plugins use the same host pointer for requests in the audio thread
@@ -795,17 +804,28 @@ impl PluginInstancePool {
                         .restart_requested
                         .store(false, Ordering::Relaxed);
 
-                    plugins_to_restart.push(loaded_plugin.main_thread.id.clone());
-                    recompile_audio_graph = true;
+                    plugins_to_restart.push((loaded_plugin.main_thread.id.clone(), false));
                 }
             }
         }
 
-        for id in plugins_to_restart.iter() {
-            self.deactivate_plugin_instance(&id);
-            self.activate_plugin_instance(&id, abstract_graph, true);
+        for id in plugins_to_restart.iter_mut() {
+            self.deactivate_plugin_instance(&id.0);
+            self.activate_plugin_instance(&id.0, abstract_graph, true);
+
+            if self.get_graph_plugin_audio_thread(&id.0).unwrap().is_some() {
+                // Mark that the plugin succeeded in restarting.
+                id.1 = true;
+            }
         }
 
-        recompile_audio_graph
+        plugins_to_restart
     }
+}
+
+#[derive(Debug)]
+pub struct PluginActivatedInfo {
+    pub id: PluginInstanceID,
+    pub edges: PluginEdges,
+    pub save_state: PluginSaveState,
 }

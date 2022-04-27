@@ -1,7 +1,10 @@
 use basedrop::Shared;
+use crossbeam::channel::Sender;
 use std::collections::hash_map;
+use std::path::PathBuf;
 use std::{collections::HashMap, error::Error};
 
+use crate::event::{DAWEngineEvent, PluginScannerEvent};
 use crate::host::HostInfo;
 use crate::plugin::{PluginDescriptor, PluginFactory, PluginMainThread};
 
@@ -11,7 +14,13 @@ pub enum PluginFormat {
     Clap,
 }
 
+#[derive(Debug, Clone)]
 pub struct ScannedPlugin {
+    pub description: PluginDescriptor,
+    pub key: ScannedPluginKey,
+}
+
+struct ScannedPluginFactory {
     pub description: PluginDescriptor,
     pub rdn: Shared<String>,
     pub format: PluginFormat,
@@ -25,19 +34,55 @@ pub struct ScannedPluginKey {
     pub format: PluginFormat,
 }
 
-pub struct PluginScanner {
-    scanned_plugins: HashMap<ScannedPluginKey, ScannedPlugin>,
+pub(crate) struct PluginScanner {
+    scanned_plugins: HashMap<ScannedPluginKey, ScannedPluginFactory>,
+    plugin_scan_directories: Vec<PathBuf>,
 
     coll_handle: basedrop::Handle,
 }
 
 impl PluginScanner {
     pub fn new(coll_handle: basedrop::Handle) -> Self {
-        Self { scanned_plugins: HashMap::default(), coll_handle }
+        Self {
+            scanned_plugins: HashMap::default(),
+            plugin_scan_directories: Vec::new(),
+            coll_handle,
+        }
     }
 
-    pub fn scanned_plugins(&self) -> hash_map::Iter<ScannedPluginKey, ScannedPlugin> {
-        self.scanned_plugins.iter()
+    pub fn add_plugin_scan_directory(&mut self, path: PathBuf) -> bool {
+        if !self.plugin_scan_directories.contains(&path) {
+            self.plugin_scan_directories.push(path);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn remove_plugin_scan_directory(&mut self, path: PathBuf) -> bool {
+        let mut remove_i = None;
+        for (i, p) in self.plugin_scan_directories.iter().enumerate() {
+            if &path == p {
+                remove_i = Some(i);
+                break;
+            }
+        }
+
+        if let Some(i) = remove_i {
+            self.plugin_scan_directories.remove(i);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn rescan_plugin_directories(&mut self, event_tx: &mut Sender<DAWEngineEvent>) {
+        // TODO
+        //
+        // Preferrably we should scan plugins in a separate thread.
+        let res =
+            RescanPluginDirectoriesRes { scanned_plugins: Vec::new(), failed_plugins: Vec::new() };
+        event_tx.send(PluginScannerEvent::RescanFinished(res).into()).unwrap();
     }
 
     pub fn scan_internal_plugin(
@@ -47,7 +92,6 @@ impl PluginScanner {
         let description = match factory.entry_init(None) {
             Ok(d) => d,
             Err(e) => {
-                log::error!("Error while scanning internal plugin: {}", &e);
                 return Err(e);
             }
         };
@@ -59,7 +103,7 @@ impl PluginScanner {
             log::warn!("Already scanned internal plugin: {:?}", &key);
         }
 
-        let scanned_plugin = ScannedPlugin {
+        let scanned_plugin = ScannedPluginFactory {
             factory,
             description,
             rdn: Shared::new(&self.coll_handle, key.rdn.clone()),
@@ -141,6 +185,12 @@ impl PluginScanner {
             Err(NewPluginInstanceError::NotFound(key.rdn.clone()))
         }
     }
+}
+
+#[derive(Debug)]
+pub struct RescanPluginDirectoriesRes {
+    pub scanned_plugins: Vec<ScannedPlugin>,
+    pub failed_plugins: Vec<(PathBuf, Box<dyn Error>)>,
 }
 
 #[derive(Debug)]
