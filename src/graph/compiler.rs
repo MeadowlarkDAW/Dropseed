@@ -258,7 +258,9 @@ pub(crate) fn compile_graph(
                         plugin_pool.get_audio_ports_ext(&abstract_task.node).unwrap()
                     {
                         if let MainPortsLayout::InOut = audio_ports_ext.main_ports_layout {
-                            let n_main_channels = audio_ports_ext.inputs[0].channels;
+                            let n_main_channels = audio_ports_ext.inputs[0]
+                                .channels
+                                .min(audio_ports_ext.outputs[0].channels);
 
                             for _ in 0..n_main_channels {
                                 audio_through.push((
