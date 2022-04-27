@@ -101,6 +101,31 @@ impl Verifier {
                         });
                     }
                 }
+                Task::DeactivatedPlugin(t) => {
+                    for (b_in, b_out) in t.audio_through.iter() {
+                        if !self.buffer_instances.insert(b_in.unique_id()) {
+                            return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
+                                buffer_id: b_in.unique_id().clone(),
+                                task_info: format!("{:?}", &task),
+                            });
+                        }
+                        if !self.buffer_instances.insert(b_out.unique_id()) {
+                            return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
+                                buffer_id: b_out.unique_id().clone(),
+                                task_info: format!("{:?}", &task),
+                            });
+                        }
+                    }
+
+                    for b in t.extra_audio_out.iter() {
+                        if !self.buffer_instances.insert(b.unique_id()) {
+                            return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
+                                buffer_id: b.unique_id().clone(),
+                                task_info: format!("{:?}", &task),
+                            });
+                        }
+                    }
+                }
             }
         }
 

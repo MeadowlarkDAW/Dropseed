@@ -1,6 +1,5 @@
 use audio_graph::{DefaultPortType, Graph, NodeRef, PortRef};
 use basedrop::Shared;
-use basedrop::SharedCell;
 use fnv::FnvHashMap;
 use rusty_daw_core::SampleRate;
 use smallvec::SmallVec;
@@ -130,45 +129,20 @@ pub(crate) struct PluginMainThreadInstance {
 }
 
 pub(crate) struct PluginAudioThreadInstance {
-    pub plugin: Option<UnsafeCell<Box<dyn PluginAudioThread>>>,
+    pub plugin: UnsafeCell<Box<dyn PluginAudioThread>>,
     pub host_request: Host,
     pub last_process_status: UnsafeCell<ProcessStatus>,
 }
 
-impl PluginAudioThreadInstance {
-    pub fn deactivated_clone(&self) -> Self {
-        PluginAudioThreadInstance {
-            // The only time we are cloning this is when we want to deactivate/drop
-            // the plugin's audio thread, so we don't care about keeping it.
-            plugin: None,
-            host_request: self.host_request.clone(),
-            last_process_status: UnsafeCell::new(unsafe { *self.last_process_status.get() }),
-        }
-    }
-}
-
-// Safe because this only ever gets dereferenced once it is sent to the audio thread,
-// and it stays on the audio thread for the rest of its lifetime. We need this in order
-// to use basedrop's `SharedMut` persistent data structure.
-//
-// Also, `Send` is already a requirement for the `PluginAudioThread` trait, so we
-// shouldn't have any issues if this gets sent to a different audio thread in a new
-// schedule.
-unsafe impl Send for PluginAudioThreadInstance {}
-// Safe because this only ever gets dereferenced once it is sent to the audio thread,
-// and it stays on the audio thread for the rest of its lifetime. We need this in order
-// to use basedrop's `SharedMut` persistent data structure.
-unsafe impl Sync for PluginAudioThreadInstance {}
-
 #[derive(Clone)]
 pub(crate) struct SharedPluginAudioThreadInstance {
-    pub shared: Shared<SharedCell<PluginAudioThreadInstance>>,
+    pub shared: Shared<PluginAudioThreadInstance>,
     id: PluginInstanceID,
 }
 
 impl SharedPluginAudioThreadInstance {
     fn new(
-        plugin: Option<Box<dyn PluginAudioThread>>,
+        plugin: Box<dyn PluginAudioThread>,
         id: PluginInstanceID,
         host_request: Host,
         coll_handle: &basedrop::Handle,
@@ -176,14 +150,11 @@ impl SharedPluginAudioThreadInstance {
         Self {
             shared: Shared::new(
                 &coll_handle,
-                SharedCell::new(Shared::new(
-                    &coll_handle,
-                    PluginAudioThreadInstance {
-                        plugin: plugin.map(|p| UnsafeCell::new(p)),
-                        host_request,
-                        last_process_status: UnsafeCell::new(ProcessStatus::Continue),
-                    },
-                )),
+                PluginAudioThreadInstance {
+                    plugin: UnsafeCell::new(plugin),
+                    host_request,
+                    last_process_status: UnsafeCell::new(ProcessStatus::Continue),
+                },
             ),
             id,
         }
@@ -196,13 +167,13 @@ impl SharedPluginAudioThreadInstance {
 
 struct LoadedPluginInstance {
     main_thread: PluginMainThreadInstance,
+    audio_thread: Option<SharedPluginAudioThreadInstance>,
     save_state: PluginSaveState,
     audio_ports_ext: AudioPortsExtension,
 }
 
 struct PluginInstance {
     loaded: Option<LoadedPluginInstance>,
-    audio_thread: SharedPluginAudioThreadInstance,
 
     audio_in_channel_refs: Vec<PortRef>,
     audio_out_channel_refs: Vec<PortRef>,
@@ -305,23 +276,12 @@ impl PluginInstancePool {
             graph_in_channel_refs.push(port_ref);
         }
 
-        let host_request = Host {
-            info: Shared::clone(&new_self.host_info),
-            plugin_channel: Shared::new(&new_self.coll_handle, PluginInstanceChannel::new()),
-        };
-
         let node_i: usize = graph_in_id.node_id.into();
         new_self.graph_plugins[node_i] = Some(PluginInstance {
             loaded: None,
             audio_in_channel_refs: Vec::new(),
             audio_out_channel_refs: graph_in_channel_refs,
             format: PluginFormat::Internal,
-            audio_thread: SharedPluginAudioThreadInstance::new(
-                None,
-                graph_in_id.clone(),
-                host_request,
-                &new_self.coll_handle,
-            ),
         });
 
         new_self.num_plugins += 1;
@@ -354,23 +314,12 @@ impl PluginInstancePool {
             graph_out_channel_refs.push(port_ref);
         }
 
-        let host_request = Host {
-            info: Shared::clone(&new_self.host_info),
-            plugin_channel: Shared::new(&new_self.coll_handle, PluginInstanceChannel::new()),
-        };
-
         let node_i: usize = graph_out_id.node_id.into();
         new_self.graph_plugins[node_i] = Some(PluginInstance {
             loaded: None,
             audio_in_channel_refs: graph_out_channel_refs,
             audio_out_channel_refs: Vec::new(),
             format: PluginFormat::Internal,
-            audio_thread: SharedPluginAudioThreadInstance::new(
-                None,
-                graph_out_id.clone(),
-                host_request,
-                &new_self.coll_handle,
-            ),
         });
 
         new_self.num_plugins += 1;
@@ -457,29 +406,20 @@ impl PluginInstancePool {
 
         let format = save_state.key.format;
 
-        let audio_thread =
-            SharedPluginAudioThreadInstance::new(None, id.clone(), host_request, &self.coll_handle);
-
         let new_instance = if main_thread.is_some() {
             PluginInstance {
                 loaded: Some(LoadedPluginInstance {
                     main_thread: main_thread.unwrap(),
+                    audio_thread: None,
                     save_state,
                     audio_ports_ext: audio_ports_ext.unwrap(),
                 }),
                 audio_in_channel_refs,
                 audio_out_channel_refs,
                 format,
-                audio_thread,
             }
         } else {
-            PluginInstance {
-                loaded: None,
-                audio_in_channel_refs,
-                audio_out_channel_refs,
-                format,
-                audio_thread,
-            }
+            PluginInstance { loaded: None, audio_in_channel_refs, audio_out_channel_refs, format }
         };
         let node_i: usize = node_id.into();
         self.graph_plugins[node_i] = Some(new_instance);
@@ -526,7 +466,7 @@ impl PluginInstancePool {
         id: &PluginInstanceID,
         abstract_graph: &mut Graph<PluginInstanceID, PortID, DefaultPortType>,
         check_for_port_change: bool,
-    ) -> bool {
+    ) {
         let node_i: usize = id.node_id.into();
         if let Some(plugin_instance) = &mut self.graph_plugins[node_i] {
             if let Some(loaded_plugin) = &mut plugin_instance.loaded {
@@ -540,10 +480,10 @@ impl PluginInstancePool {
                     log::warn!("Tried to activate plugin that is already active");
 
                     // Cannot activate plugin that is already active.
-                    return false;
+                    return;
                 }
 
-                let recompile_audio_graph = if check_for_port_change {
+                if check_for_port_change {
                     let new_audio_ports_ext = loaded_plugin
                         .main_thread
                         .plugin
@@ -551,62 +491,57 @@ impl PluginInstancePool {
 
                     if new_audio_ports_ext != loaded_plugin.audio_ports_ext {
                         loaded_plugin.audio_ports_ext = new_audio_ports_ext;
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
 
-                if recompile_audio_graph {
-                    // Make sure the abstract graph has the updated number of ports.
+                        // Make sure the abstract graph has the updated number of ports.
 
-                    let node_id = loaded_plugin.main_thread.id.node_id;
+                        let node_id = loaded_plugin.main_thread.id.node_id;
 
-                    let (audio_in_channels, audio_out_channels) =
-                        loaded_plugin.audio_ports_ext.total_in_out_channels();
+                        let (audio_in_channels, audio_out_channels) =
+                            loaded_plugin.audio_ports_ext.total_in_out_channels();
 
-                    if audio_in_channels > plugin_instance.audio_in_channel_refs.len() {
-                        let len = plugin_instance.audio_in_channel_refs.len() as u16;
-                        for i in len..audio_in_channels as u16 {
-                            let port_ref = abstract_graph
-                                .port(node_id, DefaultPortType::Audio, PortID::AudioIn(i))
-                                .unwrap();
-                            plugin_instance.audio_in_channel_refs.push(port_ref);
-                        }
-                    } else if audio_in_channels < plugin_instance.audio_in_channel_refs.len() {
-                        let n_to_remove =
-                            plugin_instance.audio_in_channel_refs.len() - audio_in_channels;
-                        for _ in 0..n_to_remove {
-                            let port_ref = plugin_instance.audio_in_channel_refs.pop().unwrap();
-                            if let Err(e) = abstract_graph.delete_port(port_ref) {
-                                log::error!(
-                                    "Unexpected error while removing port from abstract graph: {}",
-                                    e
-                                );
+                        if audio_in_channels > plugin_instance.audio_in_channel_refs.len() {
+                            let len = plugin_instance.audio_in_channel_refs.len() as u16;
+                            for i in len..audio_in_channels as u16 {
+                                let port_ref = abstract_graph
+                                    .port(node_id, DefaultPortType::Audio, PortID::AudioIn(i))
+                                    .unwrap();
+                                plugin_instance.audio_in_channel_refs.push(port_ref);
+                            }
+                        } else if audio_in_channels < plugin_instance.audio_in_channel_refs.len() {
+                            let n_to_remove =
+                                plugin_instance.audio_in_channel_refs.len() - audio_in_channels;
+                            for _ in 0..n_to_remove {
+                                let port_ref = plugin_instance.audio_in_channel_refs.pop().unwrap();
+                                if let Err(e) = abstract_graph.delete_port(port_ref) {
+                                    log::error!(
+                                        "Unexpected error while removing port from abstract graph: {}",
+                                        e
+                                    );
+                                }
                             }
                         }
-                    }
 
-                    if audio_out_channels > plugin_instance.audio_out_channel_refs.len() {
-                        let len = plugin_instance.audio_in_channel_refs.len() as u16;
-                        for i in len..audio_out_channels as u16 {
-                            let port_ref = abstract_graph
-                                .port(node_id, DefaultPortType::Audio, PortID::AudioOut(i))
-                                .unwrap();
-                            plugin_instance.audio_out_channel_refs.push(port_ref);
-                        }
-                    } else if audio_out_channels < plugin_instance.audio_out_channel_refs.len() {
-                        let n_to_remove =
-                            plugin_instance.audio_out_channel_refs.len() - audio_out_channels;
-                        for _ in 0..n_to_remove {
-                            let port_ref = plugin_instance.audio_out_channel_refs.pop().unwrap();
-                            if let Err(e) = abstract_graph.delete_port(port_ref) {
-                                log::error!(
-                                    "Unexpected error while removing port from abstract graph: {}",
-                                    e
-                                );
+                        if audio_out_channels > plugin_instance.audio_out_channel_refs.len() {
+                            let len = plugin_instance.audio_in_channel_refs.len() as u16;
+                            for i in len..audio_out_channels as u16 {
+                                let port_ref = abstract_graph
+                                    .port(node_id, DefaultPortType::Audio, PortID::AudioOut(i))
+                                    .unwrap();
+                                plugin_instance.audio_out_channel_refs.push(port_ref);
+                            }
+                        } else if audio_out_channels < plugin_instance.audio_out_channel_refs.len()
+                        {
+                            let n_to_remove =
+                                plugin_instance.audio_out_channel_refs.len() - audio_out_channels;
+                            for _ in 0..n_to_remove {
+                                let port_ref =
+                                    plugin_instance.audio_out_channel_refs.pop().unwrap();
+                                if let Err(e) = abstract_graph.delete_port(port_ref) {
+                                    log::error!(
+                                        "Unexpected error while removing port from abstract graph: {}",
+                                        e
+                                    );
+                                }
                             }
                         }
                     }
@@ -620,28 +555,12 @@ impl PluginInstancePool {
                     &self.coll_handle,
                 ) {
                     Ok(plugin_audio_thread) => {
-                        let mut new_audio_thread =
-                            (*plugin_instance.audio_thread.shared.get()).deactivated_clone();
-                        new_audio_thread.plugin = Some(UnsafeCell::new(plugin_audio_thread));
-
-                        if recompile_audio_graph {
-                            // If recompiling the audio graph because the plugin changed its audio
-                            // port configuration, we don't send the plugin's audio thread to the
-                            // current schedule (or else bad things will happen). Instead we create
-                            // a new shared pointer that will be added to the next schedule that
-                            // gets compiled.
-                            plugin_instance.audio_thread.shared = Shared::new(
-                                &self.coll_handle,
-                                SharedCell::new(Shared::new(&self.coll_handle, new_audio_thread)),
-                            );
-                        } else {
-                            // If the plugin did not change its audio port configuration, then it's
-                            // safe to replace the plugin's audio thread in the current schedule.
-                            plugin_instance
-                                .audio_thread
-                                .shared
-                                .set(Shared::new(&self.coll_handle, new_audio_thread));
-                        }
+                        loaded_plugin.audio_thread = Some(SharedPluginAudioThreadInstance::new(
+                            plugin_audio_thread,
+                            loaded_plugin.main_thread.id.clone(),
+                            loaded_plugin.main_thread.host_request.clone(),
+                            &self.coll_handle,
+                        ));
 
                         loaded_plugin
                             .main_thread
@@ -652,8 +571,6 @@ impl PluginInstancePool {
                         loaded_plugin.save_state.activated = true;
 
                         log::trace!("Successfully activated plugin instance {:?}", &id);
-
-                        return recompile_audio_graph;
                     }
                     Err(e) => {
                         log::error!(
@@ -665,21 +582,13 @@ impl PluginInstancePool {
                 }
             }
         }
-
-        false
     }
 
     pub fn deactivate_plugin_instance(&mut self, id: &PluginInstanceID) {
         let node_i: usize = id.node_id.into();
         if let Some(plugin_instance) = &mut self.graph_plugins[node_i] {
             if let Some(loaded_plugin) = &mut plugin_instance.loaded {
-                if !loaded_plugin
-                    .main_thread
-                    .host_request
-                    .plugin_channel
-                    .active
-                    .load(Ordering::Relaxed)
-                {
+                if loaded_plugin.audio_thread.is_none() {
                     // Plugin is already inactive.
                     return;
                 }
@@ -696,18 +605,8 @@ impl PluginInstancePool {
                     .active
                     .store(false, Ordering::Relaxed);
 
-                loaded_plugin.save_state.activated = false;
+                loaded_plugin.audio_thread = None;
             }
-
-            // Overwrite the current audio thread task with a blank one. This will
-            // cause the audio thread part to be dropped on the next process cycle.
-            let mut new_audio_thread =
-                (*plugin_instance.audio_thread.shared.get()).deactivated_clone();
-            new_audio_thread.plugin = None; // This should already be `None`, just a sanity check.
-            plugin_instance
-                .audio_thread
-                .shared
-                .set(Shared::new(&self.coll_handle, new_audio_thread));
         }
     }
 
@@ -795,10 +694,14 @@ impl PluginInstancePool {
     pub fn get_graph_plugin_audio_thread(
         &self,
         id: &PluginInstanceID,
-    ) -> Result<&SharedPluginAudioThreadInstance, ()> {
+    ) -> Result<Option<&SharedPluginAudioThreadInstance>, ()> {
         let node_i: usize = id.node_id.into();
         if let Some(plugin_instance) = self.graph_plugins[node_i].as_ref() {
-            Ok(&plugin_instance.audio_thread)
+            if let Some(loaded_plugin) = plugin_instance.loaded.as_ref() {
+                Ok(loaded_plugin.audio_thread.as_ref())
+            } else {
+                Ok(None)
+            }
         } else {
             Err(())
         }
@@ -875,6 +778,8 @@ impl PluginInstancePool {
                         .store(false, Ordering::Relaxed);
 
                     // TODO
+
+                    //recompile_audio_graph = true;
                 }
                 if loaded_plugin
                     .main_thread
@@ -891,15 +796,14 @@ impl PluginInstancePool {
                         .store(false, Ordering::Relaxed);
 
                     plugins_to_restart.push(loaded_plugin.main_thread.id.clone());
+                    recompile_audio_graph = true;
                 }
             }
         }
 
         for id in plugins_to_restart.iter() {
             self.deactivate_plugin_instance(&id);
-            if self.activate_plugin_instance(&id, abstract_graph, true) {
-                recompile_audio_graph = true;
-            }
+            self.activate_plugin_instance(&id, abstract_graph, true);
         }
 
         recompile_audio_graph

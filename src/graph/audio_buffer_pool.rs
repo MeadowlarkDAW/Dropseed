@@ -1,8 +1,6 @@
 use std::cell::UnsafeCell;
 
-use audio_graph::NodeRef;
 use basedrop::Shared;
-use fnv::FnvHashMap;
 use smallvec::SmallVec;
 
 use clap_sys::audio_buffer::clap_audio_buffer;

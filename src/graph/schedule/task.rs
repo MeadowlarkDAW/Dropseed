@@ -1,17 +1,16 @@
-use basedrop::Shared;
 use clap_sys::process::clap_process;
 use smallvec::SmallVec;
 
 use crate::graph::audio_buffer_pool::SharedAudioBuffer;
 use crate::graph::plugin_pool::{SharedDelayCompNode, SharedPluginAudioThreadInstance};
-use crate::Host;
-use crate::{host::HostInfo, AudioPortBuffer, ProcInfo, ProcessStatus};
+use crate::{AudioPortBuffer, ProcInfo, ProcessStatus};
 
 pub(crate) enum Task {
     InternalPlugin(InternalPluginTask),
     ClapPlugin(ClapPluginTask),
     DelayComp(DelayCompTask),
     Sum(SumTask),
+    DeactivatedPlugin(DeactivatedPluginTask),
 }
 
 impl std::fmt::Debug for Task {
@@ -73,6 +72,27 @@ impl std::fmt::Debug for Task {
 
                 f.finish()
             }
+            Task::DeactivatedPlugin(t) => {
+                let mut f = f.debug_struct("DeactivatedPlugin");
+
+                let mut s = String::new();
+                for (b_in, b_out) in t.audio_through.iter() {
+                    s.push_str(&format!(
+                        "(in: {:?}, out: {:?})",
+                        b_in.unique_id(),
+                        b_out.unique_id()
+                    ));
+                }
+                f.field("audio_through", &s);
+
+                let mut s = String::new();
+                for b in t.extra_audio_out.iter() {
+                    s.push_str(&format!("{:?}, ", b.unique_id()))
+                }
+                f.field("extra_audio_out", &s);
+
+                f.finish()
+            }
         }
     }
 }
@@ -86,6 +106,7 @@ impl Task {
             }
             Task::DelayComp(task) => task.process(proc_info),
             Task::Sum(task) => task.process(proc_info),
+            Task::DeactivatedPlugin(task) => task.process(proc_info),
         }
     }
 }
@@ -95,57 +116,46 @@ pub(crate) struct InternalPluginTask {
 
     pub audio_in: SmallVec<[AudioPortBuffer; 2]>,
     pub audio_out: SmallVec<[AudioPortBuffer; 2]>,
-
-    pub deactivated_audio_out: SmallVec<[SharedAudioBuffer<f32>; 4]>,
 }
 
 impl InternalPluginTask {
     fn process(&mut self, proc_info: &ProcInfo) {
-        let Self { plugin, audio_in, audio_out, deactivated_audio_out } = self;
+        let Self { plugin, audio_in, audio_out } = self;
 
-        let plugin = &*plugin.shared.get();
+        // This is safe because the audio thread counterpart of a plugin is only ever
+        // borrowed mutably in this method. Also, the verifier has verified that no
+        // data races exist between parallel audio threads (once we actually have
+        // multi-threaded schedules of course).
+        let plugin_audio_thread = unsafe { &mut *plugin.shared.plugin.get() };
 
-        if let Some(plugin_audio_thread) = plugin.plugin.as_ref() {
-            // This is safe because the audio thread counterpart of a plugin is only ever
-            // borrowed mutably in this method. Also, the verifier has verified that no
-            // data races exist between parallel audio threads (once we actually have
-            // multi-threaded schedules of course).
-            let plugin_audio_thread = unsafe { &mut *plugin_audio_thread.get() };
+        // TODO: input event stuff
 
-            // TODO: input event stuff
-
-            let status = if let Err(_) = plugin_audio_thread.start_processing(&plugin.host_request)
-            {
+        let status =
+            if let Err(_) = plugin_audio_thread.start_processing(&plugin.shared.host_request) {
                 ProcessStatus::Error
             } else {
                 let status = plugin_audio_thread.process(
                     proc_info,
                     audio_in,
                     audio_out,
-                    &plugin.host_request,
+                    &plugin.shared.host_request,
                 );
 
-                plugin_audio_thread.stop_processing(&plugin.host_request);
+                plugin_audio_thread.stop_processing(&plugin.shared.host_request);
 
                 status
             };
 
-            // TODO: output event stuff
+        // TODO: output event stuff
 
-            if let ProcessStatus::Error = status {
-                // As per the spec, we must clear all output buffers.
-                for b in audio_out.iter_mut() {
-                    b.clear(proc_info);
-                }
+        if let ProcessStatus::Error = status {
+            // As per the spec, we must clear all output buffers.
+            for b in audio_out.iter_mut() {
+                b.clear(proc_info);
             }
+        }
 
-            // TODO: Other process status stuff
-        } else {
-            // The plugin is deactivated. Clear all output buffers.
-            for b in deactivated_audio_out.iter_mut() {
-                b.borrow_mut(proc_info).fill(0.0);
-            }
-        };
+        // TODO: Other process status stuff
     }
 }
 
@@ -237,14 +247,22 @@ impl SumTask {
     }
 }
 
-pub(crate) struct InactivePluginTask {
-    pub audio_out: SmallVec<[SharedAudioBuffer<f32>; 4]>,
+pub(crate) struct DeactivatedPluginTask {
+    pub audio_through: SmallVec<[(SharedAudioBuffer<f32>, SharedAudioBuffer<f32>); 4]>,
+    pub extra_audio_out: SmallVec<[SharedAudioBuffer<f32>; 4]>,
 }
 
-impl InactivePluginTask {
+impl DeactivatedPluginTask {
     fn process(&mut self, proc_info: &ProcInfo) {
-        // Make sure output buffers are cleared.
-        for b in self.audio_out.iter() {
+        // Pass audio through the main ports.
+        for (in_buf, out_buf) in self.audio_through.iter() {
+            let in_buf = in_buf.borrow(proc_info);
+            let out_buf = out_buf.borrow_mut(proc_info);
+            out_buf.copy_from_slice(in_buf);
+        }
+
+        // Make sure any extra output buffers are cleared.
+        for b in self.extra_audio_out.iter() {
             let b = b.borrow_mut(proc_info);
             b.fill(0.0);
         }
