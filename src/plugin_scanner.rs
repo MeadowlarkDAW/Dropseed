@@ -52,6 +52,8 @@ impl PluginScanner {
 
     pub fn add_plugin_scan_directory(&mut self, path: PathBuf) -> bool {
         if !self.plugin_scan_directories.contains(&path) {
+            log::info!("Added plugin scan directory {:?}", &path);
+
             self.plugin_scan_directories.push(path);
             true
         } else {
@@ -70,6 +72,9 @@ impl PluginScanner {
 
         if let Some(i) = remove_i {
             self.plugin_scan_directories.remove(i);
+
+            log::info!("Removed plugin scan directory {:?}", &path);
+
             true
         } else {
             false
@@ -77,6 +82,8 @@ impl PluginScanner {
     }
 
     pub fn rescan_plugin_directories(&mut self, event_tx: &mut Sender<DAWEngineEvent>) {
+        log::info!("Rescanning plugin directories...");
+
         // TODO
         //
         // Preferrably we should scan plugins in a separate thread.

@@ -23,7 +23,7 @@ pub enum DAWEngineEvent {
     /// To keep using the audio graph, you must reactivate the engine with
     /// `RustyDAWEngine::activate_engine()`, and then restore the audio graph
     /// from the most recently working save state.
-    EngineDeactivated,
+    EngineDeactivated(AudioGraphSaveState),
 
     /// When this message is received, it means that the audio graph is starting
     /// the process of restoring from a save state.

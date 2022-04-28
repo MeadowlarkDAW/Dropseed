@@ -496,6 +496,8 @@ impl PluginInstancePool {
                     return;
                 }
 
+                log::trace!("Activating plugin instance {:?}", &loaded_plugin.main_thread.id);
+
                 if check_for_port_change {
                     let new_audio_ports_ext = loaded_plugin
                         .main_thread
@@ -583,7 +585,7 @@ impl PluginInstancePool {
                             .store(true, Ordering::Relaxed);
                         loaded_plugin.save_state.activated = true;
 
-                        log::trace!("Successfully activated plugin instance {:?}", &id);
+                        log::debug!("Successfully activated plugin instance {:?}", &id);
                     }
                     Err(e) => {
                         log::error!(
@@ -605,6 +607,8 @@ impl PluginInstancePool {
                     // Plugin is already inactive.
                     return;
                 }
+
+                log::debug!("Deactivating plugin instance {:?}", &loaded_plugin.main_thread.id);
 
                 loaded_plugin
                     .main_thread
@@ -745,6 +749,8 @@ impl PluginInstancePool {
         &mut self,
         abstract_graph: &mut Graph<PluginInstanceID, PortID, DefaultPortType>,
     ) -> SmallVec<[(PluginInstanceID, bool); 4]> {
+        log::trace!("Engine start on main thread calls...");
+
         let mut plugins_to_restart: SmallVec<[(PluginInstanceID, bool); 4]> = SmallVec::new();
 
         // TODO: Find a more optimal way to poll for requests? We can't just use an spsc message
@@ -760,6 +766,8 @@ impl PluginInstancePool {
                     .callback_requested
                     .load(Ordering::Relaxed)
                 {
+                    log::trace!("Got callback request from plugin {:?}", &plugin.id);
+
                     loaded_plugin
                         .main_thread
                         .host_request
@@ -779,6 +787,8 @@ impl PluginInstancePool {
                     .process_requested
                     .load(Ordering::Relaxed)
                 {
+                    log::trace!("Got process request from plugin {:?}", &plugin.id);
+
                     loaded_plugin
                         .main_thread
                         .host_request
@@ -797,6 +807,8 @@ impl PluginInstancePool {
                     .restart_requested
                     .load(Ordering::Relaxed)
                 {
+                    log::trace!("Gotprestart request from plugin {:?}", &plugin.id);
+
                     loaded_plugin
                         .main_thread
                         .host_request

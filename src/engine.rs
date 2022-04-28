@@ -109,6 +109,8 @@ impl RustyDAWEngine {
             return Err(());
         }
 
+        log::info!("Activating RustyDAW engine...");
+
         let (audio_graph, shared_schedule) = AudioGraph::new(
             self.coll_handle.clone(),
             Shared::clone(&self.host_info),
@@ -124,12 +126,15 @@ impl RustyDAWEngine {
         self.compile_audio_graph();
 
         if let Some(audio_graph) = &self.audio_graph {
+            log::info!("Successfully activated RustyDAW engine");
+
             Ok((
                 shared_schedule,
                 audio_graph.graph_in_node_id().clone(),
                 audio_graph.graph_out_node_id().clone(),
             ))
         } else {
+            // If this happens then we did something very wrong.
             panic!("Unexpected error: Empty audio graph failed to compile a schedule.");
         }
     }
@@ -140,9 +145,13 @@ impl RustyDAWEngine {
             return;
         }
 
+        log::info!("Deactivating RustyDAW engine");
+
+        let save_state = self.audio_graph.as_ref().unwrap().collect_save_state();
+
         self.audio_graph = None;
 
-        self.event_tx.send(DAWEngineEvent::EngineDeactivated).unwrap();
+        self.event_tx.send(DAWEngineEvent::EngineDeactivated(save_state)).unwrap();
     }
 
     pub fn restore_audio_graph_from_save_state(&mut self, save_state: &AudioGraphSaveState) {
@@ -150,6 +159,10 @@ impl RustyDAWEngine {
             log::warn!("Cannot restore audio graph from save state: Engine is not active");
             return;
         }
+
+        log::info!("Restoring audio graph from save state...");
+
+        log::debug!("Save state: {:?}", save_state);
 
         self.event_tx.send(DAWEngineEvent::AudioGraphCleared).unwrap();
 
@@ -162,6 +175,8 @@ impl RustyDAWEngine {
         self.compile_audio_graph();
 
         if self.audio_graph.is_some() {
+            log::info!("Restoring audio graph from save state successful");
+
             self.event_tx
                 .send(DAWEngineEvent::AudioGraphRestoredFromSaveState(restored_info))
                 .unwrap();
@@ -175,6 +190,8 @@ impl RustyDAWEngine {
             );
             return;
         }
+
+        log::trace!("Got request for latest audio graph save state");
 
         // TODO: Collect save state in a separate thread?
         let save_state = self.audio_graph.as_mut().unwrap().collect_save_state();
@@ -213,7 +230,6 @@ impl RustyDAWEngine {
         if let Some(mut audio_graph) = self.audio_graph.take() {
             match audio_graph.compile() {
                 Ok(_) => {
-                    log::trace!("Successfully compiled new schedule");
                     self.audio_graph = Some(audio_graph);
                 }
                 Err(e) => {

@@ -142,7 +142,7 @@ impl AudioGraph {
             fallback_to_other_formats,
         ) {
             Ok((plugin, debug_name, format)) => {
-                log::trace!(
+                log::debug!(
                     "Loaded plugin {:?} successfully with format {:?}",
                     &save_state.key,
                     &format
@@ -253,7 +253,7 @@ impl AudioGraph {
 
                 match self.abstract_graph.connect(src_channel_ref, dst_channel_ref) {
                     Ok(()) => {
-                        log::trace!(
+                        log::debug!(
                             "Successfully connected edge: {:?}",
                             Edge {
                                 edge_type: DefaultPortType::Audio,
@@ -316,7 +316,7 @@ impl AudioGraph {
             if let Err(e) = self.abstract_graph.disconnect(src_port, dst_port) {
                 log::error!("Unexpected error while disconnecting edge {:?}: {}", edge, e);
             } else {
-                log::trace!("Successfully disconnected edge: {:?}", edge);
+                log::debug!("Successfully disconnected edge: {:?}", edge);
             }
         } else {
             log::warn!("Could not disconnect edge: {:?}: Edge was not found in the graph", edge);
@@ -524,6 +524,8 @@ impl AudioGraph {
             &mut self.verifier,
         ) {
             Ok(schedule) => {
+                log::debug!("Successfully compiled new schedule: {:?}", &schedule);
+
                 self.shared_schedule.set_new_schedule(schedule, &self.coll_handle);
                 Ok(())
             }
