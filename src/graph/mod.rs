@@ -121,13 +121,15 @@ impl AudioGraph {
             max_frames,
         };
 
-        new_self.connect_edge(&Edge {
-            edge_type: DefaultPortType::Audio,
-            src_plugin_id: new_self.graph_in_node_id.clone(),
-            dst_plugin_id: new_self.graph_out_node_id.clone(),
-            src_channel: 0,
-            dst_channel: 0,
-        }).unwrap();
+        new_self
+            .connect_edge(&Edge {
+                edge_type: DefaultPortType::Audio,
+                src_plugin_id: new_self.graph_in_node_id.clone(),
+                dst_plugin_id: new_self.graph_out_node_id.clone(),
+                src_channel: 0,
+                dst_channel: 0,
+            })
+            .unwrap();
 
         /*
         new_self.connect_edge(&Edge {
@@ -139,10 +141,7 @@ impl AudioGraph {
         }).unwrap();
         */
 
-        (
-            new_self,
-            shared_schedule_clone,
-        )
+        (new_self, shared_schedule_clone)
     }
 
     pub fn graph_in_node_id(&self) -> &PluginInstanceID {

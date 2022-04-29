@@ -7,6 +7,9 @@ mod graph;
 mod host;
 mod plugin_scanner;
 
+#[cfg(feature = "clap-host")]
+mod clap;
+
 pub mod plugin;
 
 pub use engine::RustyDAWEngine;

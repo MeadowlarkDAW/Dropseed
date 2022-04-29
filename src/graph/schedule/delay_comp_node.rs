@@ -16,8 +16,14 @@ impl DelayCompNode {
         input: &SharedAudioBuffer<f32>,
         output: &SharedAudioBuffer<f32>,
     ) {
-        let input = input.borrow(proc_info);
-        let output = output.borrow_mut(proc_info);
+        // Please refer to the "SAFETY NOTE" at the top of the file
+        // `src/graph/audio_buffer_pool.rs` on why it is considered safe to
+        // borrow these buffers.
+        //
+        // In addition the host will never set `proc_info.frames` to something
+        // higher than the maximum frame size (which is what the Vec's initial
+        // capacity is set to).
+        let (input, output) = unsafe { (input.borrow(proc_info), output.borrow_mut(proc_info)) };
 
         if proc_info.frames > self.buf.len() {
             if self.read_pointer == 0 {

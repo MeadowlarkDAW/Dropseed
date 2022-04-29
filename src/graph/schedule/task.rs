@@ -1,13 +1,18 @@
-use clap_sys::process::clap_process;
 use smallvec::SmallVec;
 
 use crate::graph::audio_buffer_pool::SharedAudioBuffer;
 use crate::graph::plugin_pool::{SharedDelayCompNode, SharedPluginAudioThreadInstance};
 use crate::{AudioPortBuffer, ProcInfo, ProcessStatus};
 
+#[cfg(feature = "clap-host")]
+use crate::clap::task::ClapPluginTask;
+
 pub(crate) enum Task {
     InternalPlugin(InternalPluginTask),
+
+    #[cfg(feature = "clap-host")]
     ClapPlugin(ClapPluginTask),
+
     DelayComp(DelayCompTask),
     Sum(SumTask),
     DeactivatedPlugin(DeactivatedPluginTask),
@@ -41,6 +46,7 @@ impl std::fmt::Debug for Task {
 
                 f.finish()
             }
+            #[cfg(feature = "clap-host")]
             Task::ClapPlugin(t) => {
                 let mut f = f.debug_struct("ClapPlugin");
 
@@ -101,6 +107,7 @@ impl Task {
     pub fn process(&mut self, proc_info: &ProcInfo) {
         match self {
             Task::InternalPlugin(task) => task.process(proc_info),
+            #[cfg(feature = "clap-host")]
             Task::ClapPlugin(task) => {
                 todo!()
             }
@@ -122,8 +129,8 @@ impl InternalPluginTask {
     fn process(&mut self, proc_info: &ProcInfo) {
         let Self { plugin, audio_in, audio_out } = self;
 
-        // This is safe because the audio thread counterpart of a plugin is only ever
-        // borrowed mutably in this method. Also, the verifier has verified that no
+        // This is safe because the audio thread counterpart of a plugin is only
+        // ever borrowed in this method. Also, the verifier has verified that no
         // data races exist between parallel audio threads (once we actually have
         // multi-threaded schedules of course).
         let plugin_audio_thread = unsafe { &mut *plugin.shared.plugin.get() };
@@ -168,7 +175,7 @@ pub(crate) struct DelayCompTask {
 
 impl DelayCompTask {
     fn process(&mut self, proc_info: &ProcInfo) {
-        // This is safe because this is only ever borrowed mutably in this method.
+        // This is safe because this is only ever borrowed in this method.
         // Also, the verifier has verified that no data races exist between parallel
         // audio threads (once we actually have multi-threaded schedules of course).
         let delay_comp_node = unsafe { &mut *self.delay_comp_node.shared.get() };
@@ -184,62 +191,66 @@ pub(crate) struct SumTask {
 
 impl SumTask {
     fn process(&mut self, proc_info: &ProcInfo) {
-        let out = self.audio_out.borrow_mut(proc_info);
+        // Please refer to the "SAFETY NOTE" at the top of the file
+        // `src/graph/audio_buffer_pool.rs` on why it is considered safe to
+        // borrow these buffers.
+        //
+        // Also the unchecked indexing is safe because all buffers have a length
+        // greater than or equal to `proc_info.frames`. The host will never set
+        // `proc_info.frames` to a length greater than the allocated size for
+        // the audio buffers.
+        unsafe {
+            let out = self.audio_out.borrow_mut(proc_info);
 
-        // Unroll loops for common number of inputs.
-        match self.audio_in.len() {
-            0 => return,
-            1 => {
-                let in_0 = self.audio_in[0].borrow(proc_info);
-                out.copy_from_slice(&in_0);
-            }
-            2 => {
-                let in_0 = self.audio_in[0].borrow(proc_info);
-                let in_1 = self.audio_in[1].borrow(proc_info);
+            // Unroll loops for common number of inputs.
+            match self.audio_in.len() {
+                0 => return,
+                1 => {
+                    let in_0 = self.audio_in[0].borrow(proc_info);
+                    out.copy_from_slice(&in_0);
+                }
+                2 => {
+                    let in_0 = self.audio_in[0].borrow(proc_info);
+                    let in_1 = self.audio_in[1].borrow(proc_info);
 
-                for i in 0..proc_info.frames {
-                    unsafe {
+                    for i in 0..proc_info.frames {
                         *out.get_unchecked_mut(i) = *in_0.get_unchecked(i) + *in_1.get_unchecked(i);
                     }
                 }
-            }
-            3 => {
-                let in_0 = self.audio_in[0].borrow(proc_info);
-                let in_1 = self.audio_in[1].borrow(proc_info);
-                let in_2 = self.audio_in[2].borrow(proc_info);
+                3 => {
+                    let in_0 = self.audio_in[0].borrow(proc_info);
+                    let in_1 = self.audio_in[1].borrow(proc_info);
+                    let in_2 = self.audio_in[2].borrow(proc_info);
 
-                for i in 0..proc_info.frames {
-                    unsafe {
+                    for i in 0..proc_info.frames {
                         *out.get_unchecked_mut(i) = *in_0.get_unchecked(i)
                             + *in_1.get_unchecked(i)
                             + *in_2.get_unchecked(i);
                     }
                 }
-            }
-            4 => {
-                let in_0 = self.audio_in[0].borrow(proc_info);
-                let in_1 = self.audio_in[1].borrow(proc_info);
-                let in_2 = self.audio_in[2].borrow(proc_info);
-                let in_3 = self.audio_in[3].borrow(proc_info);
+                4 => {
+                    let in_0 = self.audio_in[0].borrow(proc_info);
+                    let in_1 = self.audio_in[1].borrow(proc_info);
+                    let in_2 = self.audio_in[2].borrow(proc_info);
+                    let in_3 = self.audio_in[3].borrow(proc_info);
 
-                for i in 0..proc_info.frames {
-                    unsafe {
+                    for i in 0..proc_info.frames {
                         *out.get_unchecked_mut(i) = *in_0.get_unchecked(i)
                             + *in_1.get_unchecked(i)
                             + *in_2.get_unchecked(i)
                             + *in_3.get_unchecked(i);
                     }
                 }
-            }
-            num_inputs => {
-                let in_0 = self.audio_in[0].borrow(proc_info);
+                num_inputs => {
+                    let in_0 = self.audio_in[0].borrow(proc_info);
 
-                out.copy_from_slice(in_0);
+                    out.copy_from_slice(in_0);
 
-                for i in 1..num_inputs {
-                    let input = self.audio_in[i].borrow(proc_info);
-                    unsafe {
-                        *out.get_unchecked_mut(i) += *input.get_unchecked(i);
+                    for ch_i in 1..num_inputs {
+                        let input = self.audio_in[ch_i].borrow(proc_info);
+                        for smp_i in 0..proc_info.frames {
+                            *out.get_unchecked_mut(smp_i) += *input.get_unchecked(smp_i);
+                        }
                     }
                 }
             }
@@ -254,33 +265,26 @@ pub(crate) struct DeactivatedPluginTask {
 
 impl DeactivatedPluginTask {
     fn process(&mut self, proc_info: &ProcInfo) {
-        // Pass audio through the main ports.
-        for (in_buf, out_buf) in self.audio_through.iter() {
-            let in_buf = in_buf.borrow(proc_info);
-            let out_buf = out_buf.borrow_mut(proc_info);
-            out_buf.copy_from_slice(in_buf);
+        // Please refer to the "SAFETY NOTE" at the top of the file
+        // `src/graph/audio_buffer_pool.rs` on why it is considered safe to
+        // borrow these buffers.
+        //
+        // In addition the host will never set `proc_info.frames` to something
+        // higher than the maximum frame size (which is what the Vec's initial
+        // capacity is set to).
+        unsafe {
+            // Pass audio through the main ports.
+            for (in_buf, out_buf) in self.audio_through.iter() {
+                let in_buf = in_buf.borrow(proc_info);
+                let out_buf = out_buf.borrow_mut(proc_info);
+                out_buf.copy_from_slice(in_buf);
+            }
+
+            // Make sure any extra output buffers are cleared.
+            for b in self.extra_audio_out.iter() {
+                let b = b.borrow_mut(proc_info);
+                b.fill(0.0);
+            }
         }
-
-        // Make sure any extra output buffers are cleared.
-        for b in self.extra_audio_out.iter() {
-            let b = b.borrow_mut(proc_info);
-            b.fill(0.0);
-        }
-    }
-}
-
-pub(crate) struct ClapPluginTask {
-    // TODO: clap processor
-//ports: ClapProcAudioPorts,
-}
-
-impl ClapPluginTask {
-    fn process(&mut self, proc: &mut clap_process) -> ProcessStatus {
-        // Prepare the buffers to be sent to the external plugin.
-        //self.ports.prepare(proc);
-
-        // TODO: process clap plugin
-
-        todo!()
     }
 }
