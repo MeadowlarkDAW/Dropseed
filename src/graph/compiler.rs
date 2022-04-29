@@ -8,6 +8,7 @@ use crate::plugin::ext::audio_ports::MainPortsLayout;
 use crate::plugin_scanner::PluginFormat;
 use crate::AudioPortBuffer;
 
+use super::schedule;
 use super::{
     audio_buffer_pool::{AudioBufferPool, SharedAudioBuffer},
     plugin_pool::PluginInstancePool,
@@ -341,7 +342,7 @@ pub(crate) fn compile_graph(
     plugin_pool.delay_comp_nodes =
         plugin_pool.delay_comp_nodes.drain().filter(|(_, node)| node.active).collect();
 
-    todo!()
+    Ok(new_schedule)
 }
 
 #[derive(Debug)]

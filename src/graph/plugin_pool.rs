@@ -258,7 +258,7 @@ impl PluginInstancePool {
             node_id
         } else {
             new_self.graph_plugins.push(None);
-            NodeRef::new(new_self.graph_plugins.len())
+            NodeRef::new(new_self.graph_plugins.len() - 1)
         };
 
         let graph_in_id = PluginInstanceID {
@@ -297,7 +297,7 @@ impl PluginInstancePool {
             node_id
         } else {
             new_self.graph_plugins.push(None);
-            NodeRef::new(new_self.graph_plugins.len())
+            NodeRef::new(new_self.graph_plugins.len() - 1)
         };
 
         let graph_out_id = PluginInstanceID {
@@ -345,7 +345,7 @@ impl PluginInstancePool {
             node_id
         } else {
             self.graph_plugins.push(None);
-            NodeRef::new(self.graph_plugins.len())
+            NodeRef::new(self.graph_plugins.len() - 1)
         };
 
         let id = PluginInstanceID {

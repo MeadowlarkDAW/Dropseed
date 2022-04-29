@@ -1,6 +1,5 @@
 use basedrop::Shared;
 use crossbeam::channel::Sender;
-use std::collections::hash_map;
 use std::path::PathBuf;
 use std::{collections::HashMap, error::Error};
 
@@ -35,6 +34,8 @@ pub struct ScannedPluginKey {
 }
 
 pub(crate) struct PluginScanner {
+    // TODO: Use a hashmap that performs better with strings that are around 10-30
+    // characters long?
     scanned_plugins: HashMap<ScannedPluginKey, ScannedPluginFactory>,
     plugin_scan_directories: Vec<PathBuf>,
 

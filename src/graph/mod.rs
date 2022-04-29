@@ -81,6 +81,9 @@ impl AudioGraph {
         min_frames: usize,
         max_frames: usize,
     ) -> (Self, SharedSchedule) {
+        assert!(graph_in_channels > 0);
+        assert!(graph_out_channels > 0);
+
         let failed_plugin_debug_name = Shared::new(&coll_handle, String::from("failed_plugin"));
 
         let mut abstract_graph = Graph::default();
@@ -100,24 +103,44 @@ impl AudioGraph {
             &coll_handle,
         );
 
+        let mut new_self = Self {
+            plugin_pool,
+            audio_buffer_pool: AudioBufferPool::new(coll_handle.clone(), max_frames),
+            host_info,
+            verifier: Verifier::new(),
+            abstract_graph,
+            coll_handle,
+            shared_schedule,
+            failed_plugin_debug_name,
+            graph_in_node_id,
+            graph_out_node_id,
+            graph_in_channels,
+            graph_out_channels,
+            sample_rate,
+            min_frames,
+            max_frames,
+        };
+
+        new_self.connect_edge(&Edge {
+            edge_type: DefaultPortType::Audio,
+            src_plugin_id: new_self.graph_in_node_id.clone(),
+            dst_plugin_id: new_self.graph_out_node_id.clone(),
+            src_channel: 0,
+            dst_channel: 0,
+        }).unwrap();
+
+        /*
+        new_self.connect_edge(&Edge {
+            edge_type: DefaultPortType::Audio,
+            src_plugin_id: new_self.graph_in_node_id.clone(),
+            dst_plugin_id: new_self.graph_out_node_id.clone(),
+            src_channel: 1,
+            dst_channel: 1,
+        }).unwrap();
+        */
+
         (
-            Self {
-                plugin_pool,
-                audio_buffer_pool: AudioBufferPool::new(coll_handle.clone(), max_frames),
-                host_info,
-                verifier: Verifier::new(),
-                abstract_graph,
-                coll_handle,
-                shared_schedule,
-                failed_plugin_debug_name,
-                graph_in_node_id,
-                graph_out_node_id,
-                graph_in_channels,
-                graph_out_channels,
-                sample_rate,
-                min_frames,
-                max_frames,
-            },
+            new_self,
             shared_schedule_clone,
         )
     }

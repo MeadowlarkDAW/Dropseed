@@ -233,6 +233,8 @@ impl RustyDAWEngine {
                     self.audio_graph = Some(audio_graph);
                 }
                 Err(e) => {
+                    log::error!("{}", e);
+
                     self.event_tx
                         .send(DAWEngineEvent::EngineDeactivatedBecauseGraphIsInvalid(e))
                         .unwrap();

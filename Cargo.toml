@@ -31,3 +31,6 @@ crossbeam = "0.8"
 fnv = "1.0"
 log = "0.4"
 cpal = { version = "0.13", optional = true }
+
+[dev-dependencies]
+mowl = "2.1"
