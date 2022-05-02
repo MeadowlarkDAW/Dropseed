@@ -1,13 +1,11 @@
 use audio_graph::{DefaultPortType, Graph, NodeRef, PortRef};
 use basedrop::Shared;
-use crossbeam::channel::Sender;
 use fnv::FnvHashMap;
 use rusty_daw_core::SampleRate;
 use smallvec::SmallVec;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{cell::UnsafeCell, hash::Hash};
 
-use crate::event::DAWEngineEvent;
 use crate::host::{Host, HostInfo};
 use crate::plugin::ext::audio_ports::AudioPortsExtension;
 use crate::plugin::{PluginAudioThread, PluginMainThread, PluginSaveState};
@@ -107,8 +105,6 @@ pub(crate) struct PluginInstanceChannel {
     pub restart_requested: AtomicBool,
     pub process_requested: AtomicBool,
     pub callback_requested: AtomicBool,
-
-    active: AtomicBool,
     // TODO: parameter stuff
 }
 
@@ -118,7 +114,6 @@ impl PluginInstanceChannel {
             restart_requested: AtomicBool::new(false),
             process_requested: AtomicBool::new(false),
             callback_requested: AtomicBool::new(false),
-            active: AtomicBool::new(false),
         }
     }
 }
@@ -483,13 +478,7 @@ impl PluginInstancePool {
         let node_i: usize = id.node_id.into();
         if let Some(plugin_instance) = &mut self.graph_plugins[node_i] {
             if let Some(loaded_plugin) = &mut plugin_instance.loaded {
-                if loaded_plugin
-                    .main_thread
-                    .host_request
-                    .plugin_channel
-                    .active
-                    .load(Ordering::Relaxed)
-                {
+                if loaded_plugin.audio_thread.is_some() {
                     log::warn!("Tried to activate plugin that is already active");
 
                     // Cannot activate plugin that is already active.
@@ -577,12 +566,6 @@ impl PluginInstancePool {
                             &self.coll_handle,
                         ));
 
-                        loaded_plugin
-                            .main_thread
-                            .host_request
-                            .plugin_channel
-                            .active
-                            .store(true, Ordering::Relaxed);
                         loaded_plugin.save_state.activated = true;
 
                         log::debug!("Successfully activated plugin instance {:?}", &id);
@@ -615,13 +598,6 @@ impl PluginInstancePool {
                     .plugin
                     .deactivate(&loaded_plugin.main_thread.host_request);
 
-                loaded_plugin
-                    .main_thread
-                    .host_request
-                    .plugin_channel
-                    .active
-                    .store(false, Ordering::Relaxed);
-
                 loaded_plugin.audio_thread = None;
             }
         }
@@ -642,12 +618,7 @@ impl PluginInstancePool {
         let node_i: usize = id.node_id.into();
         if let Some(plugin_instance) = &self.graph_plugins[node_i] {
             if let Some(loaded_plugin) = plugin_instance.loaded.as_ref() {
-                Ok(loaded_plugin
-                    .main_thread
-                    .host_request
-                    .plugin_channel
-                    .active
-                    .load(Ordering::Relaxed))
+                Ok(loaded_plugin.audio_thread.is_some())
             } else {
                 Ok(false)
             }

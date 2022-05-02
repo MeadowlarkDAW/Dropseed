@@ -29,21 +29,22 @@ pub struct PluginDescriptor {
     /// eg: "Spicy Synth"
     pub name: String,
 
-    /// The vendor of this plugin.
-    ///
-    /// eg: "RustyDAW"
-    pub vendor: String,
-
     /// The version of this plugin.
     ///
     /// eg: "1.4.4" or "1.1.2_beta"
     pub version: String,
 
+    /// The vendor of this plugin.
+    ///
+    /// eg: "RustyDAW"
+    pub vendor: Option<String>,
+
     /// A displayable short description of this plugin.
     ///
     /// eg: "Create flaming-hot sounds!"
-    pub description: String,
+    pub description: Option<String>,
 
+    /* TODO
     /// Arbitrary list of keywords, separated by `;'.
     ///
     /// They can be matched by the host search engine and used to classify the plugin.
@@ -61,7 +62,7 @@ pub struct PluginDescriptor {
     /// - "compressor;analog;character;mono"
     /// - "reverb;plate;stereo"
     pub features: Option<String>,
-
+    */
     /// The url to the product page of this plugin.
     ///
     /// Set to `None` if there is no product page.

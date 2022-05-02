@@ -1,16 +1,14 @@
-use crate::plugin::process_info::ProcessStatus;
+use crate::{plugin::process_info::ProcessStatus, ProcInfo};
 
 use super::process::ClapProcess;
 
 pub(crate) struct ClapPluginTask {
-    // TODO: clap processor
-//ports: ClapProcAudioPorts,
+    clap_process: ClapProcess,
 }
 
 impl ClapPluginTask {
-    fn process(&mut self, proc: &mut ClapProcess) {
-        // Prepare the buffers to be sent to the external plugin.
-        //self.ports.prepare(proc);
+    fn process(&mut self, proc_info: &ProcInfo) {
+        self.clap_process.update_frames(proc_info);
 
         // TODO: process clap plugin
 
