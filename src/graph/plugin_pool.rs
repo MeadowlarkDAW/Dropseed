@@ -6,7 +6,7 @@ use smallvec::SmallVec;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{cell::UnsafeCell, hash::Hash};
 
-use crate::host::{Host, HostInfo};
+use crate::host::{HostInfo, HostRequest};
 use crate::plugin::ext::audio_ports::AudioPortsExtension;
 use crate::plugin::{PluginAudioThread, PluginMainThread, PluginSaveState};
 use crate::plugin_scanner::PluginFormat;
@@ -120,14 +120,14 @@ impl PluginInstanceChannel {
 
 pub(crate) struct PluginMainThreadInstance {
     pub plugin: Box<dyn PluginMainThread>,
-    pub host_request: Host,
+    pub host_request: HostRequest,
 
     id: PluginInstanceID,
 }
 
 pub(crate) struct PluginAudioThreadInstance {
     pub plugin: UnsafeCell<Box<dyn PluginAudioThread>>,
-    pub host_request: Host,
+    pub host_request: HostRequest,
     pub last_process_status: UnsafeCell<ProcessStatus>,
 }
 
@@ -141,7 +141,7 @@ impl SharedPluginAudioThreadInstance {
     fn new(
         plugin: Box<dyn PluginAudioThread>,
         id: PluginInstanceID,
-        host_request: Host,
+        host_request: HostRequest,
         coll_handle: &basedrop::Handle,
     ) -> Self {
         Self {
@@ -330,7 +330,7 @@ impl PluginInstancePool {
 
     pub fn add_graph_plugin(
         &mut self,
-        plugin: Option<Box<dyn PluginMainThread>>,
+        plugin_and_host_request: Option<(Box<dyn PluginMainThread>, HostRequest)>,
         mut save_state: PluginSaveState,
         debug_name: Shared<String>,
         abstract_graph: &mut Graph<PluginInstanceID, PortID, DefaultPortType>,
@@ -353,28 +353,20 @@ impl PluginInstancePool {
         // If this isn't right then I did something wrong.
         assert_eq!(node_ref, id.node_id);
 
-        let host_request = Host {
-            info: Shared::clone(&self.host_info),
-            plugin_channel: Shared::new(&self.coll_handle, PluginInstanceChannel::new()),
-        };
+        let (main_thread, audio_ports_ext) =
+            if let Some((plugin, host_request)) = plugin_and_host_request {
+                let audio_ports_ext = plugin.audio_ports_extension(&host_request);
+                let (num_audio_in, num_audio_out) = audio_ports_ext.total_in_out_channels();
 
-        let (main_thread, audio_ports_ext) = if let Some(plugin) = plugin {
-            let audio_ports_ext = plugin.audio_ports_extension(&host_request);
-            let (num_audio_in, num_audio_out) = audio_ports_ext.total_in_out_channels();
+                save_state.audio_in_out_channels = (num_audio_in as u16, num_audio_out as u16);
 
-            save_state.audio_in_out_channels = (num_audio_in as u16, num_audio_out as u16);
-
-            (
-                Some(PluginMainThreadInstance {
-                    plugin,
-                    host_request: host_request.clone(),
-                    id: id.clone(),
-                }),
-                Some(audio_ports_ext),
-            )
-        } else {
-            (None, None)
-        };
+                (
+                    Some(PluginMainThreadInstance { plugin, host_request, id: id.clone() }),
+                    Some(audio_ports_ext),
+                )
+            } else {
+                (None, None)
+            };
 
         save_state.activated = false;
 

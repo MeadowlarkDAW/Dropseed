@@ -1,10 +1,11 @@
 use basedrop::Shared;
 use crossbeam::channel::Sender;
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::{collections::HashMap, error::Error};
 
 use crate::event::{DAWEngineEvent, PluginScannerEvent};
-use crate::host::HostInfo;
+use crate::host::{HostInfo, HostRequest};
 use crate::plugin::{PluginDescriptor, PluginFactory, PluginMainThread};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -97,12 +98,7 @@ impl PluginScanner {
         &mut self,
         mut factory: Box<dyn PluginFactory>,
     ) -> Result<ScannedPluginKey, Box<dyn Error>> {
-        let description = match factory.entry_init(None) {
-            Ok(d) => d,
-            Err(e) => {
-                return Err(e);
-            }
-        };
+        let description = factory.description();
 
         let key =
             ScannedPluginKey { rdn: description.id.to_string(), format: PluginFormat::Internal };
@@ -126,15 +122,32 @@ impl PluginScanner {
     pub(crate) fn create_plugin(
         &mut self,
         key: &ScannedPluginKey,
-        host_info: Shared<HostInfo>,
+        host_request: &HostRequest,
         fallback_to_other_formats: bool,
     ) -> Result<(Box<dyn PluginMainThread>, Shared<String>, PluginFormat), NewPluginInstanceError>
     {
+        let check_for_invalid_host_callbacks = |host_request: &HostRequest, id: &String| {
+            if host_request.plugin_channel.restart_requested.load(Ordering::Relaxed) {
+                host_request.plugin_channel.restart_requested.store(false, Ordering::Relaxed);
+                log::warn!("Plugin with ID {} attempted to call host_request.request_restart() during PluginFactory::new(). Request was ignored.", id);
+            }
+            if host_request.plugin_channel.process_requested.load(Ordering::Relaxed) {
+                host_request.plugin_channel.process_requested.store(false, Ordering::Relaxed);
+                log::warn!("Plugin with ID {} attempted to call host_request.request_process() during PluginFactory::new(). Request was ignored.", id);
+            }
+            if host_request.plugin_channel.callback_requested.load(Ordering::Relaxed) {
+                host_request.plugin_channel.callback_requested.store(false, Ordering::Relaxed);
+                log::warn!("Plugin with ID {} attempted to call host_request.request_callback() during PluginFactory::new(). Request was ignored.", id);
+            }
+        };
+
         if let Some(factory) = self.scanned_plugins.get_mut(key) {
-            match factory.factory.new(host_info, &self.coll_handle) {
+            let res = match factory.factory.new(host_request, &self.coll_handle) {
                 Ok(p) => Ok((p, Shared::clone(&factory.rdn), factory.format)),
                 Err(e) => Err(NewPluginInstanceError::InstantiationError(key.rdn.clone(), e)),
-            }
+            };
+            check_for_invalid_host_callbacks(host_request, &factory.rdn);
+            res
         } else {
             // First check if the plugin has an internal format.
             if key.format != PluginFormat::Internal {
@@ -143,17 +156,14 @@ impl PluginScanner {
 
                 if let Some(factory) = self.scanned_plugins.get_mut(&internal_key) {
                     if fallback_to_other_formats {
-                        match factory.factory.new(host_info, &self.coll_handle) {
-                            Ok(p) => {
-                                return Ok((p, Shared::clone(&factory.rdn), PluginFormat::Internal))
-                            }
+                        let res = match factory.factory.new(host_request, &self.coll_handle) {
+                            Ok(p) => Ok((p, Shared::clone(&factory.rdn), PluginFormat::Internal)),
                             Err(e) => {
-                                return Err(NewPluginInstanceError::InstantiationError(
-                                    key.rdn.clone(),
-                                    e,
-                                ))
+                                Err(NewPluginInstanceError::InstantiationError(key.rdn.clone(), e))
                             }
-                        }
+                        };
+                        check_for_invalid_host_callbacks(host_request, &factory.rdn);
+                        return res;
                     } else {
                         return Err(NewPluginInstanceError::FormatNotFound(
                             key.rdn.clone(),
@@ -170,17 +180,14 @@ impl PluginScanner {
 
                 if let Some(factory) = self.scanned_plugins.get_mut(&clap_key) {
                     if fallback_to_other_formats {
-                        match factory.factory.new(host_info, &self.coll_handle) {
-                            Ok(p) => {
-                                return Ok((p, Shared::clone(&factory.rdn), PluginFormat::Clap))
-                            }
+                        let res = match factory.factory.new(host_request, &self.coll_handle) {
+                            Ok(p) => Ok((p, Shared::clone(&factory.rdn), PluginFormat::Clap)),
                             Err(e) => {
-                                return Err(NewPluginInstanceError::InstantiationError(
-                                    key.rdn.clone(),
-                                    e,
-                                ))
+                                Err(NewPluginInstanceError::InstantiationError(key.rdn.clone(), e))
                             }
-                        }
+                        };
+                        check_for_invalid_host_callbacks(host_request, &factory.rdn);
+                        return res;
                     } else {
                         return Err(NewPluginInstanceError::FormatNotFound(
                             key.rdn.clone(),

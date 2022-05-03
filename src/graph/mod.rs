@@ -14,7 +14,7 @@ mod schedule;
 mod verifier;
 
 use audio_buffer_pool::AudioBufferPool;
-use plugin_pool::PluginInstancePool;
+use plugin_pool::{PluginInstanceChannel, PluginInstancePool};
 use schedule::Schedule;
 use verifier::Verifier;
 
@@ -43,6 +43,7 @@ use crate::{
     host::HostInfo,
     plugin::PluginSaveState,
     plugin_scanner::{NewPluginInstanceError, PluginScanner},
+    HostRequest,
 };
 
 use self::compiler::compile_graph;
@@ -158,9 +159,14 @@ impl AudioGraph {
         plugin_scanner: &mut PluginScanner,
         fallback_to_other_formats: bool,
     ) -> (PluginInstanceID, Result<(), NewPluginInstanceError>) {
-        let (plugin, debug_name, format, res) = match plugin_scanner.create_plugin(
+        let host_request = HostRequest {
+            info: Shared::clone(&self.host_info),
+            plugin_channel: Shared::new(&self.coll_handle, PluginInstanceChannel::new()),
+        };
+
+        let (plugin_and_host_request, debug_name, format, res) = match plugin_scanner.create_plugin(
             &save_state.key,
-            Shared::clone(&self.host_info),
+            &host_request,
             fallback_to_other_formats,
         ) {
             Ok((plugin, debug_name, format)) => {
@@ -170,7 +176,7 @@ impl AudioGraph {
                     &format
                 );
 
-                (Some(plugin), debug_name, format, Ok(()))
+                (Some((plugin, host_request)), debug_name, format, Ok(()))
             }
             Err(e) => {
                 log::error!("Failed to load plugin {:?} from save state: {}", &save_state.key, e);
@@ -183,7 +189,7 @@ impl AudioGraph {
         new_save_state.key.format = format;
 
         let instance_id = self.plugin_pool.add_graph_plugin(
-            plugin,
+            plugin_and_host_request,
             new_save_state,
             debug_name,
             &mut self.abstract_graph,

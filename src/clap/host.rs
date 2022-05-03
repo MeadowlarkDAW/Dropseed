@@ -6,10 +6,10 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crate::{graph::plugin_pool::PluginInstanceChannel, host::Host};
+use crate::{graph::plugin_pool::PluginInstanceChannel, host::HostRequest};
 
-pub(crate) struct ClapHost {
-    host: Host,
+pub(crate) struct ClapHostRequest {
+    host_request: HostRequest,
     // We are storing this as a slice so we can get a raw pointer
     // for external plugins.
     raw: Shared<[RawClapHost; 1]>,
@@ -18,13 +18,13 @@ pub(crate) struct ClapHost {
     host_data: Shared<[HostData; 1]>,
 }
 
-impl ClapHost {
-    pub(crate) fn new(host: Host, coll_handle: &basedrop::Handle) -> Self {
+impl ClapHostRequest {
+    pub(crate) fn new(host_request: HostRequest, coll_handle: &basedrop::Handle) -> Self {
         let host_data = Shared::new(
             coll_handle,
             [HostData {
                 plug_did_init: Arc::new(AtomicBool::new(false)),
-                plugin_channel: Shared::clone(&host.plugin_channel),
+                plugin_channel: Shared::clone(&host_request.plugin_channel),
             }],
         );
 
@@ -41,10 +41,10 @@ impl ClapHost {
 
                 host_data: (*host_data).as_ptr() as *mut c_void,
 
-                name: host.info._c_name.as_ptr(),
-                vendor: host.info._c_vendor.as_ptr(),
-                url: host.info._c_url.as_ptr(),
-                version: host.info._c_version.as_ptr(),
+                name: host_request.info._c_name.as_ptr(),
+                vendor: host_request.info._c_vendor.as_ptr(),
+                url: host_request.info._c_url.as_ptr(),
+                version: host_request.info._c_version.as_ptr(),
 
                 // This is safe because these functions are static.
                 get_extension,
@@ -54,7 +54,7 @@ impl ClapHost {
             }],
         );
 
-        Self { host, raw, host_data }
+        Self { host_request, raw, host_data }
     }
 
     // SAFETY: This is safe because the data lives inside this struct,
@@ -68,10 +68,10 @@ impl ClapHost {
     }
 }
 
-impl Clone for ClapHost {
+impl Clone for ClapHostRequest {
     fn clone(&self) -> Self {
         Self {
-            host: self.host.clone(),
+            host_request: self.host_request.clone(),
             raw: Shared::clone(&self.raw),
             host_data: Shared::clone(&self.host_data),
         }

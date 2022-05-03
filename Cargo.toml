@@ -15,7 +15,7 @@ readme = "README.md"
 
 [features]
 default = ["clap-host", "cpal-backend"]
-clap-host = ["clap-sys"]
+clap-host = ["clap-sys", "libloading"]
 cpal-backend = ["cpal"]
 cpal-asio = ["cpal/asio"]
 
@@ -32,6 +32,7 @@ crossbeam = "0.8"
 fnv = "1.0"
 log = "0.4"
 cpal = { version = "0.13", optional = true }
+libloading = { version = "0.7", optional = true }
 
 [dev-dependencies]
 mowl = "2.1"

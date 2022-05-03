@@ -3,7 +3,7 @@ use rusty_daw_core::SampleRate;
 use std::error::Error;
 use std::path::PathBuf;
 
-use crate::host::{Host, HostInfo};
+use crate::host::{HostInfo, HostRequest};
 use crate::AudioPortBuffer;
 
 pub mod ext;
@@ -81,33 +81,18 @@ pub struct PluginDescriptor {
 
 /// The methods of an audio plugin which are used to create new instances of the plugin.
 pub trait PluginFactory {
-    /// This function is always called first and only once.
-    ///
-    /// * `plugin_path` - The path to the shared library that was loaded. This will be `None`
-    /// for internal plugins.
-    ///
-    /// This method should be as fast as possible, in order to perform very quick scan of the plugin
-    /// descriptors.
-    ///
-    /// It is forbidden to display graphical user interface in this call.
-    /// It is forbidden to perform user inter-action in this call.
-    ///
-    /// If the initialization depends upon expensive computation, maybe try to do them ahead of time
-    /// and cache the result.
-    #[allow(unused_attributes)]
-    fn entry_init(
-        &mut self,
-        plugin_path: Option<&PathBuf>,
-    ) -> Result<PluginDescriptor, Box<dyn Error>>;
+    fn description(&self) -> PluginDescriptor;
 
     /// Create a new instance of this plugin.
+    ///
+    /// **NOTE**: The plugin is **NOT** allowed to use the host callbacks in this method.
     ///
     /// A `basedrop` collector handle is provided for realtime-safe garbage collection.
     ///
     /// `[main-thread]`
     fn new(
         &mut self,
-        host_info: Shared<HostInfo>,
+        host: &HostRequest,
         coll_handle: &basedrop::Handle,
     ) -> Result<Box<dyn PluginMainThread>, Box<dyn Error>>;
 }
@@ -119,11 +104,19 @@ pub trait PluginMainThread {
     ///
     /// A `basedrop` collector handle is provided for realtime-safe garbage collection.
     ///
-    /// By default this does nothing.
+    /// If this returns an error, then the host will discard this plugin instance.
+    ///
+    /// By default this returns `Ok(())`.
     ///
     /// `[main-thread & !active_state]`
     #[allow(unused)]
-    fn init(&mut self, host: &Host, coll_handle: &basedrop::Handle) {}
+    fn init(
+        &mut self,
+        host_request: &HostRequest,
+        coll_handle: &basedrop::Handle,
+    ) -> Result<(), Box<dyn Error>> {
+        Ok(())
+    }
 
     /// Activate the plugin, and return the `PluginAudioThread` counterpart.
     ///
@@ -141,7 +134,7 @@ pub trait PluginMainThread {
         sample_rate: SampleRate,
         min_frames: usize,
         max_frames: usize,
-        host: &Host,
+        host_request: &HostRequest,
         coll_handle: &basedrop::Handle,
     ) -> Result<Box<dyn PluginAudioThread>, Box<dyn Error>>;
 
@@ -149,7 +142,7 @@ pub trait PluginMainThread {
     /// counterpart has/will be dropped.
     ///
     /// `[main-thread & active_state]`
-    fn deactivate(&mut self, host: &Host);
+    fn deactivate(&mut self, host_request: &HostRequest);
 
     /// Called by the host on the main thread in response to a previous call to `host.request_callback()`.
     ///
@@ -157,7 +150,7 @@ pub trait PluginMainThread {
     ///
     /// [main-thread]
     #[allow(unused)]
-    fn on_main_thread(&mut self, host: &Host) {}
+    fn on_main_thread(&mut self, host_request: &HostRequest) {}
 
     /// An optional extension that describes the configuration of audio ports on this plugin instance.
     ///
@@ -167,7 +160,10 @@ pub trait PluginMainThread {
     ///
     /// [main-thread & !active_state]
     #[allow(unused)]
-    fn audio_ports_extension(&self, host: &Host) -> ext::audio_ports::AudioPortsExtension {
+    fn audio_ports_extension(
+        &self,
+        host_request: &HostRequest,
+    ) -> ext::audio_ports::AudioPortsExtension {
         ext::audio_ports::AudioPortsExtension::default()
     }
 }
@@ -183,7 +179,7 @@ pub trait PluginAudioThread: Send + Sync + 'static {
     ///
     /// `[audio-thread & active_state & !processing_state]`
     #[allow(unused)]
-    fn start_processing(&mut self, host: &Host) -> Result<(), ()> {
+    fn start_processing(&mut self, host_request: &HostRequest) -> Result<(), ()> {
         Ok(())
     }
 
@@ -193,7 +189,7 @@ pub trait PluginAudioThread: Send + Sync + 'static {
     ///
     /// `[audio-thread & active_state & processing_state]`
     #[allow(unused)]
-    fn stop_processing(&mut self, host: &Host) {}
+    fn stop_processing(&mut self, host_request: &HostRequest) {}
 
     /// Process audio and events.
     ///
@@ -203,6 +199,6 @@ pub trait PluginAudioThread: Send + Sync + 'static {
         info: &ProcInfo,
         audio_in: &[AudioPortBuffer],
         audio_out: &mut [AudioPortBuffer],
-        host: &Host,
+        host_request: &HostRequest,
     ) -> ProcessStatus;
 }
