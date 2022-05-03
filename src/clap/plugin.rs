@@ -22,7 +22,7 @@ use crate::host::HostRequest;
 use crate::plugin::{ext, PluginAudioThread, PluginDescriptor, PluginFactory, PluginMainThread};
 use crate::{AudioPortBuffer, ProcInfo, ProcessStatus};
 
-struct SharedClapPluginFactory {
+struct SharedClapLib {
     // We hold on to this to make sure the host callback stays alive for as long as a
     // reference to this struct exists.
     _lib: libloading::Library,
@@ -33,12 +33,12 @@ struct SharedClapPluginFactory {
 
 // This is safe because we only ever dereference the contained pointers in
 // the main thread.
-unsafe impl Send for SharedClapPluginFactory {}
+unsafe impl Send for SharedClapLib {}
 // This is safe because we only ever dereference the contained pointers in
 // the main thread.
-unsafe impl Sync for SharedClapPluginFactory {}
+unsafe impl Sync for SharedClapLib {}
 
-impl Drop for SharedClapPluginFactory {
+impl Drop for SharedClapLib {
     fn drop(&mut self) {
         // Safe because the constructor made sure that this is a valid pointer.
         unsafe {
@@ -48,7 +48,7 @@ impl Drop for SharedClapPluginFactory {
 }
 
 pub(crate) struct ClapPluginFactory {
-    shared: Shared<SharedClapPluginFactory>,
+    shared_lib: Shared<SharedClapLib>,
     descriptor: PluginDescriptor,
     id: Shared<String>,
     c_id: CString,
@@ -105,8 +105,8 @@ impl ClapPluginFactory {
             .into());
         }
 
-        let shared_factory =
-            Shared::new(coll_handle, SharedClapPluginFactory { _lib: lib, raw_entry, raw_factory });
+        let shared_lib =
+            Shared::new(coll_handle, SharedClapLib { _lib: lib, raw_entry, raw_factory });
 
         // Safe because this is the correct format of this function as described in the
         // CLAP spec.
@@ -133,7 +133,7 @@ impl ClapPluginFactory {
 
             let c_id = CString::new(descriptor.id.clone()).unwrap();
 
-            factories.push(Self { shared: Shared::clone(&shared_factory), descriptor, id, c_id });
+            factories.push(Self { shared_lib: Shared::clone(&shared_lib), descriptor, id, c_id });
         }
 
         Ok(factories)
@@ -160,8 +160,8 @@ impl PluginFactory for ClapPluginFactory {
         let clap_host_request = ClapHostRequest::new(host_request.clone(), coll_handle);
 
         let raw_plugin = unsafe {
-            ((&*self.shared.raw_factory).create_plugin)(
-                self.shared.raw_factory,
+            ((&*self.shared_lib.raw_factory).create_plugin)(
+                self.shared_lib.raw_factory,
                 clap_host_request.get_raw(),
                 self.c_id.as_ptr(),
             )
@@ -181,6 +181,7 @@ impl PluginFactory for ClapPluginFactory {
                 raw_plugin,
                 id: Shared::clone(&self.id),
                 _host_request: clap_host_request,
+                _shared_lib: Shared::clone(&self.shared_lib),
             },
         );
 
@@ -192,9 +193,10 @@ struct SharedClapPluginInstance {
     raw_plugin: *const RawClapPlugin,
     id: Shared<String>,
 
-    // We hold on to this to make sure the host callback stays alive for as long as a
+    // We hold on to these to make sure these stay alive for as long as a
     // reference to this struct exists.
     _host_request: ClapHostRequest,
+    _shared_lib: Shared<SharedClapLib>,
 }
 
 impl Drop for SharedClapPluginInstance {
