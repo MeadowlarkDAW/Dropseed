@@ -16,7 +16,7 @@ use crate::graph::{
 use crate::plugin::PluginFactory;
 use crate::plugin_scanner::PluginScanner;
 use crate::{
-    garbage_collector::run_garbage_collector_thread, host::HostInfo,
+    garbage_collector::run_garbage_collector_thread, host_request::HostInfo,
     plugin_scanner::ScannedPluginKey,
 };
 
@@ -74,21 +74,19 @@ impl RustyDAWEngine {
 
     pub fn get_graph_input_node_key(&self) {}
 
-    pub fn add_plugin_directory<P: Into<PathBuf>>(&mut self, path: P) {
+    #[cfg(feature = "clap-host")]
+    pub fn add_clap_scan_directory<P: Into<PathBuf>>(&mut self, path: P) {
         let path: PathBuf = path.into();
-        if self.plugin_scanner.add_plugin_scan_directory(path.clone()) {
+        if self.plugin_scanner.add_clap_scan_directory(path.clone()) {
             self.event_tx.send(PluginScannerEvent::ScanPathAdded(path).into()).unwrap();
-        } else {
-            log::warn!("Plugin scan path already added: {:?}", &path);
         }
     }
 
-    pub fn remove_plugin_directory<P: Into<PathBuf>>(&mut self, path: P) {
+    #[cfg(feature = "clap-host")]
+    pub fn remove_clap_scan_directory<P: Into<PathBuf>>(&mut self, path: P) {
         let path: PathBuf = path.into();
-        if self.plugin_scanner.remove_plugin_scan_directory(path.clone()) {
+        if self.plugin_scanner.remove_clap_scan_directory(path.clone()) {
             self.event_tx.send(PluginScannerEvent::ScanPathRemoved(path).into()).unwrap();
-        } else {
-            log::warn!("Plugin scan path already removed: {:?}", &path);
         }
     }
 

@@ -3,7 +3,7 @@ use std::cell::UnsafeCell;
 use basedrop::{Shared, SharedCell};
 use smallvec::SmallVec;
 
-use crate::host::HostInfo;
+use crate::host_request::HostInfo;
 use crate::ProcInfo;
 
 use super::audio_buffer_pool::SharedAudioBuffer;

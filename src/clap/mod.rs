@@ -1,4 +1,4 @@
-pub(crate) mod host;
+pub(crate) mod host_request;
 pub(crate) mod plugin;
 pub(crate) mod process;
 pub(crate) mod task;

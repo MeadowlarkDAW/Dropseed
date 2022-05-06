@@ -17,8 +17,8 @@ use clap_sys::process::{
 use clap_sys::string_sizes::CLAP_PATH_SIZE;
 
 use super::c_char_helpers::c_char_ptr_to_maybe_str;
-use super::host::ClapHostRequest;
-use crate::host::HostRequest;
+use super::host_request::ClapHostRequest;
+use crate::host_request::HostRequest;
 use crate::plugin::{ext, PluginAudioThread, PluginDescriptor, PluginFactory, PluginMainThread};
 use crate::{AudioPortBuffer, ProcInfo, ProcessStatus};
 
@@ -129,6 +129,8 @@ impl ClapPluginFactory {
 
             let descriptor = parse_clap_plugin_descriptor(raw_descriptor, plugin_path, i)?;
 
+            dbg!(&descriptor);
+
             let id = Shared::new(coll_handle, descriptor.id.clone());
 
             let c_id = CString::new(descriptor.id.clone()).unwrap();
@@ -137,6 +139,14 @@ impl ClapPluginFactory {
         }
 
         Ok(factories)
+    }
+
+    pub fn descriptor(&self) -> &PluginDescriptor {
+        &self.descriptor
+    }
+
+    pub fn id(&self) -> Shared<String> {
+        Shared::clone(&self.id)
     }
 }
 

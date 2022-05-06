@@ -6,7 +6,7 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crate::{graph::plugin_pool::PluginInstanceChannel, host::HostRequest};
+use crate::{graph::plugin_pool::PluginInstanceChannel, host_request::HostRequest};
 
 pub(crate) struct ClapHostRequest {
     host_request: HostRequest,

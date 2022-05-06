@@ -3,7 +3,7 @@ use rusty_daw_core::SampleRate;
 use std::error::Error;
 use std::path::PathBuf;
 
-use crate::host::{HostInfo, HostRequest};
+use crate::host_request::{HostInfo, HostRequest};
 use crate::AudioPortBuffer;
 
 pub mod ext;

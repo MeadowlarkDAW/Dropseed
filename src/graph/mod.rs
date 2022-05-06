@@ -40,7 +40,7 @@ impl PortID {
 }
 
 use crate::{
-    host::HostInfo,
+    host_request::HostInfo,
     plugin::PluginSaveState,
     plugin_scanner::{NewPluginInstanceError, PluginScanner},
     HostRequest,

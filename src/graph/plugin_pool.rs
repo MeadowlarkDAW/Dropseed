@@ -6,7 +6,7 @@ use smallvec::SmallVec;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{cell::UnsafeCell, hash::Hash};
 
-use crate::host::{HostInfo, HostRequest};
+use crate::host_request::{HostInfo, HostRequest};
 use crate::plugin::ext::audio_ports::AudioPortsExtension;
 use crate::plugin::{PluginAudioThread, PluginMainThread, PluginSaveState};
 use crate::plugin_scanner::PluginFormat;
