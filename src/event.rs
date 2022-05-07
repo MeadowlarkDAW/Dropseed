@@ -2,8 +2,9 @@ use std::path::PathBuf;
 
 use crate::{
     graph::{
-        AudioGraphRestoredInfo, AudioGraphSaveState, GraphCompilerError, PluginActivatedInfo,
-        PluginInstanceID,
+        AudioGraphRestoredInfo, AudioGraphSaveState, GraphCompilerError, InsertPluginBetweenError,
+        InsertPluginBetweenRes, NewPluginRes, PluginActivatedInfo, PluginInstanceID,
+        RemovePluginBetweenError, RemovePluginBetweenRes,
     },
     plugin_scanner::RescanPluginDirectoriesRes,
 };
@@ -50,6 +51,11 @@ pub enum DAWEngineEvent {
     /// in the audio graph compiler causes the audio graph to be in an invalid
     /// state, resulting in the audio engine stopping.
     NewSaveState(AudioGraphSaveState),
+
+    PluginRemoved(PluginInstanceID),
+
+    PluginInsertedBetween(InsertPluginBetweenRes),
+    PluginRemovedBetween(RemovePluginBetweenRes),
 
     /// The given plugin successfully restarted. Make sure your UI updates the
     /// port configuration on this plugin.

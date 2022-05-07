@@ -1,3 +1,4 @@
+use audio_graph::DefaultPortType;
 use basedrop::{Collector, Shared};
 use crossbeam::channel::{self, Receiver, Sender};
 use rusty_daw_core::SampleRate;
@@ -11,9 +12,9 @@ use std::time::Duration;
 
 use crate::event::{DAWEngineEvent, PluginScannerEvent};
 use crate::graph::{
-    AudioGraph, AudioGraphSaveState, PluginActivatedInfo, PluginInstanceID, SharedSchedule,
+    AudioGraph, AudioGraphSaveState, Edge, PluginActivatedInfo, PluginInstanceID, SharedSchedule,
 };
-use crate::plugin::PluginFactory;
+use crate::plugin::{PluginFactory, PluginSaveState};
 use crate::plugin_scanner::PluginScanner;
 use crate::{
     garbage_collector::run_garbage_collector_thread, host_request::HostInfo,
@@ -109,7 +110,7 @@ impl RustyDAWEngine {
 
         log::info!("Activating RustyDAW engine...");
 
-        let (audio_graph, shared_schedule) = AudioGraph::new(
+        let (mut audio_graph, shared_schedule) = AudioGraph::new(
             self.coll_handle.clone(),
             Shared::clone(&self.host_info),
             num_audio_in_channels,
@@ -118,6 +119,26 @@ impl RustyDAWEngine {
             min_block_frames,
             max_block_frames,
         );
+
+        // TODO: Remove this once compiler is fixed.
+        audio_graph
+            .connect_edge(&Edge {
+                edge_type: DefaultPortType::Audio,
+                src_plugin_id: audio_graph.graph_in_node_id().clone(),
+                dst_plugin_id: audio_graph.graph_out_node_id().clone(),
+                src_channel: 0,
+                dst_channel: 0,
+            })
+            .unwrap();
+        audio_graph
+            .connect_edge(&Edge {
+                edge_type: DefaultPortType::Audio,
+                src_plugin_id: audio_graph.graph_in_node_id().clone(),
+                dst_plugin_id: audio_graph.graph_out_node_id().clone(),
+                src_channel: 1,
+                dst_channel: 1,
+            })
+            .unwrap();
 
         self.audio_graph = Some(audio_graph);
 
@@ -137,9 +158,56 @@ impl RustyDAWEngine {
         }
     }
 
+    pub fn insert_new_plugin_between_main_ports(
+        &mut self,
+        save_state: &PluginSaveState,
+        src_plugin_id: &PluginInstanceID,
+        dst_plugin_id: &PluginInstanceID,
+    ) {
+        if let Some(audio_graph) = &mut self.audio_graph {
+            match audio_graph.insert_new_plugin_between_main_ports(
+                save_state,
+                &mut self.plugin_scanner,
+                true,
+                src_plugin_id,
+                dst_plugin_id,
+            ) {
+                Ok(res) => {
+                    self.event_tx.send(DAWEngineEvent::PluginInsertedBetween(res)).unwrap();
+                }
+                Err(e) => {
+                    log::error!("Could not insert new plugin instance between: {}", e);
+                }
+            }
+        } else {
+            log::warn!("Cannot insert new audio plugin: Engine is deactivated");
+        }
+    }
+
+    pub fn remove_plugin_between(
+        &mut self,
+        plugin_id: &PluginInstanceID,
+        src_plugin_id: &PluginInstanceID,
+        dst_plugin_id: &PluginInstanceID,
+    ) {
+        if let Some(audio_graph) = &mut self.audio_graph {
+            match audio_graph.remove_plugin_between(plugin_id, src_plugin_id, dst_plugin_id) {
+                Some(Some(res)) => {
+                    self.event_tx.send(DAWEngineEvent::PluginRemovedBetween(res)).unwrap();
+                }
+                Some(None) => {
+                    self.event_tx.send(DAWEngineEvent::PluginRemoved(plugin_id.clone())).unwrap();
+                }
+                _ => {}
+            }
+        } else {
+            log::warn!("Ignored request to remove plugin instance: Engine is deactivated");
+        }
+    }
+
     pub fn deactivate_engine(&mut self) {
         if self.audio_graph.is_none() {
-            log::warn!("Engine is already deactivated");
+            log::warn!("Ignored request to deactivate engine: Engine is already deactivated");
             return;
         }
 
@@ -154,7 +222,9 @@ impl RustyDAWEngine {
 
     pub fn restore_audio_graph_from_save_state(&mut self, save_state: &AudioGraphSaveState) {
         if self.audio_graph.is_none() {
-            log::warn!("Cannot restore audio graph from save state: Engine is not active");
+            log::warn!(
+                "Ignored request to restore audio graph from save state: Engine is deactivated"
+            );
             return;
         }
 
@@ -184,7 +254,7 @@ impl RustyDAWEngine {
     pub fn request_latest_save_state(&mut self) {
         if self.audio_graph.is_none() {
             log::warn!(
-                "Cannot request to get latest save state of audio graph: Engine is not active"
+                "Ignored request for the latest audio graph save state: Engine is deactivated"
             );
             return;
         }

@@ -14,14 +14,18 @@ fn clap_host_test() {
 
     dbg!(internal_scan_res);
 
-    /*
-    let (shared_schedule, graph_in_node_id, graph_out_node_id) =
-        engine.activate_engine(SampleRate::default(), 1, 256, 1, 2).unwrap();
-        */
-
     engine.rescan_plugin_directories();
 
     for msg in engine_rx.try_iter() {
         dbg!(msg);
     }
+
+    let (shared_schedule, graph_in_node_id, graph_out_node_id) =
+        engine.activate_engine(SampleRate::default(), 1, 256, 2, 2).unwrap();
+    
+    for msg in engine_rx.try_iter() {
+        dbg!(msg);
+    }
+
+    //engine.insert_new_plugin_between_main_ports(save_state, src_plugin_id, dst_plugin_id)
 }

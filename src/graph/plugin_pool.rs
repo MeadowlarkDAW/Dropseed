@@ -356,7 +356,8 @@ impl PluginInstancePool {
         let (main_thread, audio_ports_ext) =
             if let Some((plugin, host_request)) = plugin_and_host_request {
                 let audio_ports_ext = plugin.audio_ports_extension(&host_request);
-                let (num_audio_in, num_audio_out) = audio_ports_ext.total_in_out_channels();
+                let num_audio_in = audio_ports_ext.total_in_channels();
+                let num_audio_out = audio_ports_ext.total_out_channels();
 
                 save_state.audio_in_out_channels = (num_audio_in as u16, num_audio_out as u16);
 
@@ -374,18 +375,18 @@ impl PluginInstancePool {
             Vec::with_capacity(usize::from(save_state.audio_in_out_channels.0));
         let mut audio_out_channel_refs: Vec<PortRef> =
             Vec::with_capacity(usize::from(save_state.audio_in_out_channels.1));
-        let (audio_in_channels, audio_out_channels) = if let Some(audio_ports_ext) =
-            &audio_ports_ext
-        {
-            let (audio_in_channels, audio_out_channels) = audio_ports_ext.total_in_out_channels();
-            save_state.audio_in_out_channels =
-                (audio_in_channels as u16, audio_out_channels as u16);
-            (audio_in_channels as u16, audio_out_channels as u16)
-        } else {
-            // If the plugin failed to load, try to retrieve the number of channels
-            // from the save state
-            save_state.audio_in_out_channels
-        };
+        let (audio_in_channels, audio_out_channels) =
+            if let Some(audio_ports_ext) = &audio_ports_ext {
+                let audio_in_channels = audio_ports_ext.total_in_channels();
+                let audio_out_channels = audio_ports_ext.total_out_channels();
+                save_state.audio_in_out_channels =
+                    (audio_in_channels as u16, audio_out_channels as u16);
+                (audio_in_channels as u16, audio_out_channels as u16)
+            } else {
+                // If the plugin failed to load, try to retrieve the number of channels
+                // from the save state
+                save_state.audio_in_out_channels
+            };
         for i in 0..audio_in_channels {
             let port_ref =
                 abstract_graph.port(node_id, DefaultPortType::Audio, PortID::AudioIn(i)).unwrap();
@@ -457,7 +458,7 @@ impl PluginInstancePool {
 
             log::debug!("Removed plugin instance {:?} from audio graph", id);
         } else {
-            log::warn!("Could not remove plugin instance {:?} from audio graph: Plugin was not found in the graph", id);
+            log::warn!("Ignored request to remove plugin instance {:?} from audio graph: plugin already removed", id);
         }
     }
 
@@ -492,8 +493,8 @@ impl PluginInstancePool {
 
                         let node_id = loaded_plugin.main_thread.id.node_id;
 
-                        let (audio_in_channels, audio_out_channels) =
-                            loaded_plugin.audio_ports_ext.total_in_out_channels();
+                        let audio_in_channels = loaded_plugin.audio_ports_ext.total_in_channels();
+                        let audio_out_channels = loaded_plugin.audio_ports_ext.total_out_channels();
 
                         if audio_in_channels > plugin_instance.audio_in_channel_refs.len() {
                             let len = plugin_instance.audio_in_channel_refs.len() as u16;

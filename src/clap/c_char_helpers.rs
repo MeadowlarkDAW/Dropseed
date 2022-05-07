@@ -47,6 +47,8 @@ pub(crate) fn c_char_ptr_to_maybe_str<'a>(
         return None;
     }
 
+    // While we *could* use this commented-out method, I want to be safe from
+    // malformed plugin metadata.
     //Some(unsafe { Ok(CStr::from_ptr(c_str)) })
 
     let mut len = None;
