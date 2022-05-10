@@ -1,11 +1,9 @@
 use basedrop::Shared;
-use crossbeam::channel::Sender;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use std::{collections::HashMap, error::Error};
 
-use crate::event::{DAWEngineEvent, PluginScannerEvent};
 use crate::host_request::HostRequest;
 use crate::plugin::{PluginDescriptor, PluginFactory, PluginMainThread, PluginSaveState};
 
@@ -122,7 +120,7 @@ impl PluginScanner {
         }
     }
 
-    pub fn rescan_plugin_directories(&mut self, event_tx: &mut Sender<DAWEngineEvent>) {
+    pub fn rescan_plugin_directories(&mut self) -> RescanPluginDirectoriesRes {
         log::info!("(Re)scanning plugin directories...");
 
         // TODO: Detect duplicate plugins (both duplicates with different versions and with different formats)
@@ -226,8 +224,7 @@ impl PluginScanner {
             }
         }
 
-        let res = RescanPluginDirectoriesRes { scanned_plugins, failed_plugins };
-        event_tx.send(PluginScannerEvent::RescanFinished(res).into()).unwrap();
+        RescanPluginDirectoriesRes { scanned_plugins, failed_plugins }
     }
 
     pub fn scan_internal_plugin(

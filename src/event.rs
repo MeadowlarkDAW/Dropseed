@@ -87,8 +87,11 @@ pub enum DAWEngineEvent {
 
 #[derive(Debug)]
 pub enum PluginScannerEvent {
-    ScanPathAdded(PathBuf),
-    ScanPathRemoved(PathBuf),
+    #[cfg(feature = "clap-host")]
+    ClapScanPathAdded(PathBuf),
+    #[cfg(feature = "clap-host")]
+    ClapScanPathRemoved(PathBuf),
+
     RescanFinished(RescanPluginDirectoriesRes),
 }
 

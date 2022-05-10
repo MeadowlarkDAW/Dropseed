@@ -81,7 +81,7 @@ impl RustyDAWEngine {
     pub fn add_clap_scan_directory<P: Into<PathBuf>>(&mut self, path: P) {
         let path: PathBuf = path.into();
         if self.plugin_scanner.add_clap_scan_directory(path.clone()) {
-            self.event_tx.send(PluginScannerEvent::ScanPathAdded(path).into()).unwrap();
+            self.event_tx.send(PluginScannerEvent::ClapScanPathAdded(path).into()).unwrap();
         }
     }
 
@@ -89,12 +89,13 @@ impl RustyDAWEngine {
     pub fn remove_clap_scan_directory<P: Into<PathBuf>>(&mut self, path: P) {
         let path: PathBuf = path.into();
         if self.plugin_scanner.remove_clap_scan_directory(path.clone()) {
-            self.event_tx.send(PluginScannerEvent::ScanPathRemoved(path).into()).unwrap();
+            self.event_tx.send(PluginScannerEvent::ClapScanPathRemoved(path).into()).unwrap();
         }
     }
 
     pub fn rescan_plugin_directories(&mut self) {
-        self.plugin_scanner.rescan_plugin_directories(&mut self.event_tx);
+        let res = self.plugin_scanner.rescan_plugin_directories();
+        self.event_tx.send(PluginScannerEvent::RescanFinished(res).into()).unwrap();
     }
 
     pub fn activate_engine(
