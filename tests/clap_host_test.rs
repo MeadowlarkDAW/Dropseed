@@ -20,9 +20,8 @@ fn clap_host_test() {
         dbg!(msg);
     }
 
-    let (shared_schedule, graph_in_node_id, graph_out_node_id) =
-        engine.activate_engine(SampleRate::default(), 1, 256, 2, 2).unwrap();
-    
+    engine.activate_engine(SampleRate::default(), 1, 256, 2, 2);
+
     for msg in engine_rx.try_iter() {
         dbg!(msg);
     }

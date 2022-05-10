@@ -159,6 +159,13 @@ pub struct SharedSchedule {
     schedule: Shared<SharedCell<ScheduleWrapper>>,
 }
 
+// Implement Debug so we can send it in an event.
+impl std::fmt::Debug for SharedSchedule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SharedSchedule")
+    }
+}
+
 impl SharedSchedule {
     pub(crate) fn new(schedule: Schedule, coll_handle: &basedrop::Handle) -> (Self, Self) {
         let schedule = Shared::new(

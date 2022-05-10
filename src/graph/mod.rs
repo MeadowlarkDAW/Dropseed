@@ -1,6 +1,7 @@
 use audio_graph::{DefaultPortType, Graph, NodeRef};
 use basedrop::Shared;
 use fnv::FnvHashMap;
+use fnv::FnvHashSet;
 use rusty_daw_core::SampleRate;
 use smallvec::SmallVec;
 use std::error::Error;
@@ -18,8 +19,10 @@ use plugin_pool::{PluginInstanceChannel, PluginInstancePool};
 use schedule::Schedule;
 use verifier::Verifier;
 
+use crate::plugin_scanner::ScannedPluginKey;
+
 pub use compiler::GraphCompilerError;
-pub use plugin_pool::{PluginActivatedInfo, PluginInstanceID};
+pub use plugin_pool::{PluginActivatedInfo, PluginActivationError, PluginInstanceID};
 pub use save_state::{AudioGraphSaveState, EdgeSaveState};
 pub use schedule::SharedSchedule;
 pub use verifier::VerifyScheduleError;
@@ -135,8 +138,10 @@ impl AudioGraph {
 
     pub fn add_new_plugin_instance(
         &mut self,
-        save_state: &PluginSaveState,
+        key: &ScannedPluginKey,
+        save_state: Option<PluginSaveState>,
         plugin_scanner: &mut PluginScanner,
+        activate: bool,
         fallback_to_other_formats: bool,
     ) -> NewPluginRes {
         let host_request = HostRequest {
@@ -144,49 +149,70 @@ impl AudioGraph {
             plugin_channel: Shared::new(&self.coll_handle, PluginInstanceChannel::new()),
         };
 
-        let (plugin_and_host_request, debug_name, format, res) = match plugin_scanner.create_plugin(
-            &save_state.key,
-            &host_request,
-            fallback_to_other_formats,
-        ) {
-            Ok((plugin, debug_name, format)) => {
-                log::debug!(
-                    "Loaded plugin {:?} successfully with format {:?}",
-                    &save_state.key,
-                    &format
-                );
+        let (plugin_and_host_request, debug_name, format, new_save_state, init_status) =
+            match plugin_scanner.create_plugin(
+                &key,
+                &host_request,
+                activate,
+                fallback_to_other_formats,
+            ) {
+                Ok((plugin, debug_name, format, save_state)) => {
+                    log::debug!("Loaded plugin {:?} successfully with format {:?}", &key, &format);
 
-                (Some((plugin, host_request)), debug_name, format, Ok(()))
-            }
-            Err(e) => {
-                log::error!("Failed to load plugin {:?} from save state: {}", &save_state.key, e);
+                    (Some((plugin, host_request)), debug_name, format, save_state, Ok(()))
+                }
+                Err(e) => {
+                    log::error!("Failed to load plugin {:?} from save state: {}", &key, e);
 
-                (None, Shared::clone(&self.failed_plugin_debug_name), save_state.key.format, Err(e))
-            }
-        };
+                    let save_state = if let Some(s) = save_state {
+                        s.clone()
+                    } else {
+                        PluginSaveState {
+                            key: key.clone(),
+                            activation_requested: activate,
+                            audio_in_out_channels: (0, 0),
+                            _preset: (),
+                        }
+                    };
 
-        let mut new_save_state = save_state.clone();
-        new_save_state.key.format = format;
+                    (
+                        None,
+                        Shared::clone(&self.failed_plugin_debug_name),
+                        key.format,
+                        save_state,
+                        Err(e),
+                    )
+                }
+            };
 
-        let instance_id = self.plugin_pool.add_graph_plugin(
+        let (plugin_id, activation_status) = self.plugin_pool.add_graph_plugin(
             plugin_and_host_request,
             new_save_state,
             debug_name,
             &mut self.abstract_graph,
-            false,
+            activate,
         );
 
-        NewPluginRes { plugin_id: instance_id, status: res }
+        NewPluginRes { plugin_id, init_status, activation_status }
+    }
+
+    pub fn activate_plugin_instance(
+        &mut self,
+        id: &PluginInstanceID,
+    ) -> Result<bool, PluginActivationError> {
+        self.plugin_pool.activate_plugin_instance(id, &mut self.abstract_graph, true)
     }
 
     pub fn insert_new_plugin_between_main_ports(
         &mut self,
-        save_state: &PluginSaveState,
+        key: &ScannedPluginKey,
+        save_state: Option<PluginSaveState>,
         plugin_scanner: &mut PluginScanner,
         fallback_to_other_formats: bool,
         src_plugin_id: &PluginInstanceID,
         dst_plugin_id: &PluginInstanceID,
-    ) -> Result<InsertPluginBetweenRes, InsertPluginBetweenError> {
+        activate: bool,
+    ) -> Result<(NewPluginRes, PluginEdgesChangedInfo), InsertPluginBetweenError> {
         let src_num_main_out_chs = match self.plugin_pool.get_audio_ports_ext(src_plugin_id) {
             Ok(Some(ports_ext)) => ports_ext.main_out_channels(),
             Ok(None) => {
@@ -209,8 +235,13 @@ impl AudioGraph {
         };
 
         // Add the new plugin instance.
-        let new_plugin_res =
-            self.add_new_plugin_instance(save_state, plugin_scanner, fallback_to_other_formats);
+        let new_plugin_res = self.add_new_plugin_instance(
+            key,
+            save_state,
+            plugin_scanner,
+            activate,
+            fallback_to_other_formats,
+        );
 
         let src_main_out_chs = &self.plugin_pool.get_audio_out_channel_refs(src_plugin_id).unwrap()
             [0..src_num_main_out_chs];
@@ -292,14 +323,18 @@ impl AudioGraph {
         let src_plugin_edges = self.get_plugin_edges(src_plugin_id).unwrap();
         let dst_plugin_edges = self.get_plugin_edges(dst_plugin_id).unwrap();
 
-        Ok(InsertPluginBetweenRes {
-            new_plugin_res,
-            src_plugin_id: src_plugin_id.clone(),
-            dst_plugin_id: dst_plugin_id.clone(),
-            new_plugin_edges,
-            src_plugin_edges,
-            dst_plugin_edges,
-        })
+        let affected_plugins = PluginEdgesChangedInfo {
+            plugins_new_edges: vec![
+                (
+                    new_plugin_res.plugin_id.clone(),
+                    self.get_plugin_edges(&new_plugin_res.plugin_id).unwrap(),
+                ),
+                (src_plugin_id.clone(), self.get_plugin_edges(src_plugin_id).unwrap()),
+                (dst_plugin_id.clone(), self.get_plugin_edges(dst_plugin_id).unwrap()),
+            ],
+        };
+
+        Ok((new_plugin_res, affected_plugins))
     }
 
     pub fn remove_plugin_between(
@@ -307,7 +342,16 @@ impl AudioGraph {
         plugin_id: &PluginInstanceID,
         src_plugin_id: &PluginInstanceID,
         dst_plugin_id: &PluginInstanceID,
-    ) -> Option<Option<RemovePluginBetweenRes>> {
+    ) -> Option<PluginEdgesChangedInfo> {
+        if plugin_id == &self.graph_in_node_id {
+            log::warn!("Ignored request to remove the graph in node from the audio graph");
+            return None;
+        }
+        if plugin_id == &self.graph_out_node_id {
+            log::warn!("Ignored request to remove the graph out node from the audio graph");
+            return None;
+        }
+
         if self.plugin_pool.get_audio_in_channel_refs(plugin_id).is_err() {
             log::warn!(
                 "Ignored request to remove plugin instance {:?}, plugin already removed",
@@ -316,7 +360,31 @@ impl AudioGraph {
             return None;
         }
 
-        self.remove_plugin_instances(&[plugin_id.clone()]);
+        let mut found_src_plugin = false;
+        let mut found_dst_plugin = false;
+        let existing_edges = self.get_plugin_edges(plugin_id).unwrap();
+        for edge in existing_edges.incoming.iter() {
+            if &edge.src_plugin_id == src_plugin_id {
+                found_src_plugin = true;
+                break;
+            }
+        }
+        for edge in existing_edges.outgoing.iter() {
+            if &edge.dst_plugin_id == dst_plugin_id {
+                found_dst_plugin = true;
+                break;
+            }
+        }
+        if !found_src_plugin || !found_dst_plugin {
+            log::warn!(
+                "Ignored request to remove plugin instance {:?} between {:?} and {:?}, plugin is not between those two plugins",
+                plugin_id,
+                src_plugin_id,
+                dst_plugin_id,
+            );
+        }
+
+        let (_, mut affected_plugins) = self.remove_plugin_instances(&[plugin_id.clone()]);
 
         let src_num_main_out_chs = match self.plugin_pool.get_audio_ports_ext(src_plugin_id) {
             Ok(Some(ports_ext)) => ports_ext.main_out_channels(),
@@ -325,7 +393,13 @@ impl AudioGraph {
                 self.plugin_pool.get_audio_out_channel_refs(src_plugin_id).unwrap().len()
             }
             Err(_) => {
-                return Some(None);
+                log::warn!(
+                    "Ignored request to remove plugin instance {:?} between {:?} and {:?}, source plugin does not exist",
+                    plugin_id,
+                    src_plugin_id,
+                    dst_plugin_id,
+                );
+                return None;
             }
         };
         let dst_num_main_in_chs = match self.plugin_pool.get_audio_ports_ext(dst_plugin_id) {
@@ -335,7 +409,13 @@ impl AudioGraph {
                 self.plugin_pool.get_audio_in_channel_refs(dst_plugin_id).unwrap().len()
             }
             Err(_) => {
-                return Some(None);
+                log::warn!(
+                    "Ignored request to remove plugin instance {:?} between {:?} and {:?}, destination plugin does not exist",
+                    plugin_id,
+                    src_plugin_id,
+                    dst_plugin_id,
+                );
+                return None;
             }
         };
 
@@ -361,16 +441,17 @@ impl AudioGraph {
             }
         }
 
-        let src_plugin_edges = self.get_plugin_edges(src_plugin_id).unwrap();
-        let dst_plugin_edges = self.get_plugin_edges(dst_plugin_id).unwrap();
+        let mut plugins_new_edges: Vec<(PluginInstanceID, PluginEdges)> = Vec::new();
+        plugins_new_edges.push((
+            plugin_id.clone(),
+            PluginEdges { incoming: SmallVec::new(), outgoing: SmallVec::new() },
+        ));
+        for id in affected_plugins.drain(..) {
+            let edges = self.get_plugin_edges(&id).unwrap();
+            plugins_new_edges.push((id, edges));
+        }
 
-        Some(Some(RemovePluginBetweenRes {
-            removed_plugin_id: plugin_id.clone(),
-            src_plugin_id: src_plugin_id.clone(),
-            dst_plugin_id: dst_plugin_id.clone(),
-            src_plugin_edges,
-            dst_plugin_edges,
-        }))
+        Some(PluginEdgesChangedInfo { plugins_new_edges })
     }
 
     /// Remove the given plugins from the graph.
@@ -380,31 +461,61 @@ impl AudioGraph {
     ///
     /// Requests to remove the "graph input/output" nodes with the IDs `AudioGraph::graph_in_node_id()`
     /// and `AudioGraph::graph_out_node_id()` will be ignored.
-    pub fn remove_plugin_instances(&mut self, plugin_ids: &[PluginInstanceID]) {
+    pub fn remove_plugin_instances(
+        &mut self,
+        plugin_ids: &[PluginInstanceID],
+    ) -> (Vec<PluginInstanceID>, Vec<PluginInstanceID>) {
+        let mut removed_plugins: FnvHashSet<PluginInstanceID> = FnvHashSet::default();
+        let mut affected_plugins: FnvHashSet<PluginInstanceID> = FnvHashSet::default();
+
         for id in plugin_ids.iter() {
             if id == &self.graph_in_node_id || id == &self.graph_out_node_id {
                 if id == &self.graph_in_node_id {
                     log::warn!("Ignored request to remove the graph in node from the audio graph");
                 } else {
-                    log::warn!("Ignored request to remove the graph in node from the audio graph");
+                    log::warn!("Ignored request to remove the graph out node from the audio graph");
                 }
                 continue;
             }
 
-            self.plugin_pool.remove_graph_plugin(id, &mut self.abstract_graph);
+            if removed_plugins.insert(id.clone()) {
+                if let Ok(edges) = self.get_plugin_edges(id) {
+                    for e in edges.incoming {
+                        affected_plugins.insert(e.src_plugin_id.clone());
+                    }
+                    for e in edges.outgoing {
+                        affected_plugins.insert(e.dst_plugin_id.clone());
+                    }
+
+                    self.plugin_pool.remove_graph_plugin(id, &mut self.abstract_graph);
+                } else {
+                    let _ = removed_plugins.remove(id);
+                    log::warn!("Ignored request to remove plugin instance {:?}: Plugin is already removed.", id);
+                }
+            }
         }
+
+        (removed_plugins.drain().collect(), affected_plugins.drain().collect())
     }
 
     /// Try to connect multiple edges at once. Useful for connecting ports with multiple
     /// channels (i.e. stereo audio ports).
     ///
     /// If any of the given edges fails to connect, then none of the given edges will be connected.
-    pub fn try_connect_edges(&mut self, edges: &[Edge]) -> Result<(), (usize, ConnectEdgeError)> {
+    pub fn try_connect_edges(
+        &mut self,
+        edges: &[Edge],
+    ) -> Result<Vec<PluginInstanceID>, (usize, ConnectEdgeError)> {
+        let mut affected_plugins: FnvHashSet<PluginInstanceID> = FnvHashSet::default();
+
         let mut res = Ok(());
         for (i, edge) in edges.iter().enumerate() {
             if let Err(e) = self.connect_edge(edge) {
                 res = Err((i, e));
                 break;
+            } else {
+                affected_plugins.insert(edge.src_plugin_id.clone());
+                affected_plugins.insert(edge.dst_plugin_id.clone());
             }
         }
 
@@ -415,7 +526,11 @@ impl AudioGraph {
             }
         }
 
-        res
+        if let Err(e) = res {
+            Err(e)
+        } else {
+            Ok(affected_plugins.drain().collect())
+        }
     }
 
     pub fn connect_edge(&mut self, edge: &Edge) -> Result<(), ConnectEdgeError> {
@@ -622,7 +737,7 @@ impl AudioGraph {
         save_state: &AudioGraphSaveState,
         plugin_scanner: &mut PluginScanner,
         fallback_to_other_formats: bool,
-    ) -> AudioGraphRestoredInfo {
+    ) -> (AudioGraphRestoredInfo, Vec<NewPluginRes>, PluginEdgesChangedInfo) {
         log::info!("Restoring audio graph from save state...");
 
         self.abstract_graph = Graph::default();
@@ -646,8 +761,10 @@ impl AudioGraph {
 
         for plugin_save_state in save_state.plugins.iter() {
             plugin_results.push(self.add_new_plugin_instance(
-                &plugin_save_state,
+                &plugin_save_state.key,
+                Some(plugin_save_state.clone()),
                 plugin_scanner,
+                plugin_save_state.activation_requested,
                 fallback_to_other_formats,
             ));
         }
@@ -691,22 +808,20 @@ impl AudioGraph {
             }
         }
 
-        let plugin_instances: Vec<(NewPluginRes, PluginEdges)> = plugin_results
-            .drain(..)
+        let plugins_new_edges: Vec<(PluginInstanceID, PluginEdges)> = plugin_results
+            .iter()
             .map(|plugin_res| {
-                let edges = self.get_plugin_edges(&plugin_res.plugin_id).unwrap();
-                (plugin_res, edges)
+                let id = plugin_res.plugin_id.clone();
+                let edges = self.get_plugin_edges(&id).unwrap();
+                (id, edges)
             })
             .collect();
 
-        let new_save_state = self.collect_save_state();
-
-        AudioGraphRestoredInfo {
-            requested_save_state: save_state.clone(),
-            save_state: new_save_state,
-            plugin_instances,
-            edge_errors,
-        }
+        (
+            AudioGraphRestoredInfo { requested_save_state: save_state.clone(), edge_errors },
+            plugin_results,
+            PluginEdgesChangedInfo { plugins_new_edges },
+        )
     }
 
     /// Compile the audio graph into a schedule that is sent to the audio thread.
@@ -740,7 +855,9 @@ impl AudioGraph {
         }
     }
 
-    pub(crate) fn on_main_thread(&mut self) -> SmallVec<[(PluginInstanceID, bool); 4]> {
+    pub(crate) fn on_main_thread(
+        &mut self,
+    ) -> SmallVec<[(PluginInstanceID, Result<(), PluginActivationError>); 4]> {
         self.plugin_pool.on_main_thread(&mut self.abstract_graph)
     }
 }
@@ -750,13 +867,6 @@ pub struct AudioGraphRestoredInfo {
     /// The save state the audio graph attempted to restore from.
     pub requested_save_state: AudioGraphSaveState,
 
-    /// The new save state of this audio graph.
-    pub save_state: AudioGraphSaveState,
-
-    /// All of the plugin instances in the audio graph, along with their load
-    /// status, edges, and save state.
-    pub plugin_instances: Vec<(NewPluginRes, PluginEdges)>,
-
     /// All of the edges which failed to connect
     ///
     /// (index into `requested_save_state.edges`, error)
@@ -765,8 +875,9 @@ pub struct AudioGraphRestoredInfo {
 
 #[derive(Debug)]
 pub struct NewPluginRes {
-    plugin_id: PluginInstanceID,
-    status: Result<(), NewPluginInstanceError>,
+    pub plugin_id: PluginInstanceID,
+    pub init_status: Result<(), NewPluginInstanceError>,
+    pub activation_status: Option<Result<(), PluginActivationError>>,
 }
 
 #[derive(Debug)]
@@ -775,21 +886,15 @@ pub struct InsertPluginBetweenRes {
 
     pub src_plugin_id: PluginInstanceID,
     pub dst_plugin_id: PluginInstanceID,
-
-    pub new_plugin_edges: PluginEdges,
-    pub src_plugin_edges: PluginEdges,
-    pub dst_plugin_edges: PluginEdges,
 }
 
-#[derive(Debug)]
-pub struct RemovePluginBetweenRes {
-    pub removed_plugin_id: PluginInstanceID,
-
-    pub src_plugin_id: PluginInstanceID,
-    pub dst_plugin_id: PluginInstanceID,
-
-    pub src_plugin_edges: PluginEdges,
-    pub dst_plugin_edges: PluginEdges,
+#[derive(Debug, Clone)]
+pub struct PluginEdgesChangedInfo {
+    /// The list of plugins that have changed, along with the new
+    /// list of all the edges on that plugin.
+    ///
+    /// `(plugin id, new list of edges on plugin id)`
+    pub plugins_new_edges: Vec<(PluginInstanceID, PluginEdges)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

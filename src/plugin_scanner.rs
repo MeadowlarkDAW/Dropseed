@@ -7,7 +7,7 @@ use std::{collections::HashMap, error::Error};
 
 use crate::event::{DAWEngineEvent, PluginScannerEvent};
 use crate::host_request::HostRequest;
-use crate::plugin::{PluginDescriptor, PluginFactory, PluginMainThread};
+use crate::plugin::{PluginDescriptor, PluginFactory, PluginMainThread, PluginSaveState};
 
 #[cfg(feature = "clap-host")]
 use crate::clap::plugin::ClapPluginFactory;
@@ -259,9 +259,12 @@ impl PluginScanner {
         &mut self,
         key: &ScannedPluginKey,
         host_request: &HostRequest,
+        activation_requested: bool,
         fallback_to_other_formats: bool,
-    ) -> Result<(Box<dyn PluginMainThread>, Shared<String>, PluginFormat), NewPluginInstanceError>
-    {
+    ) -> Result<
+        (Box<dyn PluginMainThread>, Shared<String>, PluginFormat, PluginSaveState),
+        NewPluginInstanceError,
+    > {
         let check_for_invalid_host_callbacks = |host_request: &HostRequest, id: &String| {
             if host_request.plugin_channel.restart_requested.load(Ordering::Relaxed) {
                 host_request.plugin_channel.restart_requested.store(false, Ordering::Relaxed);
@@ -295,10 +298,20 @@ impl PluginScanner {
 
             if let Some(factory) = res {
                 let res = match factory.factory.new(host_request, &self.coll_handle) {
-                    Ok(p) => Ok((p, Shared::clone(&factory.rdn), factory.format)),
+                    Ok(p) => {
+                        let save_state = PluginSaveState {
+                            key: key.clone(),
+                            activation_requested,
+                            audio_in_out_channels: (0, 0),
+                            _preset: (),
+                        };
+
+                        Ok((p, Shared::clone(&factory.rdn), factory.format, save_state))
+                    }
                     Err(e) => Err(NewPluginInstanceError::InstantiationError(key.rdn.clone(), e)),
                 };
                 check_for_invalid_host_callbacks(host_request, &factory.rdn);
+
                 return res;
             } else if fallback_to_other_formats {
                 try_other_formats = true;
@@ -322,7 +335,16 @@ impl PluginScanner {
 
             if let Some(factory) = res {
                 let res = match factory.factory.new(host_request, &self.coll_handle) {
-                    Ok(p) => Ok((p, Shared::clone(&factory.rdn), factory.format)),
+                    Ok(p) => {
+                        let save_state = PluginSaveState {
+                            key: key.clone(),
+                            activation_requested,
+                            audio_in_out_channels: (0, 0),
+                            _preset: (),
+                        };
+
+                        Ok((p, Shared::clone(&factory.rdn), factory.format, save_state))
+                    }
                     Err(e) => Err(NewPluginInstanceError::InstantiationError(key.rdn.clone(), e)),
                 };
                 check_for_invalid_host_callbacks(host_request, &factory.rdn);
