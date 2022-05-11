@@ -72,24 +72,14 @@ impl<T: Clone + Copy + Send + Default + 'static> SharedAudioBuffer<T> {
     }
 
     #[inline]
-    pub(crate) fn borrow(&self, proc_info: &ProcInfo) -> &[T] {
-        // Please refer to the "SAFETY NOTE" above on why this is safe.
-        //
-        // In addition the host will never set `proc_info.frames` to something
-        // higher than the maximum frame size (which is what the Vec's initial
-        // capacity is set to).
+    pub(crate) unsafe fn borrow(&self, proc_info: &ProcInfo) -> &[T] {
         unsafe {
             std::slice::from_raw_parts((*self.buffer.0.get()).as_slice().as_ptr(), proc_info.frames)
         }
     }
 
     #[inline]
-    pub(crate) fn borrow_mut(&self, proc_info: &ProcInfo) -> &mut [T] {
-        // Please refer to the "SAFETY NOTE" above on why this is safe.
-        //
-        // In addition the host will never set `proc_info.frames` to something
-        // higher than the maximum frame size (which is what the Vec's initial
-        // capacity is set to).
+    pub(crate) unsafe fn borrow_mut(&self, proc_info: &ProcInfo) -> &mut [T] {
         unsafe {
             std::slice::from_raw_parts_mut(
                 (*self.buffer.0.get()).as_mut_slice().as_mut_ptr(),
@@ -97,56 +87,15 @@ impl<T: Clone + Copy + Send + Default + 'static> SharedAudioBuffer<T> {
             )
         }
     }
-}
 
-/// An audio port buffer for use with external clap plugins.
-pub(crate) struct ClapAudioBuffer {
-    raw: clap_audio_buffer,
-
-    raw_buffers: SmallVec<[*const f32; 2]>,
-
-    /// We keep a reference-counted pointer to the same buffers in `raw` so
-    /// the garbage collector can know when it is safe to deallocate unused
-    /// buffers.
-    rc_buffers: SmallVec<[SharedAudioBuffer<f32>; 2]>,
-
-    frames: usize,
-}
-
-impl std::fmt::Debug for ClapAudioBuffer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_list().entries(self.rc_buffers.iter().map(|b| b.buffer.1)).finish()
-    }
-}
-
-impl ClapAudioBuffer {
-    pub(crate) fn new(buffers: SmallVec<[SharedAudioBuffer<f32>; 2]>, latency: u32) -> Self {
-        assert_ne!(buffers.len(), 0);
-
-        let raw_buffers: SmallVec<[*const f32; 2]> = buffers
-            .iter()
-            .map(|b| {
-                // Please refer to the "SAFETY NOTE" above on why this is safe.
-                //
-                // Also, basedrop's `Shared` pointer never moves its contents.
-                unsafe { (*b.buffer.0.get()).as_ptr() }
-            })
-            .collect();
-
-        let raw = clap_audio_buffer {
-            data32: std::ptr::null(),
-            data64: std::ptr::null(),
-            channel_count: buffers.len() as u32,
-            latency,
-            constant_mask: 0,
-        };
-
-        Self { raw, raw_buffers, rc_buffers: buffers, frames: 0 }
+    #[inline]
+    pub(crate) unsafe fn raw_buffer(&self) -> *const T {
+        unsafe { (*self.buffer.0.get()).as_slice().as_ptr() }
     }
 
-    pub(crate) fn as_raw(&mut self) -> *const clap_audio_buffer {
-        self.raw.data32 = self.raw_buffers.as_ptr();
-        &self.raw
+    #[inline]
+    pub(crate) unsafe fn raw_buffer_mut(&self) -> *mut T {
+        unsafe { (*self.buffer.0.get()).as_mut_slice().as_mut_ptr() }
     }
 }
 
@@ -194,12 +143,21 @@ impl AudioPortBuffer {
         self.latency
     }
 
+    pub fn silent_mask(&self) -> u64 {
+        self.silent_mask
+    }
+
     /// Immutably borrow a channel.
     ///
     /// This will return `None` if the channel with the given index does not exist.
     #[inline]
     pub fn channel(&self, channel: usize, proc_info: &ProcInfo) -> Option<&[f32]> {
-        self.rc_buffers.get(channel).map(|b| b.borrow(proc_info))
+        // Please refer to the "SAFETY NOTE" above on why this is safe.
+        //
+        // In addition the host will never set `proc_info.frames` to something
+        // higher than the maximum frame size (which is what the Vec's initial
+        // capacity is set to).
+        unsafe { self.rc_buffers.get(channel).map(|b| b.borrow(proc_info)) }
     }
 
     /// Immutably borrow a channel without checking that the channel with the given index exists.
@@ -213,7 +171,12 @@ impl AudioPortBuffer {
     /// This will return `None` if the channel with the given index does not exist.
     #[inline]
     pub fn channel_mut(&mut self, channel: usize, proc_info: &ProcInfo) -> Option<&mut [f32]> {
-        self.rc_buffers.get(channel).map(|b| b.borrow_mut(proc_info))
+        // Please refer to the "SAFETY NOTE" above on why this is safe.
+        //
+        // In addition the host will never set `proc_info.frames` to something
+        // higher than the maximum frame size (which is what the Vec's initial
+        // capacity is set to).
+        unsafe { self.rc_buffers.get(channel).map(|b| b.borrow_mut(proc_info)) }
     }
 
     /// Mutably borrow a channel without checking that the channel with the given index exists.
@@ -248,7 +211,14 @@ impl AudioPortBuffer {
     #[inline]
     pub fn stereo(&self, proc_info: &ProcInfo) -> Option<(&[f32], &[f32])> {
         if self.rc_buffers.len() > 1 {
-            Some((self.rc_buffers[0].borrow(proc_info), self.rc_buffers[1].borrow(proc_info)))
+            // Please refer to the "SAFETY NOTE" above on why this is safe.
+            //
+            // In addition the host will never set `proc_info.frames` to something
+            // higher than the maximum frame size (which is what the Vec's initial
+            // capacity is set to).
+            unsafe {
+                Some((self.rc_buffers[0].borrow(proc_info), self.rc_buffers[1].borrow(proc_info)))
+            }
         } else {
             None
         }
@@ -270,10 +240,17 @@ impl AudioPortBuffer {
     #[inline]
     pub fn stereo_mut(&mut self, proc_info: &ProcInfo) -> Option<(&mut [f32], &mut [f32])> {
         if self.rc_buffers.len() > 1 {
-            Some((
-                self.rc_buffers[0].borrow_mut(proc_info),
-                self.rc_buffers[1].borrow_mut(proc_info),
-            ))
+            // Please refer to the "SAFETY NOTE" above on why this is safe.
+            //
+            // In addition the host will never set `proc_info.frames` to something
+            // higher than the maximum frame size (which is what the Vec's initial
+            // capacity is set to).
+            unsafe {
+                Some((
+                    self.rc_buffers[0].borrow_mut(proc_info),
+                    self.rc_buffers[1].borrow_mut(proc_info),
+                ))
+            }
         } else {
             None
         }
@@ -295,7 +272,12 @@ impl AudioPortBuffer {
     #[inline]
     pub fn clear(&mut self, proc_info: &ProcInfo) {
         for b in self.rc_buffers.iter() {
-            b.borrow_mut(proc_info).fill(0.0);
+            // Please refer to the "SAFETY NOTE" above on why this is safe.
+            //
+            // In addition the host will never set `proc_info.frames` to something
+            // higher than the maximum frame size (which is what the Vec's initial
+            // capacity is set to).
+            unsafe { b.borrow_mut(proc_info).fill(0.0) };
         }
     }
 

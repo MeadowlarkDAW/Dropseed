@@ -1,6 +1,7 @@
 use std::ffi::{CStr, CString};
 use std::pin::Pin;
 use std::sync::atomic::Ordering;
+use std::thread::ThreadId;
 
 use basedrop::Shared;
 
@@ -65,12 +66,14 @@ impl HostInfo {
 }
 
 /// Used to get info and request actions from the host.
-pub struct Host {
+pub struct HostRequest {
     pub(crate) info: Shared<HostInfo>,
+    // We are storing this as a slice so we can get a raw pointer to the channel
+    // for external plugins.
     pub(crate) plugin_channel: Shared<PluginInstanceChannel>,
 }
 
-impl Host {
+impl HostRequest {
     /// Retrieve info about this host.
     pub fn info(&self) -> Shared<HostInfo> {
         Shared::clone(&self.info)
@@ -100,7 +103,7 @@ impl Host {
     }
 }
 
-impl Clone for Host {
+impl Clone for HostRequest {
     fn clone(&self) -> Self {
         Self {
             info: Shared::clone(&self.info),

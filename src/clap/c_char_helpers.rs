@@ -47,6 +47,10 @@ pub(crate) fn c_char_ptr_to_maybe_str<'a>(
         return None;
     }
 
+    // While we *could* use this commented-out method, I want to be safe from
+    // malformed plugin metadata.
+    //Some(unsafe { Ok(CStr::from_ptr(c_str)) })
+
     let mut len = None;
     for i in 0..max_size {
         // Here we are assuming that all the bytes checked here up to `max_size`
@@ -57,7 +61,7 @@ pub(crate) fn c_char_ptr_to_maybe_str<'a>(
         //
         // Also we already checked that `c_str` is not null.
         unsafe {
-            if *(c_str.add(i) as *const char) == '\0' {
+            if *(c_str.add(i) as *const u8) == b"\0"[0] {
                 len = Some(i + 1);
                 break;
             }

@@ -4,7 +4,7 @@ use crate::plugin_scanner::ScannedPluginKey;
 pub struct PluginSaveState {
     pub key: ScannedPluginKey,
 
-    pub activated: bool,
+    pub activation_requested: bool,
 
     /// In case the plugin fails to load, use this as a backup method for
     /// retrieving the number of audio channels. If the plugin does load

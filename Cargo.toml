@@ -14,7 +14,8 @@ readme = "README.md"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["cpal-backend"]
+default = ["clap-host", "cpal-backend"]
+clap-host = ["clap-sys", "libloading", "globwalk"]
 cpal-backend = ["cpal"]
 cpal-asio = ["cpal/asio"]
 
@@ -22,7 +23,7 @@ cpal-asio = ["cpal/asio"]
 rusty-daw-core = { path = "../rusty-daw-core" }
 #audio-graph = { git = "https://github.com/MeadowlarkDAW/audio-graph", branch = "main" }
 audio-graph = { path = "../audio-graph" }
-clap-sys = { git = "https://github.com/glowcoil/clap-sys.git", branch = "master" }
+clap-sys = { git = "https://github.com/glowcoil/clap-sys.git", branch = "master", optional = true }
 raw-window-handle = "0.4"
 basedrop = "0.1"
 smallvec = "1.7"
@@ -31,6 +32,8 @@ crossbeam = "0.8"
 fnv = "1.0"
 log = "0.4"
 cpal = { version = "0.13", optional = true }
+libloading = { version = "0.7", optional = true }
+globwalk = { version = "0.8", optional = true }
 
 [dev-dependencies]
 mowl = "2.1"
