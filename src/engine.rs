@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use crate::event::{DAWEngineEvent, PluginScannerEvent};
 use crate::graph::{
-    AudioGraph, AudioGraphSaveState, Edge, PluginActivatedInfo, PluginEdges,
+    AudioGraph, AudioGraphSaveState, Edge, PluginActivationStatus, PluginEdges,
     PluginEdgesChangedInfo, PluginInstanceID, SharedSchedule,
 };
 use crate::plugin::{PluginFactory, PluginSaveState};
@@ -387,17 +387,39 @@ impl RustyDAWEngine {
             let mut restarted_plugins = audio_graph.on_main_thread();
 
             for (plugin_id, res) in restarted_plugins.drain(..) {
-                if let Err(e) = res {
-                    self.event_tx
-                        .send(DAWEngineEvent::PluginFailedToRestart(plugin_id.clone(), e))
-                        .unwrap();
-                } else {
-                    let edges = audio_graph.get_plugin_edges(&plugin_id).unwrap();
-                    let save_state = audio_graph.get_plugin_save_state(&plugin_id).unwrap().clone();
-
-                    let info = PluginActivatedInfo { id: plugin_id.clone(), edges, save_state };
-
-                    self.event_tx.send(DAWEngineEvent::PluginRestarted(info)).unwrap();
+                match res {
+                    PluginActivationStatus::Activated => {
+                        self.event_tx
+                            .send(DAWEngineEvent::PluginActivated {
+                                plugin_id: plugin_id.clone(),
+                                new_audio_ports: None,
+                            })
+                            .unwrap();
+                    }
+                    PluginActivationStatus::ActivatedWithNewPortConfig { audio_ports } => {
+                        self.event_tx
+                            .send(DAWEngineEvent::PluginActivated {
+                                plugin_id: plugin_id.clone(),
+                                new_audio_ports: Some(audio_ports),
+                            })
+                            .unwrap();
+                    }
+                    PluginActivationStatus::DeactivatedFromSaveState => {
+                        self.event_tx
+                            .send(DAWEngineEvent::PluginDeactivated {
+                                plugin_id: plugin_id.clone(),
+                                status: Ok(()),
+                            })
+                            .unwrap();
+                    }
+                    PluginActivationStatus::Error(e) => {
+                        self.event_tx
+                            .send(DAWEngineEvent::PluginDeactivated {
+                                plugin_id: plugin_id.clone(),
+                                status: Err(e),
+                            })
+                            .unwrap();
+                    }
                 }
             }
 

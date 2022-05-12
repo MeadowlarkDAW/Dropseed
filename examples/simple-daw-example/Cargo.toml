@@ -1,0 +1,15 @@
+[package]
+name = "simple-daw-example"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+rusty-daw-engine = { path = "../../" }
+rusty-daw-core = { path = "../../../rusty-daw-core" }
+eframe = "0.18"
+cpal = "0.13"
+crossbeam = "0.8"
+ringbuf = "0.2"
+mowl = "2.1"

@@ -7,9 +7,11 @@ use crate::{
         PluginActivatedInfo, PluginActivationError, PluginEdgesChangedInfo, PluginInstanceID,
     },
     plugin_scanner::RescanPluginDirectoriesRes,
+    AudioPortsExtension,
 };
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum DAWEngineEvent {
     /// Sent whenever the engine is deactivated.
     ///
@@ -53,17 +55,10 @@ pub enum DAWEngineEvent {
     /// state, resulting in the audio engine stopping.
     NewSaveState(AudioGraphSaveState),
 
-    /// This message is sent after a request to add a new plugin by calling
-    /// `RustyDAWEngine::add_new_plugin_instance()`
-    ///
-    /// Note, if you called `RustyDAWEngine::insert_new_plugin_between_main_ports()`,
-    /// then the `RustyDAWEngine::PluginInsertedBetween` result will be returned
-    /// instead.
+    /// This message is sent whenever new plugins are added to the audio graph.
     PluginInstancesAdded(Vec<NewPluginRes>),
 
-    /// This message is sent after a request to remove a plugin by calling
-    /// either `RustyDAWEngine::remove_plugin_instances()` or
-    /// `RustyDAWEngine::remove_plugin_between()`.
+    /// This message is sent whenever plugins are removed from the audio graph.
     ///
     /// Note that the host will always send a `PluginEdgesChanged` event
     /// before this event if any of the removed plugins had connected
@@ -71,27 +66,52 @@ pub enum DAWEngineEvent {
     /// were connected to any of the removed plugins removed.
     PluginInstancesRemoved(Vec<PluginInstanceID>),
 
-    /// This message is sent whenever the edges of plugins change (including
-    /// when adding/removing plugins).
+    /// This message is sent whenever the edges (connections of ports) of
+    /// plugins change (including when adding/removing plugins).
     PluginEdgesChanged(PluginEdgesChangedInfo),
 
-    /// The given plugin successfully restarted. Make sure your UI updates the
-    /// port configuration on this plugin.
-    PluginRestarted(PluginActivatedInfo),
-    /// The given plugin failed to restart and is now deactivated.
-    PluginFailedToRestart(PluginInstanceID, PluginActivationError),
+    /// Sent whenever a plugin becomes deactivated. When a plugin is deactivated
+    /// you cannot access any of its methods until it is reactivated.
+    PluginDeactivated {
+        plugin_id: PluginInstanceID,
+        /// If this is `Ok(())`, then it means the plugin was gracefully
+        /// deactivated from user request.
+        ///
+        /// If this is `Err(e)`, then it means the plugin became deactivated
+        /// because it failed to restart.
+        status: Result<(), PluginActivationError>,
+    },
+
+    /// Sent whenever a plugin becomes activated after being deactivated or
+    /// when the plugin restarts.
+    ///
+    /// Make sure your UI updates the port configuration on this plugin.
+    PluginActivated {
+        plugin_id: PluginInstanceID,
+        /// If this is `Some(audio_ports)`, then it means that the plugin has
+        /// updated its audio port configuration.
+        ///
+        /// If this is `None`, then it means that the plugin has not changed
+        /// its audio port configuration since the last time it was activated.
+        new_audio_ports: Option<AudioPortsExtension>,
+    },
 
     PluginScanner(PluginScannerEvent),
     // TODO: More stuff
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum PluginScannerEvent {
     #[cfg(feature = "clap-host")]
+    /// A new CLAP plugin scan path was added.
     ClapScanPathAdded(PathBuf),
     #[cfg(feature = "clap-host")]
+    /// A CLAP plugin scan path was removed.
     ClapScanPathRemoved(PathBuf),
 
+    /// A request to rescan all plugin directories has finished. Update
+    /// the list of available plugins in your UI.
     RescanFinished(RescanPluginDirectoriesRes),
 }
 

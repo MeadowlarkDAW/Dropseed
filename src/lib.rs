@@ -15,5 +15,8 @@ pub mod plugin;
 pub use engine::RustyDAWEngine;
 pub use event::{DAWEngineEvent, PluginScannerEvent};
 pub use graph::audio_buffer_pool::AudioPortBuffer;
+pub use graph::{PluginInstanceID, SharedSchedule};
 pub use host_request::{HostInfo, HostRequest};
+pub use plugin::ext::audio_ports::{AudioPortInfo, AudioPortsExtension, MainPortsLayout};
 pub use plugin::process_info::{ProcInfo, ProcessStatus};
+pub use plugin_scanner::{ScannedPlugin, ScannedPluginKey};

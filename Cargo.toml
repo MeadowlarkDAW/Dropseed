@@ -19,6 +19,11 @@ clap-host = ["clap-sys", "libloading", "globwalk"]
 cpal-backend = ["cpal"]
 cpal-asio = ["cpal/asio"]
 
+[workspace]
+members = [
+    "examples/simple-daw-example",
+]
+
 [dependencies]
 rusty-daw-core = { path = "../rusty-daw-core" }
 #audio-graph = { git = "https://github.com/MeadowlarkDAW/audio-graph", branch = "main" }

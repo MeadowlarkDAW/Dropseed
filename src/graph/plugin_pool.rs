@@ -2,6 +2,7 @@ use audio_graph::{DefaultPortType, Graph, NodeRef, PortRef};
 use basedrop::Shared;
 use crossbeam::channel::{self, Receiver, Sender};
 use fnv::FnvHashMap;
+use log::warn;
 use rusty_daw_core::SampleRate;
 use smallvec::SmallVec;
 use std::error::Error;
@@ -9,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::{cell::UnsafeCell, hash::Hash};
 
 use crate::event::DAWEngineEvent;
+use crate::graph::PluginActivationStatus;
 use crate::host_request::{HostInfo, HostRequest};
 use crate::plugin::ext::audio_ports::AudioPortsExtension;
 use crate::plugin::{PluginAudioThread, PluginMainThread, PluginSaveState};
@@ -338,7 +340,7 @@ impl PluginInstancePool {
         debug_name: Shared<String>,
         abstract_graph: &mut Graph<PluginInstanceID, PortID, DefaultPortType>,
         activate: bool,
-    ) -> (PluginInstanceID, Option<Result<(), PluginActivationError>>) {
+    ) -> (PluginInstanceID, PluginActivationStatus) {
         let node_id = if let Some(node_id) = self.free_graph_plugins.pop() {
             node_id
         } else {
@@ -436,20 +438,10 @@ impl PluginInstancePool {
         let activate_res = if activate {
             self.activate_plugin_instance(&id, abstract_graph, false)
         } else {
-            Ok(true)
+            PluginActivationStatus::DeactivatedFromSaveState
         };
 
-        if let Err(e) = activate_res {
-            (id, Some(Err(e)))
-        } else {
-            if activate {
-                // TODO: Load plugin preset
-
-                (id, Some(Ok(())))
-            } else {
-                (id, None)
-            }
-        }
+        (id, activate_res)
     }
 
     pub fn remove_graph_plugin(
@@ -483,7 +475,7 @@ impl PluginInstancePool {
         id: &PluginInstanceID,
         abstract_graph: &mut Graph<PluginInstanceID, PortID, DefaultPortType>,
         check_for_port_change: bool,
-    ) -> Result<bool, PluginActivationError> {
+    ) -> PluginActivationStatus {
         let node_i: usize = id.node_id.into();
         if let Some(plugin_instance) = &mut self.graph_plugins[node_i] {
             if let Some(loaded_plugin) = &mut plugin_instance.loaded {
@@ -491,12 +483,12 @@ impl PluginInstancePool {
 
                 if loaded_plugin.audio_thread.is_some() {
                     // Cannot activate plugin that is already active.
-                    return Ok(false);
+                    return PluginActivationStatus::Activated;
                 }
 
                 log::trace!("Activating plugin instance {:?}", &loaded_plugin.main_thread.id);
 
-                if check_for_port_change {
+                let res = if check_for_port_change {
                     let new_audio_ports_ext = loaded_plugin
                         .main_thread
                         .plugin
@@ -560,8 +552,16 @@ impl PluginInstancePool {
 
                         loaded_plugin.save_state.audio_in_out_channels =
                             (audio_in_channels as u16, audio_out_channels as u16);
+
+                        PluginActivationStatus::ActivatedWithNewPortConfig {
+                            audio_ports: loaded_plugin.audio_ports_ext.clone(),
+                        }
+                    } else {
+                        PluginActivationStatus::Activated
                     }
-                }
+                } else {
+                    PluginActivationStatus::Activated
+                };
 
                 match loaded_plugin.main_thread.plugin.activate(
                     self.sample_rate,
@@ -581,13 +581,26 @@ impl PluginInstancePool {
                         log::debug!("Successfully activated plugin instance {:?}", &id);
                     }
                     Err(e) => {
-                        return Err(PluginActivationError { plugin_id: id.clone(), error: e });
+                        return PluginActivationStatus::Error(PluginActivationError {
+                            plugin_id: id.clone(),
+                            error: e,
+                        });
                     }
                 }
-            }
-        }
 
-        Ok(true)
+                res
+            } else {
+                PluginActivationStatus::Error(PluginActivationError {
+                    plugin_id: id.clone(),
+                    error: "Plugin is not loaded".into(),
+                })
+            }
+        } else {
+            PluginActivationStatus::Error(PluginActivationError {
+                plugin_id: id.clone(),
+                error: "Unexpected error: Plugin instance does not exist in the audio graph".into(),
+            })
+        }
     }
 
     pub fn deactivate_plugin_instance(&mut self, id: &PluginInstanceID) {
@@ -729,12 +742,11 @@ impl PluginInstancePool {
     pub fn on_main_thread(
         &mut self,
         abstract_graph: &mut Graph<PluginInstanceID, PortID, DefaultPortType>,
-    ) -> SmallVec<[(PluginInstanceID, Result<(), PluginActivationError>); 4]> {
+    ) -> SmallVec<[(PluginInstanceID, PluginActivationStatus); 4]> {
         log::trace!("Engine start on main thread calls...");
 
-        let mut plugins_to_restart: SmallVec<
-            [(PluginInstanceID, Result<(), PluginActivationError>); 4],
-        > = SmallVec::new();
+        let mut plugins_to_restart: SmallVec<[(PluginInstanceID, PluginActivationStatus); 4]> =
+            SmallVec::new();
 
         // TODO: Find a more optimal way to poll for requests? We can't just use an spsc message
         // channel because CLAP plugins use the same host pointer for requests in the audio thread
@@ -799,21 +811,17 @@ impl PluginInstancePool {
                         .restart_requested
                         .store(false, Ordering::Relaxed);
 
-                    plugins_to_restart.push((loaded_plugin.main_thread.id.clone(), Ok(())));
+                    plugins_to_restart.push((
+                        loaded_plugin.main_thread.id.clone(),
+                        PluginActivationStatus::Activated,
+                    ));
                 }
             }
         }
 
         for id in plugins_to_restart.iter_mut() {
             self.deactivate_plugin_instance(&id.0);
-            let res = self.activate_plugin_instance(&id.0, abstract_graph, true);
-
-            if let Err(e) = res {
-                id.1 = Err(e);
-            } else {
-                // TODO: Remove this?
-                assert!(self.get_graph_plugin_audio_thread(&id.0).unwrap().is_some());
-            }
+            id.1 = self.activate_plugin_instance(&id.0, abstract_graph, true);
         }
 
         plugins_to_restart

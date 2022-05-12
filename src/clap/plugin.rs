@@ -15,6 +15,7 @@ use clap_sys::process::{
     CLAP_PROCESS_SLEEP, CLAP_PROCESS_TAIL,
 };
 use clap_sys::string_sizes::CLAP_PATH_SIZE;
+use clap_sys::version::clap_version as ClapVersion;
 
 use super::c_char_helpers::c_char_ptr_to_maybe_str;
 use super::host_request::ClapHostRequest;
@@ -52,6 +53,7 @@ pub(crate) struct ClapPluginFactory {
     descriptor: PluginDescriptor,
     id: Shared<String>,
     c_id: CString,
+    clap_version: ClapVersion,
 }
 
 impl ClapPluginFactory {
@@ -72,6 +74,17 @@ impl ClapPluginFactory {
         // Safe because we are storing the library in this struct itself, ensuring
         // that the lifetime of this doesn't outlive the lifetime of the library.
         let raw_entry = unsafe { *entry.into_raw() };
+
+        if raw_entry.is_null() {
+            return Err(format!(
+                "Plugin from path {:?} has a null pointer for raw_entry",
+                plugin_path
+            )
+            .into());
+        }
+
+        // Safe because we checked that this was not null.
+        let clap_version = unsafe { (*raw_entry).clap_version };
 
         let plugin_path_parent_folder = plugin_path
             .parent()
@@ -135,7 +148,13 @@ impl ClapPluginFactory {
 
             let c_id = CString::new(descriptor.id.clone()).unwrap();
 
-            factories.push(Self { shared_lib: Shared::clone(&shared_lib), descriptor, id, c_id });
+            factories.push(Self {
+                shared_lib: Shared::clone(&shared_lib),
+                descriptor,
+                id,
+                c_id,
+                clap_version,
+            });
         }
 
         Ok(factories)
@@ -143,6 +162,10 @@ impl ClapPluginFactory {
 
     pub fn descriptor(&self) -> &PluginDescriptor {
         &self.descriptor
+    }
+
+    pub fn clap_version(&self) -> &ClapVersion {
+        &self.clap_version
     }
 
     pub fn id(&self) -> Shared<String> {

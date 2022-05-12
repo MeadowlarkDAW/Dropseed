@@ -19,6 +19,7 @@ use plugin_pool::{PluginInstanceChannel, PluginInstancePool};
 use schedule::Schedule;
 use verifier::Verifier;
 
+use crate::plugin::ext::audio_ports::AudioPortsExtension;
 use crate::plugin_scanner::ScannedPluginKey;
 
 pub use compiler::GraphCompilerError;
@@ -149,7 +150,7 @@ impl AudioGraph {
             plugin_channel: Shared::new(&self.coll_handle, PluginInstanceChannel::new()),
         };
 
-        let (plugin_and_host_request, debug_name, format, new_save_state, init_status) =
+        let (plugin_and_host_request, debug_name, format, new_save_state, load_status) =
             match plugin_scanner.create_plugin(
                 &key,
                 &host_request,
@@ -193,13 +194,12 @@ impl AudioGraph {
             activate,
         );
 
-        NewPluginRes { plugin_id, init_status, activation_status }
+        let load_status = load_status.map(|_| activation_status);
+
+        NewPluginRes { plugin_id, load_status }
     }
 
-    pub fn activate_plugin_instance(
-        &mut self,
-        id: &PluginInstanceID,
-    ) -> Result<bool, PluginActivationError> {
+    pub fn activate_plugin_instance(&mut self, id: &PluginInstanceID) -> PluginActivationStatus {
         self.plugin_pool.activate_plugin_instance(id, &mut self.abstract_graph, true)
     }
 
@@ -857,7 +857,7 @@ impl AudioGraph {
 
     pub(crate) fn on_main_thread(
         &mut self,
-    ) -> SmallVec<[(PluginInstanceID, Result<(), PluginActivationError>); 4]> {
+    ) -> SmallVec<[(PluginInstanceID, PluginActivationStatus); 4]> {
         self.plugin_pool.on_main_thread(&mut self.abstract_graph)
     }
 }
@@ -874,10 +874,41 @@ pub struct AudioGraphRestoredInfo {
 }
 
 #[derive(Debug)]
+pub enum PluginActivationStatus {
+    /// This means the plugin successfully activated and returned
+    /// its new audio/event port configuration.
+    ///
+    /// This will always be returned for plugin instances that are
+    /// successfully activating for the first time.
+    ActivatedWithNewPortConfig { audio_ports: AudioPortsExtension },
+
+    /// This means the plugin successfully activated and its audio/event
+    /// port configuration has not changed.
+    ///
+    /// This may only return if the plugin has already activated once
+    /// before.
+    Activated,
+
+    /// This means that the plugin loaded but did not activate yet. This
+    /// can happen when the user loads a project with a deactivated
+    /// plugin.
+    DeactivatedFromSaveState,
+
+    /// This means that the plugin failed to activate.
+    Error(PluginActivationError),
+}
+
+#[derive(Debug)]
 pub struct NewPluginRes {
     pub plugin_id: PluginInstanceID,
-    pub init_status: Result<(), NewPluginInstanceError>,
-    pub activation_status: Option<Result<(), PluginActivationError>>,
+
+    /// If this is `Some` then it means that the plugin successfully
+    /// loaded.
+    ///
+    /// If this is `Err(e)` then it means the plugin failed to load
+    /// (most likely because the user doesn't have the plugin installed
+    /// or they misconfigured their audio port search path).
+    pub load_status: Result<PluginActivationStatus, NewPluginInstanceError>,
 }
 
 #[derive(Debug)]

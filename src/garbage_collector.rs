@@ -21,7 +21,7 @@ pub(crate) fn run_garbage_collector_thread(
 
                 last_collect = Instant::now();
 
-                log::trace!("Garbage collected");
+                //log::trace!("Garbage collected");
             }
 
             std::thread::sleep(WAIT_INTERVAL);

@@ -22,9 +22,24 @@ pub enum PluginFormat {
     Clap,
 }
 
+impl std::fmt::Display for PluginFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PluginFormat::Internal => {
+                write!(f, "internal")
+            }
+            PluginFormat::Clap => {
+                write!(f, "clap")
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ScannedPlugin {
     pub description: PluginDescriptor,
+    pub format: PluginFormat,
+    pub format_version: Option<String>,
     pub key: ScannedPluginKey,
 }
 
@@ -181,11 +196,14 @@ impl PluginScanner {
                     Ok(mut factories) => {
                         for f in factories.drain(..) {
                             let id: String = f.descriptor().id.clone();
+                            let v = f.clap_version();
+                            let format_version = format!("{}.{}.{}", v.major, v.minor, v.revision);
 
                             log::info!(
-                                "Successfully scanned CLAP plugin with ID: {} and version {}",
+                                "Successfully scanned CLAP plugin with ID: {}, version {}, and CLAP version {}",
                                 &id,
-                                &f.descriptor().version
+                                &f.descriptor().version,
+                                &format_version,
                             );
                             log::trace!("Full plugin descriptor: {:?}", f.descriptor());
 
@@ -194,6 +212,8 @@ impl PluginScanner {
 
                             scanned_plugins.push(ScannedPlugin {
                                 description: f.description(),
+                                format: PluginFormat::Clap,
+                                format_version: Some(format_version),
                                 key: key.clone(),
                             });
 
