@@ -21,7 +21,7 @@ cpal-asio = ["cpal/asio"]
 
 [workspace]
 members = [
-    "examples/simple-daw-example",
+    "examples/basic-daw-example",
 ]
 
 [dependencies]

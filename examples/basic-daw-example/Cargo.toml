@@ -1,5 +1,5 @@
 [package]
-name = "simple-daw-example"
+name = "basic-daw-example"
 version = "0.1.0"
 edition = "2021"
 

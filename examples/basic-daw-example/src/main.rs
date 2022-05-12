@@ -12,6 +12,11 @@ use std::time::Duration;
 mod effect_rack_page;
 mod scanned_plugins_page;
 
+const MIN_BLOCK_SIZE: usize = 1;
+const MAX_BLOCK_SIZE: usize = 512;
+const GRAPH_IN_CHANNELS: u16 = 2;
+const GRAPH_OUT_CHANNELS: u16 = 2;
+
 fn main() {
     mowl::init().unwrap();
 
@@ -27,6 +32,7 @@ fn main() {
     let config = device.default_output_config().expect("no default output config available");
 
     let num_out_channels = usize::from(config.channels());
+    let sample_rate: SampleRate = config.sample_rate().0.into();
 
     let mut shared_schedule: Option<SharedSchedule> = None;
 
@@ -65,18 +71,30 @@ fn main() {
     );
 
     engine.rescan_plugin_directories();
-    engine.activate_engine(SampleRate::default(), 1, 256, 2, 2);
+    engine.activate_engine(
+        sample_rate,
+        MIN_BLOCK_SIZE,
+        MAX_BLOCK_SIZE,
+        GRAPH_IN_CHANNELS,
+        GRAPH_OUT_CHANNELS,
+    );
 
     // ---  Run the UI  -----------------------------------------------------------
 
     let options = eframe::NativeOptions::default();
     eframe::run_native(
-        "Simple DAW Example",
+        "Basic DAW Example",
         options,
-        Box::new(|cc| {
+        Box::new(move |cc| {
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
 
-            Box::new(SimpleDawExampleGUI::new(engine, engine_rx, cpal_stream, to_audio_thread_tx))
+            Box::new(BasicDawExampleGUI::new(
+                engine,
+                engine_rx,
+                cpal_stream,
+                sample_rate,
+                to_audio_thread_tx,
+            ))
         }),
     );
 }
@@ -88,17 +106,18 @@ enum UIToAudioThreadMsg {
 }
 
 pub struct ActiveEngineState {
-    pub sample_rate_text: String,
     pub graph_in_node_id: PluginInstanceID,
     pub graph_out_node_id: PluginInstanceID,
 }
 
-struct SimpleDawExampleGUI {
+struct BasicDawExampleGUI {
     engine: RustyDAWEngine,
     engine_rx: Receiver<DAWEngineEvent>,
 
     to_audio_thread_tx: ringbuf::Producer<UIToAudioThreadMsg>,
     _cpal_stream: Stream,
+
+    sample_rate: SampleRate,
 
     plugin_list: Vec<ScannedPlugin>,
 
@@ -109,11 +128,12 @@ struct SimpleDawExampleGUI {
     current_tab: Tab,
 }
 
-impl SimpleDawExampleGUI {
+impl BasicDawExampleGUI {
     fn new(
         engine: RustyDAWEngine,
         engine_rx: Receiver<DAWEngineEvent>,
         cpal_stream: Stream,
+        sample_rate: SampleRate,
         to_audio_thread_tx: ringbuf::Producer<UIToAudioThreadMsg>,
     ) -> Self {
         Self {
@@ -121,6 +141,7 @@ impl SimpleDawExampleGUI {
             engine_rx,
             to_audio_thread_tx,
             _cpal_stream: cpal_stream,
+            sample_rate,
             plugin_list: Vec::new(),
             failed_plugins_text: Vec::new(),
             active_engine_state: None,
@@ -148,12 +169,13 @@ impl SimpleDawExampleGUI {
                 // `RustyDAWEngine::restore_audio_graph_from_save_state()`.
                 DAWEngineEvent::EngineDeactivated(res) => {
                     self.to_audio_thread_tx.push(UIToAudioThreadMsg::DropSharedSchedule).unwrap();
+
+                    self.active_engine_state = None;
                 }
 
                 // This message is sent whenever the engine successfully activates.
                 DAWEngineEvent::EngineActivated(info) => {
                     self.active_engine_state = Some(ActiveEngineState {
-                        sample_rate_text: format!("{}", info.sample_rate.as_u16()),
                         graph_in_node_id: info.graph_in_node_id,
                         graph_out_node_id: info.graph_out_node_id,
                     });
@@ -258,7 +280,7 @@ impl SimpleDawExampleGUI {
     }
 }
 
-impl eframe::App for SimpleDawExampleGUI {
+impl eframe::App for BasicDawExampleGUI {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.poll_updates();
 
@@ -266,6 +288,31 @@ impl eframe::App for SimpleDawExampleGUI {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.current_tab, Tab::EffectRack, "FX Rack");
                 ui.selectable_value(&mut self.current_tab, Tab::ScannedPlugins, "Scanned Plugins");
+
+                ui.with_layout(egui::Layout::right_to_left(), |ui| {
+                    if let Some(state) = &self.active_engine_state {
+                        ui.label(format!("sample rate: {}", self.sample_rate.as_u16()));
+                        ui.colored_label(egui::Color32::GREEN, "active");
+                        ui.label("engine status:");
+
+                        if ui.button("deactivate").clicked() {
+                            self.engine.deactivate_engine();
+                        }
+                    } else {
+                        ui.colored_label(egui::Color32::RED, "inactive");
+                        ui.label("engine status:");
+
+                        if ui.button("activate").clicked() {
+                            self.engine.activate_engine(
+                                self.sample_rate,
+                                MIN_BLOCK_SIZE,
+                                MAX_BLOCK_SIZE,
+                                GRAPH_IN_CHANNELS,
+                                GRAPH_OUT_CHANNELS,
+                            );
+                        }
+                    }
+                });
             });
         });
 

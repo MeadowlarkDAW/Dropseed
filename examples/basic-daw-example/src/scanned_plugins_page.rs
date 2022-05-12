@@ -1,8 +1,8 @@
 use eframe::egui;
 
-use super::SimpleDawExampleGUI;
+use super::BasicDawExampleGUI;
 
-pub(crate) fn show(app: &mut SimpleDawExampleGUI, ui: &mut egui::Ui) {
+pub(crate) fn show(app: &mut BasicDawExampleGUI, ui: &mut egui::Ui) {
     // TODO: Add/remove plugin paths.
 
     if ui.button("Rescan all plugin directories").clicked() {
