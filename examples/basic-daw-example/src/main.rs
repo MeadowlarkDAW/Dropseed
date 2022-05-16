@@ -145,7 +145,7 @@ impl BasicDawExampleGUI {
             plugin_list: Vec::new(),
             failed_plugins_text: Vec::new(),
             active_engine_state: None,
-            current_tab: Tab::ScannedPlugins,
+            current_tab: Tab::EffectRack,
         }
     }
 
@@ -189,40 +189,17 @@ impl BasicDawExampleGUI {
                 // the process of restoring from a save state.
                 //
                 // Reset your UI as if you are loading up a project for the first time, and
-                // wait for the `PluginInstancesAdded` and `PluginEdgesChanged` events in
-                // order to repopulate the UI.
+                // wait for the `AudioGraphModified` event to repopulate the UI.
                 //
                 // If the audio graph is in an invalid state as a result of restoring from
-                // the save state, then the `EngineDeactivatedBecauseGraphIsInvalid` event
+                // the save state, then the `EngineDeactivated(Err(e))` event
                 // will be sent instead.
                 DAWEngineEvent::AudioGraphCleared => {}
 
-                // When this message is received, it means that the audio graph has finished
-                // the process of restoring from a save state.
-                DAWEngineEvent::AudioGraphRestoredFromSaveState(info) => {}
-
-                // This message is sent after the user requests the latest save state from
-                // calling `RustyDAWEngine::request_latest_save_state()`.
+                // This message is sent whenever the audio graph has been modified.
                 //
-                // Use the latest save state as a backup in case a plugin crashes or a bug
-                // in the audio graph compiler causes the audio graph to be in an invalid
-                // state, resulting in the audio engine stopping.
-                DAWEngineEvent::NewSaveState(audio_graph_save_state) => {}
-
-                // This message is sent whenever new plugins are added to the audio graph.
-                DAWEngineEvent::PluginInstancesAdded(instances) => {}
-
-                // This message is sent whenever plugins are removed from the audio graph.
-                //
-                // Note that the host will always send a `PluginEdgesChanged` event
-                // before this event if any of the removed plugins had connected
-                // edges. This `PluginEdgesChanged` event will have all edges that
-                // were connected to any of the removed plugins removed.
-                DAWEngineEvent::PluginInstancesRemoved(instances) => {}
-
-                // This message is sent whenever the edges (connections of ports) of
-                // plugins change (including when adding/removing plugins).
-                DAWEngineEvent::PluginEdgesChanged(info) => {}
+                // Be sure to update your UI from this new state.
+                DAWEngineEvent::AudioGraphModified(res) => {}
 
                 // Sent whenever a plugin becomes deactivated. When a plugin is deactivated
                 // you cannot access any of its methods until it is reactivated.
@@ -320,6 +297,8 @@ impl eframe::App for BasicDawExampleGUI {
             Tab::EffectRack => effect_rack_page::show(self, ui),
             Tab::ScannedPlugins => scanned_plugins_page::show(self, ui),
         });
+
+        self.engine.on_main_thread();
     }
 }
 

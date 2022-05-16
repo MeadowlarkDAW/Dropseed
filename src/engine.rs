@@ -1,8 +1,8 @@
 use audio_graph::DefaultPortType;
 use basedrop::{Collector, Shared};
 use crossbeam::channel::{self, Receiver, Sender};
+use fnv::FnvHashSet;
 use rusty_daw_core::SampleRate;
-use smallvec::SmallVec;
 use std::error::Error;
 use std::path::PathBuf;
 use std::sync::{
@@ -13,8 +13,8 @@ use std::time::Duration;
 
 use crate::event::{DAWEngineEvent, PluginScannerEvent};
 use crate::graph::{
-    AudioGraph, AudioGraphSaveState, Edge, PluginActivationStatus, PluginEdges,
-    PluginEdgesChangedInfo, PluginInstanceID, SharedSchedule,
+    AudioGraph, AudioGraphSaveState, Edge, NewPluginRes, PluginActivationStatus, PluginEdges,
+    PluginInstanceID, SharedSchedule,
 };
 use crate::plugin::{PluginFactory, PluginSaveState};
 use crate::plugin_scanner::PluginScanner;
@@ -168,146 +168,125 @@ impl RustyDAWEngine {
         }
     }
 
-    pub fn add_new_plugin_instance(
-        &mut self,
-        key: &ScannedPluginKey,
-        preset: Option<&()>, // TODO
-        activate: bool,
-    ) {
+    pub fn modify_graph(&mut self, mut req: ModifyGraphRequest) {
         if let Some(audio_graph) = &mut self.audio_graph {
-            let res = if let Some(preset) = preset {
-                let save_state = PluginSaveState {
-                    key: key.clone(),
-                    _preset: preset.clone(),
-                    activation_requested: activate,
-                    audio_in_out_channels: (0, 0),
+            let mut affected_plugins: FnvHashSet<PluginInstanceID> = FnvHashSet::default();
+
+            for edge in req.disconnect_edges.iter() {
+                if audio_graph.disconnect_edge(edge) {
+                    let _ = affected_plugins.insert(edge.src_plugin_id.clone());
+                    let _ = affected_plugins.insert(edge.dst_plugin_id.clone());
+                }
+            }
+
+            let mut removed_plugins = audio_graph
+                .remove_plugin_instances(&req.remove_plugin_instances, &mut affected_plugins);
+
+            let new_plugins_res: Vec<NewPluginRes> = req
+                .add_plugin_instances
+                .drain(..)
+                .map(|(key, preset)| {
+                    if let Some(preset) = preset {
+                        let save_state = PluginSaveState {
+                            key: key.clone(),
+                            _preset: preset.clone(),
+                            activation_requested: true,
+                            audio_in_out_channels: (0, 0),
+                        };
+
+                        audio_graph.add_new_plugin_instance(
+                            &key,
+                            Some(save_state),
+                            &mut self.plugin_scanner,
+                            true,
+                            true,
+                        )
+                    } else {
+                        audio_graph.add_new_plugin_instance(
+                            &key,
+                            None,
+                            &mut self.plugin_scanner,
+                            true,
+                            true,
+                        )
+                    }
+                })
+                .collect();
+
+            let new_plugin_ids: Vec<PluginInstanceID> = new_plugins_res
+                .iter()
+                .map(|res| {
+                    let _ = affected_plugins.insert(res.plugin_id.clone());
+                    res.plugin_id.clone()
+                })
+                .collect();
+
+            for edge in req.connect_new_edges.iter() {
+                let src_plugin_id = match &edge.src_plugin_id {
+                    PluginIDReq::Existing(id) => id.clone(),
+                    PluginIDReq::New(index) => {
+                        if let Some(new_plugin_id) = new_plugin_ids.get(*index) {
+                            new_plugin_id.clone()
+                        } else {
+                            log::error!(
+                                "Could not connect edge {:?}: Source plugin index out of bounds",
+                                edge
+                            );
+                            continue;
+                        }
+                    }
                 };
 
-                audio_graph.add_new_plugin_instance(
-                    key,
-                    Some(save_state),
-                    &mut self.plugin_scanner,
-                    activate,
-                    true,
-                )
-            } else {
-                audio_graph.add_new_plugin_instance(
-                    key,
-                    None,
-                    &mut self.plugin_scanner,
-                    activate,
-                    true,
-                )
-            };
-
-            self.event_tx.send(DAWEngineEvent::PluginInstancesAdded(vec![res])).unwrap();
-        } else {
-            log::warn!("Cannot insert new audio plugin: Engine is deactivated");
-        }
-    }
-
-    pub fn insert_new_plugin_between_main_ports(
-        &mut self,
-        key: &ScannedPluginKey,
-        preset: Option<&()>, // TODO
-        src_plugin_id: &PluginInstanceID,
-        dst_plugin_id: &PluginInstanceID,
-        activate: bool,
-    ) {
-        if let Some(audio_graph) = &mut self.audio_graph {
-            let res = if let Some(preset) = preset {
-                let save_state = PluginSaveState {
-                    key: key.clone(),
-                    _preset: preset.clone(),
-                    activation_requested: activate,
-                    audio_in_out_channels: (0, 0),
+                let dst_plugin_id = match &edge.dst_plugin_id {
+                    PluginIDReq::Existing(id) => id.clone(),
+                    PluginIDReq::New(index) => {
+                        if let Some(new_plugin_id) = new_plugin_ids.get(*index) {
+                            new_plugin_id.clone()
+                        } else {
+                            log::error!("Could not connect edge {:?}: Destination plugin index out of bounds", edge);
+                            continue;
+                        }
+                    }
                 };
 
-                audio_graph.insert_new_plugin_between_main_ports(
-                    key,
-                    Some(save_state),
-                    &mut self.plugin_scanner,
-                    true,
+                let new_edge = Edge {
+                    edge_type: edge.edge_type,
                     src_plugin_id,
                     dst_plugin_id,
-                    activate,
-                )
-            } else {
-                audio_graph.insert_new_plugin_between_main_ports(
-                    key,
-                    None,
-                    &mut self.plugin_scanner,
-                    true,
-                    src_plugin_id,
-                    dst_plugin_id,
-                    activate,
-                )
+                    src_channel: edge.src_channel,
+                    dst_channel: edge.dst_channel,
+                };
+
+                if let Err(e) = audio_graph.connect_edge(&new_edge) {
+                    log::error!("Could not connect edge {:?}: {}", edge, e);
+                } else {
+                    let _ = affected_plugins.insert(new_edge.src_plugin_id.clone());
+                    let _ = affected_plugins.insert(new_edge.dst_plugin_id.clone());
+                }
+            }
+
+            let updated_plugin_edges: Vec<(PluginInstanceID, PluginEdges)> = affected_plugins
+                .iter()
+                .filter(|plugin_id| !removed_plugins.contains(plugin_id))
+                .map(|plugin_id| {
+                    (plugin_id.clone(), audio_graph.get_plugin_edges(plugin_id).unwrap())
+                })
+                .collect();
+
+            let removed_plugins = removed_plugins.drain().collect();
+
+            let res = ModifyGraphRes {
+                new_plugins: new_plugins_res,
+                removed_plugins,
+                updated_plugin_edges,
             };
 
-            match res {
-                Ok((res, plugins_new_edges)) => {
-                    self.event_tx.send(DAWEngineEvent::PluginInstancesAdded(vec![res])).unwrap();
-                    self.event_tx
-                        .send(DAWEngineEvent::PluginEdgesChanged(plugins_new_edges))
-                        .unwrap();
-                }
-                Err(e) => {
-                    log::error!("Could not insert new plugin instance between: {}", e);
-                }
-            }
+            // TODO: Compile audio graph in a separate thread?
+            self.compile_audio_graph();
+
+            self.event_tx.send(DAWEngineEvent::AudioGraphModified(res)).unwrap();
         } else {
-            log::warn!("Cannot insert new audio plugin: Engine is deactivated");
-        }
-    }
-
-    pub fn remove_plugin_instances(&mut self, plugin_ids: Vec<PluginInstanceID>) {
-        if let Some(audio_graph) = &mut self.audio_graph {
-            let (removed_plugins, affected_plugins) =
-                audio_graph.remove_plugin_instances(&plugin_ids);
-
-            let mut plugins_new_edges: Vec<(PluginInstanceID, PluginEdges)> = Vec::new();
-            for id in plugin_ids.iter() {
-                plugins_new_edges.push((
-                    id.clone(),
-                    PluginEdges { incoming: SmallVec::new(), outgoing: SmallVec::new() },
-                ));
-            }
-            for id in affected_plugins.iter() {
-                let edges = audio_graph.get_plugin_edges(&id).unwrap();
-                plugins_new_edges.push((id.clone(), edges));
-            }
-
-            self.event_tx
-                .send(DAWEngineEvent::PluginEdgesChanged(PluginEdgesChangedInfo {
-                    plugins_new_edges,
-                }))
-                .unwrap();
-            self.event_tx.send(DAWEngineEvent::PluginInstancesRemoved(removed_plugins)).unwrap();
-        } else {
-            log::warn!("Ignored request to remove plugin instance: Engine is deactivated");
-        }
-    }
-
-    pub fn remove_plugin_between(
-        &mut self,
-        plugin_id: &PluginInstanceID,
-        src_plugin_id: &PluginInstanceID,
-        dst_plugin_id: &PluginInstanceID,
-    ) {
-        if let Some(audio_graph) = &mut self.audio_graph {
-            match audio_graph.remove_plugin_between(plugin_id, src_plugin_id, dst_plugin_id) {
-                Some(plugins_new_edges) => {
-                    self.event_tx
-                        .send(DAWEngineEvent::PluginEdgesChanged(plugins_new_edges))
-                        .unwrap();
-                    self.event_tx
-                        .send(DAWEngineEvent::PluginInstancesRemoved(vec![plugin_id.clone()]))
-                        .unwrap();
-                }
-                _ => {}
-            }
-        } else {
-            log::warn!("Ignored request to remove plugin instance: Engine is deactivated");
+            log::warn!("Cannot modify audio graph: Engine is deactivated");
         }
     }
 
@@ -340,7 +319,7 @@ impl RustyDAWEngine {
 
         self.event_tx.send(DAWEngineEvent::AudioGraphCleared).unwrap();
 
-        let (restored_info, plugins_res, plugins_edges) = self
+        let (plugins_res, plugins_edges) = self
             .audio_graph
             .as_mut()
             .unwrap()
@@ -353,12 +332,13 @@ impl RustyDAWEngine {
 
             let save_state = self.audio_graph.as_mut().unwrap().collect_save_state();
 
-            self.event_tx
-                .send(DAWEngineEvent::AudioGraphRestoredFromSaveState(restored_info))
-                .unwrap();
+            let res = ModifyGraphRes {
+                new_plugins: plugins_res,
+                removed_plugins: Vec::new(),
+                updated_plugin_edges: plugins_edges,
+            };
 
-            self.event_tx.send(DAWEngineEvent::PluginInstancesAdded(plugins_res)).unwrap();
-            self.event_tx.send(DAWEngineEvent::PluginEdgesChanged(plugins_edges)).unwrap();
+            self.event_tx.send(DAWEngineEvent::AudioGraphModified(res)).unwrap();
 
             self.event_tx.send(DAWEngineEvent::NewSaveState(save_state)).unwrap();
         }
@@ -487,4 +467,53 @@ pub struct EngineActivatedInfo {
     pub max_block_frames: usize,
     pub num_audio_in_channels: u16,
     pub num_audio_out_channels: u16,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PluginIDReq {
+    /// Use an existing plugin in the audio graph.
+    Existing(PluginInstanceID),
+    /// Use one of the new plugins defined in `ModifyGraphRequest::add_plugin_instances`
+    /// (the index into that Vec).
+    New(usize),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EdgeReq {
+    pub edge_type: DefaultPortType,
+
+    pub src_plugin_id: PluginIDReq,
+    pub dst_plugin_id: PluginIDReq,
+
+    pub src_channel: u16,
+    pub dst_channel: u16,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModifyGraphRequest {
+    /// Any new plugin instances to add.
+    ///
+    /// `(plugin key, plugin preset (None for default preset))`
+    pub add_plugin_instances: Vec<(ScannedPluginKey, Option<()>)>,
+
+    /// Any plugins to remove.
+    pub remove_plugin_instances: Vec<PluginInstanceID>,
+
+    /// Any new connections between plugins to add.
+    pub connect_new_edges: Vec<EdgeReq>,
+
+    /// Any connections between plugins to remove.
+    pub disconnect_edges: Vec<Edge>,
+}
+
+#[derive(Debug)]
+pub struct ModifyGraphRes {
+    /// Any new plugins that were added to the graph.
+    pub new_plugins: Vec<NewPluginRes>,
+
+    /// Any plugins that were removed from the graph.
+    pub removed_plugins: Vec<PluginInstanceID>,
+
+    ///
+    pub updated_plugin_edges: Vec<(PluginInstanceID, PluginEdges)>,
 }

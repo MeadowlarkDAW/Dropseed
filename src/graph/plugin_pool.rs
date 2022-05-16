@@ -668,6 +668,16 @@ impl PluginInstancePool {
     }
 
     #[inline]
+    pub fn get_id_by_ref(&self, id: NodeRef) -> Result<PluginInstanceID, ()> {
+        let node_i: usize = id.into();
+        if let Some(plugin_instance) = &self.graph_plugins[node_i] {
+            Ok(plugin_instance.id.clone())
+        } else {
+            Err(())
+        }
+    }
+
+    #[inline]
     pub fn get_audio_in_channel_refs(&self, id: &PluginInstanceID) -> Result<&[PortRef], ()> {
         let node_i: usize = id.node_id.into();
         if let Some(plugin_instance) = &self.graph_plugins[node_i] {
@@ -743,7 +753,7 @@ impl PluginInstancePool {
         &mut self,
         abstract_graph: &mut Graph<PluginInstanceID, PortID, DefaultPortType>,
     ) -> SmallVec<[(PluginInstanceID, PluginActivationStatus); 4]> {
-        log::trace!("Engine start on main thread calls...");
+        //log::trace!("Engine start on main thread calls...");
 
         let mut plugins_to_restart: SmallVec<[(PluginInstanceID, PluginActivationStatus); 4]> =
             SmallVec::new();

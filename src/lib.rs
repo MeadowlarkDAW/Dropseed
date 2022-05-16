@@ -12,7 +12,7 @@ mod clap;
 
 pub mod plugin;
 
-pub use engine::RustyDAWEngine;
+pub use engine::{ModifyGraphRequest, ModifyGraphRes, RustyDAWEngine};
 pub use event::{DAWEngineEvent, PluginScannerEvent};
 pub use graph::audio_buffer_pool::AudioPortBuffer;
 pub use graph::{PluginInstanceID, SharedSchedule};

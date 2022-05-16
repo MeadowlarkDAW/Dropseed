@@ -1,11 +1,8 @@
 use std::path::PathBuf;
 
 use crate::{
-    engine::EngineActivatedInfo,
-    graph::{
-        AudioGraphRestoredInfo, AudioGraphSaveState, GraphCompilerError, NewPluginRes,
-        PluginActivatedInfo, PluginActivationError, PluginEdgesChangedInfo, PluginInstanceID,
-    },
+    engine::{EngineActivatedInfo, ModifyGraphRes},
+    graph::{AudioGraphSaveState, GraphCompilerError, PluginActivationError, PluginInstanceID},
     plugin_scanner::RescanPluginDirectoriesRes,
     AudioPortsExtension,
 };
@@ -31,22 +28,6 @@ pub enum DAWEngineEvent {
     /// This message is sent whenever the engine successfully activates.
     EngineActivated(EngineActivatedInfo),
 
-    /// When this message is received, it means that the audio graph is starting
-    /// the process of restoring from a save state.
-    ///
-    /// Reset your UI as if you are loading up a project for the first time, and
-    /// wait for the `PluginInstancesAdded` and `PluginEdgesChanged` events in
-    /// order to repopulate the UI.
-    ///
-    /// If the audio graph is in an invalid state as a result of restoring from
-    /// the save state, then the `EngineDeactivatedBecauseGraphIsInvalid` event
-    /// will be sent instead.
-    AudioGraphCleared,
-
-    /// When this message is received, it means that the audio graph has finished
-    /// the process of restoring from a save state.
-    AudioGraphRestoredFromSaveState(AudioGraphRestoredInfo),
-
     /// This message is sent after the user requests the latest save state from
     /// calling `RustyDAWEngine::request_latest_save_state()`.
     ///
@@ -55,20 +36,21 @@ pub enum DAWEngineEvent {
     /// state, resulting in the audio engine stopping.
     NewSaveState(AudioGraphSaveState),
 
-    /// This message is sent whenever new plugins are added to the audio graph.
-    PluginInstancesAdded(Vec<NewPluginRes>),
-
-    /// This message is sent whenever plugins are removed from the audio graph.
+    /// When this message is received, it means that the audio graph is starting
+    /// the process of restoring from a save state.
     ///
-    /// Note that the host will always send a `PluginEdgesChanged` event
-    /// before this event if any of the removed plugins had connected
-    /// edges. This `PluginEdgesChanged` event will have all edges that
-    /// were connected to any of the removed plugins removed.
-    PluginInstancesRemoved(Vec<PluginInstanceID>),
+    /// Reset your UI as if you are loading up a project for the first time, and
+    /// wait for the `AudioGraphModified` event to repopulate the UI.
+    ///
+    /// If the audio graph is in an invalid state as a result of restoring from
+    /// the save state, then the `EngineDeactivated(Err(e))` event
+    /// will be sent instead.
+    AudioGraphCleared,
 
-    /// This message is sent whenever the edges (connections of ports) of
-    /// plugins change (including when adding/removing plugins).
-    PluginEdgesChanged(PluginEdgesChangedInfo),
+    /// This message is sent whenever the audio graph has been modified.
+    ///
+    /// Be sure to update your UI from this new state.
+    AudioGraphModified(ModifyGraphRes),
 
     /// Sent whenever a plugin becomes deactivated. When a plugin is deactivated
     /// you cannot access any of its methods until it is reactivated.
