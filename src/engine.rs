@@ -224,7 +224,7 @@ impl RustyDAWEngine {
             for edge in req.connect_new_edges.iter() {
                 let src_plugin_id = match &edge.src_plugin_id {
                     PluginIDReq::Existing(id) => id.clone(),
-                    PluginIDReq::New(index) => {
+                    PluginIDReq::Added(index) => {
                         if let Some(new_plugin_id) = new_plugin_ids.get(*index) {
                             new_plugin_id.clone()
                         } else {
@@ -239,7 +239,7 @@ impl RustyDAWEngine {
 
                 let dst_plugin_id = match &edge.dst_plugin_id {
                     PluginIDReq::Existing(id) => id.clone(),
-                    PluginIDReq::New(index) => {
+                    PluginIDReq::Added(index) => {
                         if let Some(new_plugin_id) = new_plugin_ids.get(*index) {
                             new_plugin_id.clone()
                         } else {
@@ -475,7 +475,7 @@ pub enum PluginIDReq {
     Existing(PluginInstanceID),
     /// Use one of the new plugins defined in `ModifyGraphRequest::add_plugin_instances`
     /// (the index into that Vec).
-    New(usize),
+    Added(usize),
 }
 
 #[derive(Debug, Clone, PartialEq)]

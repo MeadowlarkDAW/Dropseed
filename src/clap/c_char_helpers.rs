@@ -30,11 +30,15 @@ pub(crate) fn str_to_c_char_buf<const BUF_SIZE: usize>(s: &str) -> Option<[c_cha
 
 pub(crate) fn c_char_buf_to_str<'a, const BUF_SIZE: usize>(
     buf: &'a [c_char; BUF_SIZE],
-) -> Result<Cow<'a, str>, FromBytesWithNulError> {
+) -> Result<Cow<'a, str>, ()> {
+    /*
     // Safe because c_char and u8 have the same size.
     let c_buf_u8 = unsafe { &*((*buf).as_ptr() as *const [u8; BUF_SIZE]) };
 
     CStr::from_bytes_with_nul(c_buf_u8).map(|s| s.to_string_lossy())
+    */
+
+    c_char_ptr_to_maybe_str(buf.as_ptr(), BUF_SIZE).unwrap()
 }
 
 pub(crate) fn c_char_ptr_to_maybe_str<'a>(

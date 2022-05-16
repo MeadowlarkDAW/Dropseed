@@ -11,8 +11,10 @@ use crate::plugin::{PluginDescriptor, PluginFactory, PluginMainThread, PluginSav
 use crate::clap::plugin::ClapPluginFactory;
 
 #[cfg(feature = "clap-host")]
-const DEFAULT_CLAP_SCAN_DIRECTORIES: [&'static str; 3] =
-    ["~/.clap", "/usr/lib/clap", "/usr/local/lib/clap"];
+const DEFAULT_CLAP_SCAN_DIRECTORIES: [&'static str; 1] = ["/usr/lib/clap"];
+
+#[cfg(feature = "clap-host")]
+const DEFAULT_LOCAL_CLAP_SCAN_DIRECTORY: &'static str = "/.clap";
 
 const MAX_SCAN_DEPTH: usize = 10;
 
@@ -84,8 +86,6 @@ impl PluginScanner {
 
     #[cfg(feature = "clap-host")]
     pub fn add_clap_scan_directory(&mut self, path: PathBuf) -> bool {
-        use std::str::FromStr;
-
         // Check if the path is already a default path.
         for p in DEFAULT_CLAP_SCAN_DIRECTORIES.iter() {
             if &path == &PathBuf::from_str(p).unwrap() {
@@ -156,13 +156,21 @@ impl PluginScanner {
                 target_os = "openbsd",
                 target_os = "netbsd"
             ))]
-            const CLAP_SEARCH_EXT: [&'static str; 1] = ["*.{clap}"];
+            const CLAP_SEARCH_EXT: [&'static str; 1] = ["*.{clap,so}"];
 
-            for dir in DEFAULT_CLAP_SCAN_DIRECTORIES
-                .map(|s| PathBuf::from_str(s).unwrap())
+            let mut scan_directories: Vec<PathBuf> = DEFAULT_CLAP_SCAN_DIRECTORIES
                 .iter()
-                .chain(self.clap_scan_directories.iter())
-            {
+                .map(|s| PathBuf::from_str(s).unwrap())
+                .collect();
+
+            if let Some(mut dir) = dirs::home_dir() {
+                dir.push(".clap");
+                scan_directories.push(dir);
+            } else {
+                log::warn!("Could not search local clap plugin directory: Could not get user's home directory");
+            }
+
+            for dir in scan_directories.iter().chain(self.clap_scan_directories.iter()) {
                 match globwalk::GlobWalkerBuilder::from_patterns(dir, &CLAP_SEARCH_EXT)
                     .max_depth(MAX_SCAN_DEPTH)
                     .follow_links(true)
@@ -202,7 +210,7 @@ impl PluginScanner {
                             log::info!(
                                 "Successfully scanned CLAP plugin with ID: {}, version {}, and CLAP version {}",
                                 &id,
-                                &f.descriptor().version,
+                                &f.descriptor().version.as_ref().map(|v| v.as_str()).unwrap_or("(none)"),
                                 &format_version,
                             );
                             log::trace!("Full plugin descriptor: {:?}", f.descriptor());

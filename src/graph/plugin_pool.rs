@@ -358,20 +358,26 @@ impl PluginInstancePool {
         // If this isn't right then I did something wrong.
         assert_eq!(node_ref, id.node_id);
 
-        let (main_thread, audio_ports_ext) =
+        let (main_thread, audio_ports_ext, audio_ports_ext_res) =
             if let Some((plugin, host_request)) = plugin_and_host_request {
-                let audio_ports_ext = plugin.audio_ports_extension(&host_request);
-                let num_audio_in = audio_ports_ext.total_in_channels();
-                let num_audio_out = audio_ports_ext.total_out_channels();
+                match plugin.audio_ports_extension(&host_request) {
+                    Ok(audio_ports_ext) => {
+                        let num_audio_in = audio_ports_ext.total_in_channels();
+                        let num_audio_out = audio_ports_ext.total_out_channels();
 
-                save_state.audio_in_out_channels = (num_audio_in as u16, num_audio_out as u16);
+                        save_state.audio_in_out_channels =
+                            (num_audio_in as u16, num_audio_out as u16);
 
-                (
-                    Some(PluginMainThreadInstance { plugin, host_request, id: id.clone() }),
-                    Some(audio_ports_ext),
-                )
+                        (
+                            Some(PluginMainThreadInstance { plugin, host_request, id: id.clone() }),
+                            Some(audio_ports_ext),
+                            Ok(()),
+                        )
+                    }
+                    Err(e) => (None, None, Err(e)),
+                }
             } else {
-                (None, None)
+                (None, None, Ok(()))
             };
 
         save_state.activation_requested = activate;
@@ -435,8 +441,10 @@ impl PluginInstancePool {
 
         log::debug!("Added plugin instance {:?} to audio graph", &id);
 
-        let activate_res = if activate {
+        let activate_res = if activate && audio_ports_ext_res.is_ok() {
             self.activate_plugin_instance(&id, abstract_graph, false)
+        } else if let Err(e) = audio_ports_ext_res {
+            PluginActivationStatus::Error(PluginActivationError { plugin_id: id.clone(), error: e })
         } else {
             PluginActivationStatus::DeactivatedFromSaveState
         };
@@ -489,10 +497,19 @@ impl PluginInstancePool {
                 log::trace!("Activating plugin instance {:?}", &loaded_plugin.main_thread.id);
 
                 let res = if check_for_port_change {
-                    let new_audio_ports_ext = loaded_plugin
+                    let new_audio_ports_ext = match loaded_plugin
                         .main_thread
                         .plugin
-                        .audio_ports_extension(&loaded_plugin.main_thread.host_request);
+                        .audio_ports_extension(&loaded_plugin.main_thread.host_request)
+                    {
+                        Ok(ext) => ext,
+                        Err(e) => {
+                            return PluginActivationStatus::Error(PluginActivationError {
+                                plugin_id: id.clone(),
+                                error: e,
+                            });
+                        }
+                    };
 
                     if new_audio_ports_ext != loaded_plugin.audio_ports_ext {
                         loaded_plugin.audio_ports_ext = new_audio_ports_ext;

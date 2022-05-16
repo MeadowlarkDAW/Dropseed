@@ -24,15 +24,15 @@ pub struct PluginDescriptor {
     /// eg: "org.rustydaw.spicysynth"
     pub id: String,
 
-    /// The displayable name of this plugin.
-    ///
-    /// eg: "Spicy Synth"
-    pub name: String,
-
     /// The version of this plugin.
     ///
     /// eg: "1.4.4" or "1.1.2_beta"
-    pub version: String,
+    pub version: Option<String>,
+
+    /// The displayable name of this plugin.
+    ///
+    /// eg: "Spicy Synth"
+    pub name: Option<String>,
 
     /// The vendor of this plugin.
     ///
@@ -156,15 +156,15 @@ pub trait PluginMainThread {
     ///
     /// This will only be called while the plugin is inactive.
     ///
-    /// The default configuration is a main stereo input port and a main stereo output port.
+    /// The default configuration is one with no audio ports.
     ///
     /// [main-thread & !active_state]
     #[allow(unused)]
     fn audio_ports_extension(
         &self,
         host_request: &HostRequest,
-    ) -> ext::audio_ports::AudioPortsExtension {
-        ext::audio_ports::AudioPortsExtension::default()
+    ) -> Result<ext::audio_ports::AudioPortsExtension, Box<dyn Error>> {
+        Ok(ext::audio_ports::AudioPortsExtension::empty())
     }
 }
 

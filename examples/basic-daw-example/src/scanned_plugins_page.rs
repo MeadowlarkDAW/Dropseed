@@ -28,8 +28,12 @@ pub(crate) fn show(app: &mut BasicDawExampleGUI, ui: &mut egui::Ui) {
                 ui.end_row();
 
                 for plugin in app.plugin_list.iter() {
-                    ui.label(&plugin.description.name);
-                    ui.label(&plugin.description.version);
+                    ui.label(
+                        plugin.description.name.as_ref().map(|v| v.as_str()).unwrap_or("(none)"),
+                    );
+                    ui.label(
+                        plugin.description.version.as_ref().map(|v| v.as_str()).unwrap_or("(none)"),
+                    );
                     ui.label(
                         plugin
                             .description

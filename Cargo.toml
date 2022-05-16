@@ -15,7 +15,7 @@ readme = "README.md"
 
 [features]
 default = ["clap-host", "cpal-backend"]
-clap-host = ["clap-sys", "libloading", "globwalk"]
+clap-host = ["clap-sys", "libloading", "globwalk", "dirs"]
 cpal-backend = ["cpal"]
 cpal-asio = ["cpal/asio"]
 
@@ -28,7 +28,8 @@ members = [
 rusty-daw-core = { path = "../rusty-daw-core" }
 #audio-graph = { git = "https://github.com/MeadowlarkDAW/audio-graph", branch = "main" }
 audio-graph = { path = "../audio-graph" }
-clap-sys = { git = "https://github.com/glowcoil/clap-sys.git", branch = "master", optional = true }
+clap-sys = { git = "https://github.com/glowcoil/clap-sys.git", rev = "b9603dca77250499acce8422e04a5741d6f9faba", optional = true }
+dirs = { version = "4.0", optional = true }
 raw-window-handle = "0.4"
 basedrop = "0.1"
 smallvec = "1.7"

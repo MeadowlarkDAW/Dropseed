@@ -4,8 +4,8 @@ use crossbeam::channel::Receiver;
 use eframe::egui;
 use rusty_daw_core::SampleRate;
 use rusty_daw_engine::{
-    DAWEngineEvent, HostInfo, PluginInstanceID, PluginScannerEvent, RustyDAWEngine, ScannedPlugin,
-    SharedSchedule,
+    DAWEngineEvent, EdgeReq, HostInfo, ModifyGraphRequest, PluginIDReq, PluginInstanceID,
+    PluginScannerEvent, PortType, RustyDAWEngine, ScannedPlugin, SharedSchedule,
 };
 use std::time::Duration;
 
@@ -70,7 +70,6 @@ fn main() {
         Vec::new(),
     );
 
-    engine.rescan_plugin_directories();
     engine.activate_engine(
         sample_rate,
         MIN_BLOCK_SIZE,
@@ -78,6 +77,7 @@ fn main() {
         GRAPH_IN_CHANNELS,
         GRAPH_OUT_CHANNELS,
     );
+    engine.rescan_plugin_directories();
 
     // ---  Run the UI  -----------------------------------------------------------
 
@@ -105,7 +105,7 @@ enum UIToAudioThreadMsg {
     DropSharedSchedule,
 }
 
-pub struct ActiveEngineState {
+pub struct EngineState {
     pub graph_in_node_id: PluginInstanceID,
     pub graph_out_node_id: PluginInstanceID,
 }
@@ -123,7 +123,7 @@ struct BasicDawExampleGUI {
 
     failed_plugins_text: Vec<(String, String)>,
 
-    active_engine_state: Option<ActiveEngineState>,
+    engine_state: Option<EngineState>,
 
     current_tab: Tab,
 }
@@ -144,7 +144,7 @@ impl BasicDawExampleGUI {
             sample_rate,
             plugin_list: Vec::new(),
             failed_plugins_text: Vec::new(),
-            active_engine_state: None,
+            engine_state: None,
             current_tab: Tab::EffectRack,
         }
     }
@@ -170,12 +170,12 @@ impl BasicDawExampleGUI {
                 DAWEngineEvent::EngineDeactivated(res) => {
                     self.to_audio_thread_tx.push(UIToAudioThreadMsg::DropSharedSchedule).unwrap();
 
-                    self.active_engine_state = None;
+                    self.engine_state = None;
                 }
 
                 // This message is sent whenever the engine successfully activates.
                 DAWEngineEvent::EngineActivated(info) => {
-                    self.active_engine_state = Some(ActiveEngineState {
+                    self.engine_state = Some(EngineState {
                         graph_in_node_id: info.graph_in_node_id,
                         graph_out_node_id: info.graph_out_node_id,
                     });
@@ -244,6 +244,54 @@ impl BasicDawExampleGUI {
                                 (format!("{}", path.to_string_lossy()), format!("{}", error))
                             })
                             .collect();
+
+                        if let Some(engine_state) = &mut self.engine_state {
+                            let req = ModifyGraphRequest {
+                                add_plugin_instances: vec![(self.plugin_list[0].key.clone(), None)],
+                                remove_plugin_instances: vec![],
+                                connect_new_edges: vec![
+                                    EdgeReq {
+                                        edge_type: PortType::Audio,
+                                        src_plugin_id: PluginIDReq::Existing(
+                                            engine_state.graph_in_node_id.clone(),
+                                        ),
+                                        dst_plugin_id: PluginIDReq::Added(0),
+                                        src_channel: 0,
+                                        dst_channel: 0,
+                                    },
+                                    EdgeReq {
+                                        edge_type: PortType::Audio,
+                                        src_plugin_id: PluginIDReq::Existing(
+                                            engine_state.graph_in_node_id.clone(),
+                                        ),
+                                        dst_plugin_id: PluginIDReq::Added(0),
+                                        src_channel: 1,
+                                        dst_channel: 1,
+                                    },
+                                    EdgeReq {
+                                        edge_type: PortType::Audio,
+                                        src_plugin_id: PluginIDReq::Added(0),
+                                        dst_plugin_id: PluginIDReq::Existing(
+                                            engine_state.graph_out_node_id.clone(),
+                                        ),
+                                        src_channel: 0,
+                                        dst_channel: 0,
+                                    },
+                                    EdgeReq {
+                                        edge_type: PortType::Audio,
+                                        src_plugin_id: PluginIDReq::Added(0),
+                                        dst_plugin_id: PluginIDReq::Existing(
+                                            engine_state.graph_out_node_id.clone(),
+                                        ),
+                                        src_channel: 1,
+                                        dst_channel: 1,
+                                    },
+                                ],
+                                disconnect_edges: vec![],
+                            };
+
+                            self.engine.modify_graph(req);
+                        }
                     }
                     unkown_event => {
                         dbg!(unkown_event);
@@ -267,7 +315,7 @@ impl eframe::App for BasicDawExampleGUI {
                 ui.selectable_value(&mut self.current_tab, Tab::ScannedPlugins, "Scanned Plugins");
 
                 ui.with_layout(egui::Layout::right_to_left(), |ui| {
-                    if let Some(state) = &self.active_engine_state {
+                    if let Some(state) = &self.engine_state {
                         ui.label(format!("sample rate: {}", self.sample_rate.as_u16()));
                         ui.colored_label(egui::Color32::GREEN, "active");
                         ui.label("engine status:");

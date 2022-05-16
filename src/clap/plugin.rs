@@ -1,4 +1,5 @@
 use basedrop::Shared;
+use clap_sys::string_sizes::CLAP_NAME_SIZE;
 use rusty_daw_core::SampleRate;
 use std::error::Error;
 use std::ffi::CString;
@@ -19,8 +20,12 @@ use clap_sys::version::clap_version as ClapVersion;
 
 use super::c_char_helpers::c_char_ptr_to_maybe_str;
 use super::host_request::ClapHostRequest;
+use crate::clap::c_char_helpers::c_char_buf_to_str;
 use crate::host_request::HostRequest;
 use crate::plugin::{ext, PluginAudioThread, PluginDescriptor, PluginFactory, PluginMainThread};
+use crate::AudioPortInfo;
+use crate::AudioPortsExtension;
+use crate::MainPortsLayout;
 use crate::{AudioPortBuffer, ProcInfo, ProcessStatus};
 
 struct SharedClapLib {
@@ -351,8 +356,192 @@ impl PluginMainThread for ClapPluginMainThread {
     fn audio_ports_extension(
         &self,
         host_request: &HostRequest,
-    ) -> ext::audio_ports::AudioPortsExtension {
-        todo!()
+    ) -> Result<ext::audio_ports::AudioPortsExtension, Box<dyn Error>> {
+        use clap_sys::ext::audio_ports::clap_audio_port_info as RawAudioPortInfo;
+        use clap_sys::ext::audio_ports::clap_plugin_audio_ports as RawAudioPorts;
+        use clap_sys::ext::audio_ports::{
+            CLAP_AUDIO_PORT_IS_MAIN, CLAP_EXT_AUDIO_PORTS, CLAP_PORT_MONO, CLAP_PORT_STEREO,
+        };
+
+        let raw_ext = unsafe {
+            ((&*self.shared_plugin.raw_plugin).get_extension)(
+                self.shared_plugin.raw_plugin,
+                CLAP_EXT_AUDIO_PORTS,
+            )
+        };
+
+        if raw_ext.is_null() {
+            return Ok(ext::audio_ports::AudioPortsExtension::empty());
+        }
+
+        let raw_audio_ports = raw_ext as *const RawAudioPorts;
+
+        let num_in_ports =
+            unsafe { ((*raw_audio_ports).count)(self.shared_plugin.raw_plugin, true) };
+        let num_out_ports =
+            unsafe { ((*raw_audio_ports).count)(self.shared_plugin.raw_plugin, false) };
+
+        let mut raw_in_info: Vec<RawAudioPortInfo> = Vec::with_capacity(num_in_ports as usize);
+        let mut raw_out_info: Vec<RawAudioPortInfo> = Vec::with_capacity(num_out_ports as usize);
+
+        for i in 0..num_in_ports {
+            // TODO: unitilialized?
+            let mut raw_audio_port_info = RawAudioPortInfo {
+                id: 0,
+                name: [0; CLAP_NAME_SIZE],
+                flags: 0,
+                channel_count: 0,
+                port_type: std::ptr::null(),
+                in_place_pair: 0,
+            };
+
+            let res = unsafe {
+                ((*raw_audio_ports).get)(
+                    self.shared_plugin.raw_plugin,
+                    i,
+                    true,
+                    &mut raw_audio_port_info,
+                )
+            };
+            if !res {
+                return Err(format!("Failed to get audio port extension from clap plugin instance {}: plugin returned false on call to clap_plugin_audio_ports.get(plugin, {}, true, info)", &*self.shared_plugin.id, i).into());
+            }
+
+            if raw_audio_port_info.channel_count == 0 {
+                return Err(format!("Failed to get audio port extension from clap plugin instance {}: the input port at index {} has 0 channels", &*self.shared_plugin.id, i).into());
+            }
+
+            raw_in_info.push(raw_audio_port_info);
+        }
+
+        for i in 0..num_out_ports {
+            // TODO: unitilialized?
+            let mut raw_audio_port_info = RawAudioPortInfo {
+                id: 0,
+                name: [0; CLAP_NAME_SIZE],
+                flags: 0,
+                channel_count: 0,
+                port_type: std::ptr::null(),
+                in_place_pair: 0,
+            };
+
+            let res = unsafe {
+                ((*raw_audio_ports).get)(
+                    self.shared_plugin.raw_plugin,
+                    i,
+                    false,
+                    &mut raw_audio_port_info,
+                )
+            };
+            if !res {
+                return Err(format!("Failed to get audio port extension from clap plugin instance {}: plugin returned false on call to clap_plugin_audio_ports.get(plugin, {}, false, info)", &*self.shared_plugin.id, i).into());
+            }
+
+            if raw_audio_port_info.channel_count == 0 {
+                return Err(format!("Failed to get audio port extension from clap plugin instance {}: the output port at index {} has 0 channels", &*self.shared_plugin.id, i).into());
+            }
+
+            raw_out_info.push(raw_audio_port_info);
+        }
+
+        let has_main_in_port = if !raw_in_info.is_empty() {
+            raw_in_info[0].flags & CLAP_AUDIO_PORT_IS_MAIN == 1
+        } else {
+            false
+        };
+        let has_main_out_port = if !raw_out_info.is_empty() {
+            raw_out_info[0].flags & CLAP_AUDIO_PORT_IS_MAIN == 1
+        } else {
+            false
+        };
+
+        let main_ports_layout = if has_main_in_port && has_main_out_port {
+            MainPortsLayout::InOut
+        } else if has_main_in_port {
+            MainPortsLayout::InOnly
+        } else if has_main_out_port {
+            MainPortsLayout::OutOnly
+        } else {
+            MainPortsLayout::NoMainPorts
+        };
+
+        let inputs: Vec<AudioPortInfo> = raw_in_info.iter().map(|raw_info| {
+            let port_type = match c_char_ptr_to_maybe_str(raw_info.port_type, CLAP_NAME_SIZE) {
+                None => None,
+                Some(Err(_)) => {
+                    log::warn!("Failed to get clap_audio_port_info.port_type from plugin instance {}: not null-terminated before {} bytes", &*self.shared_plugin.id, CLAP_NAME_SIZE);
+                    None
+                }
+                Some(Ok(s)) => {
+                    if s.len() == 0 {
+                        None
+                    } else {
+                        Some(s.to_string())
+                    }
+                }
+            };
+
+            let display_name = match c_char_buf_to_str(&raw_info.name) {
+                Ok(n) => {
+                    if n.len() == 0 {
+                        None
+                    } else {
+                        Some(n.to_string())
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to get clap_audio_port_info.name from plugin instance {}", &*self.shared_plugin.id);
+                    None
+                }
+            };
+
+            AudioPortInfo {
+                stable_id: raw_info.id,
+                channels: raw_info.channel_count as usize,
+                port_type,
+                display_name,
+            }
+        }).collect();
+
+        let outputs: Vec<AudioPortInfo> = raw_out_info.iter().map(|raw_info| {
+            let port_type = match c_char_ptr_to_maybe_str(raw_info.port_type, CLAP_NAME_SIZE) {
+                None => None,
+                Some(Err(_)) => {
+                    log::warn!("Failed to get clap_audio_port_info.port_type from plugin instance {}: not null-terminated before {} bytes", &*self.shared_plugin.id, CLAP_NAME_SIZE);
+                    None
+                }
+                Some(Ok(s)) => {
+                    if s.len() == 0 {
+                        None
+                    } else {
+                        Some(s.to_string())
+                    }
+                }
+            };
+
+            let display_name = match c_char_buf_to_str(&raw_info.name) {
+                Ok(n) => {
+                    if n.len() == 0 {
+                        None
+                    } else {
+                        Some(n.to_string())
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to get clap_audio_port_info.name from plugin instance {}", &*self.shared_plugin.id);
+                    None
+                }
+            };
+
+            AudioPortInfo {
+                stable_id: raw_info.id,
+                channels: raw_info.channel_count as usize,
+                port_type,
+                display_name,
+            }
+        }).collect();
+
+        Ok(AudioPortsExtension { inputs, outputs, main_ports_layout })
     }
 }
 
@@ -474,9 +663,9 @@ fn parse_clap_plugin_descriptor(
     };
 
     let id = parse_mandatory(raw.id, "id")?;
-    let name = parse_mandatory(raw.name, "name")?;
-    let version = parse_mandatory(raw.version, "version")?;
 
+    let version = parse_optional(raw.version, "version");
+    let name = parse_optional(raw.name, "name");
     let vendor = parse_optional(raw.vendor, "vendor");
     let description = parse_optional(raw.description, "description");
     let url = parse_optional(raw.url, "url");

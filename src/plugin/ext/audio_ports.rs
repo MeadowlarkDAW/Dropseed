@@ -56,6 +56,14 @@ impl AudioPortsExtension {
         }
     }
 
+    pub fn empty() -> Self {
+        AudioPortsExtension {
+            inputs: vec![],
+            outputs: vec![],
+            main_ports_layout: MainPortsLayout::NoMainPorts,
+        }
+    }
+
     /// A main stereo input port and a main stereo output port.
     pub fn stereo_in_out() -> Self {
         AudioPortsExtension {
