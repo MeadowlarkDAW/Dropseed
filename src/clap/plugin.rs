@@ -217,6 +217,10 @@ impl PluginFactory for ClapPluginFactory {
 
         let init_res = unsafe { ((&*raw_plugin).init)(raw_plugin) };
         if !init_res {
+            unsafe {
+                ((&*raw_plugin).destroy)(raw_plugin);
+            }
+
             return Err(format!(
                 "Plugin with ID {} returned false while calling clap_plug.init()",
                 &self.descriptor.id
