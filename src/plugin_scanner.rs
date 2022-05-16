@@ -11,7 +11,7 @@ use crate::plugin::{PluginDescriptor, PluginFactory, PluginMainThread, PluginSav
 use crate::clap::plugin::ClapPluginFactory;
 
 #[cfg(feature = "clap-host")]
-const DEFAULT_CLAP_SCAN_DIRECTORIES: [&'static str; 1] = ["/usr/lib/clap"];
+const DEFAULT_CLAP_SCAN_DIRECTORIES: [&'static str; 2] = ["/usr/lib/clap", "/usr/local/lib/clap"];
 
 #[cfg(feature = "clap-host")]
 const DEFAULT_LOCAL_CLAP_SCAN_DIRECTORY: &'static str = "/.clap";

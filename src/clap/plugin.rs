@@ -195,7 +195,7 @@ impl PluginFactory for ClapPluginFactory {
         host_request: &HostRequest,
         coll_handle: &basedrop::Handle,
     ) -> Result<Box<dyn PluginMainThread>, Box<dyn Error>> {
-        let clap_host_request = ClapHostRequest::new(host_request.clone(), coll_handle);
+        let mut clap_host_request = ClapHostRequest::new(host_request.clone(), coll_handle);
 
         let raw_plugin = unsafe {
             ((&*self.shared_lib.raw_factory).create_plugin)(
@@ -205,9 +205,20 @@ impl PluginFactory for ClapPluginFactory {
             )
         };
 
+        clap_host_request.plugin_created();
+
         if raw_plugin.is_null() {
             return Err(format!(
                 "Plugin with ID {} returned null while calling clap_plugin_factory.create_plugin()",
+                &self.descriptor.id
+            )
+            .into());
+        }
+
+        let init_res = unsafe { ((&*raw_plugin).init)(raw_plugin) };
+        if !init_res {
+            return Err(format!(
+                "Plugin with ID {} returned false while calling clap_plug.init()",
                 &self.descriptor.id
             )
             .into());

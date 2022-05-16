@@ -23,7 +23,7 @@ impl ClapHostRequest {
         let host_data = Shared::new(
             coll_handle,
             [HostData {
-                plug_did_init: Arc::new(AtomicBool::new(false)),
+                plug_did_create: Arc::new(AtomicBool::new(false)),
                 plugin_channel: Shared::clone(&host_request.plugin_channel),
             }],
         );
@@ -66,6 +66,10 @@ impl ClapHostRequest {
     pub(crate) fn get_raw(&self) -> *const RawClapHost {
         (*self.raw).as_ptr()
     }
+
+    pub(crate) fn plugin_created(&mut self) {
+        self.host_data[0].plug_did_create.store(true, Ordering::Relaxed);
+    }
 }
 
 impl Clone for ClapHostRequest {
@@ -79,7 +83,7 @@ impl Clone for ClapHostRequest {
 }
 
 struct HostData {
-    plug_did_init: Arc<AtomicBool>,
+    plug_did_create: Arc<AtomicBool>,
     plugin_channel: Shared<PluginInstanceChannel>,
 }
 
@@ -112,7 +116,7 @@ unsafe extern "C" fn get_extension(
         return ptr::null();
     }
 
-    if !host_data.plug_did_init.load(Ordering::Relaxed) {
+    if !host_data.plug_did_create.load(Ordering::Relaxed) {
         log::warn!(
             "The plugin can't query for extensions during the create method. Wait for the clap_plugin.init() call."
         );
