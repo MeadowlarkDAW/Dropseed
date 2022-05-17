@@ -1,9 +1,7 @@
-use basedrop::Shared;
 use rusty_daw_core::SampleRate;
 use std::error::Error;
-use std::path::PathBuf;
 
-use crate::host_request::{HostInfo, HostRequest};
+use crate::host_request::HostRequest;
 use crate::AudioPortBuffer;
 
 pub mod ext;
@@ -170,10 +168,11 @@ pub trait PluginMainThread {
 
 /// The methods of an audio plugin instance which run in the "audio" thread.
 pub trait PluginAudioThread: Send + Sync + 'static {
-    /// This will be called each time before a call to `process()`.
+    /// This will be called when the plugin should start processing after just activing/
+    /// waking up from sleep.
     ///
     /// Return an error if the plugin failed to start processing. In this case the host will not
-    /// call `process()` this process cycle.
+    /// call `process()` and return the plugin to sleep.
     ///
     /// By default this just returns `Ok(())`.
     ///
@@ -183,9 +182,9 @@ pub trait PluginAudioThread: Send + Sync + 'static {
         Ok(())
     }
 
-    /// This will be called each time after a call to `process()`.
+    /// This will be called when the host puts the plugin to sleep.
     ///
-    /// By default this does nothing.
+    /// By default this trait method does nothing.
     ///
     /// `[audio-thread & active_state & processing_state]`
     #[allow(unused)]

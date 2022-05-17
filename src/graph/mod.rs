@@ -15,7 +15,7 @@ mod schedule;
 mod verifier;
 
 use audio_buffer_pool::AudioBufferPool;
-use plugin_pool::{PluginInstanceChannel, PluginInstancePool};
+use plugin_pool::{PluginInstanceChannel, PluginInstancePool, ProcessingState};
 use schedule::Schedule;
 use verifier::Verifier;
 
@@ -551,7 +551,7 @@ impl AudioGraph {
             &mut self.verifier,
         ) {
             Ok(schedule) => {
-                log::debug!("Successfully compiled new schedule: {:?}", &schedule);
+                log::debug!("Successfully compiled new schedule:\n{:?}", &schedule);
 
                 self.shared_schedule.set_new_schedule(schedule, &self.coll_handle);
                 Ok(())

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::{graph::plugin_pool::PluginInstanceChannel, host_request::HostRequest};
 
 pub(crate) struct ClapHostRequest {
-    host_request: HostRequest,
+    pub host_request: HostRequest,
     // We are storing this as a slice so we can get a raw pointer
     // for external plugins.
     raw: Shared<[RawClapHost; 1]>,

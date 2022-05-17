@@ -8,8 +8,8 @@ use crate::{graph::audio_buffer_pool::AudioPortBuffer, plugin::process_info::Pro
 pub(crate) struct ClapProcess {
     raw: RawClapProcess,
 
-    audio_in: SmallVec<[AudioPortBuffer; 2]>,
-    audio_out: SmallVec<[AudioPortBuffer; 2]>,
+    pub audio_in: SmallVec<[AudioPortBuffer; 2]>,
+    pub audio_out: SmallVec<[AudioPortBuffer; 2]>,
 
     audio_in_list: Pin<SmallVec<[RawClapAudioBuffer; 2]>>,
     audio_out_list: Pin<SmallVec<[RawClapAudioBuffer; 2]>>,
@@ -20,7 +20,6 @@ pub(crate) struct ClapProcess {
 
 impl ClapProcess {
     pub fn new(
-        &mut self,
         audio_in: SmallVec<[AudioPortBuffer; 2]>,
         audio_out: SmallVec<[AudioPortBuffer; 2]>,
     ) -> Self {

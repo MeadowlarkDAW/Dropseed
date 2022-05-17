@@ -1,15 +1,12 @@
 use audio_graph::{DefaultPortType, Graph, NodeRef, PortRef};
 use basedrop::Shared;
-use crossbeam::channel::{self, Receiver, Sender};
 use fnv::FnvHashMap;
-use log::warn;
 use rusty_daw_core::SampleRate;
 use smallvec::SmallVec;
 use std::error::Error;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::{cell::UnsafeCell, hash::Hash};
 
-use crate::event::DAWEngineEvent;
 use crate::graph::PluginActivationStatus;
 use crate::host_request::{HostInfo, HostRequest};
 use crate::plugin::ext::audio_ports::AudioPortsExtension;
@@ -110,6 +107,7 @@ pub(crate) struct PluginInstanceChannel {
     pub restart_requested: AtomicBool,
     pub process_requested: AtomicBool,
     pub callback_requested: AtomicBool,
+    pub processing_state: SharedProcessingState,
     // TODO: parameter stuff
 }
 
@@ -119,12 +117,56 @@ impl PluginInstanceChannel {
             restart_requested: AtomicBool::new(false),
             process_requested: AtomicBool::new(false),
             callback_requested: AtomicBool::new(false),
+            processing_state: SharedProcessingState::new(),
         }
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub(crate) enum ProcessingState {
+    Processing = 0,
+    Sleeping = 1,
+    WaitingForQuietToSleep = 2,
+    WaitingForTailToSleep = 3,
+}
+
+#[derive(Debug)]
+pub(crate) struct SharedProcessingState {
+    state: AtomicU32,
+}
+
+impl SharedProcessingState {
+    pub fn new() -> Self {
+        Self { state: AtomicU32::new(1) }
+    }
+
+    #[inline]
+    pub fn get(&self) -> ProcessingState {
+        let s = self.state.load(Ordering::Relaxed);
+
+        // Safe because we set `#[repr(u32)]` on this enum, and this AtomicU32
+        // can never be set to a value that is out of range.
+        unsafe { *(&s as *const u32 as *const ProcessingState) }
+    }
+
+    #[inline]
+    pub fn set(&self, state: ProcessingState) {
+        // Safe because we set `#[repr(u32)]` on this enum.
+        let s = unsafe { *(&state as *const ProcessingState as *const u32) };
+
+        self.state.store(s, Ordering::Relaxed);
+    }
+}
+
+pub(crate) enum PluginMainThreadType {
+    Internal(Box<dyn PluginMainThread>),
+    #[cfg(feature = "clap-host")]
+    Clap(crate::clap::plugin::ClapPluginMainThread),
+}
+
 pub(crate) struct PluginMainThreadInstance {
-    pub plugin: Box<dyn PluginMainThread>,
+    pub plugin: PluginMainThreadType,
     pub host_request: HostRequest,
 
     id: PluginInstanceID,
@@ -133,7 +175,6 @@ pub(crate) struct PluginMainThreadInstance {
 pub(crate) struct PluginAudioThreadInstance {
     pub plugin: UnsafeCell<Box<dyn PluginAudioThread>>,
     pub host_request: HostRequest,
-    pub last_process_status: UnsafeCell<ProcessStatus>,
 }
 
 #[derive(Clone)]
@@ -152,11 +193,7 @@ impl SharedPluginAudioThreadInstance {
         Self {
             shared: Shared::new(
                 &coll_handle,
-                PluginAudioThreadInstance {
-                    plugin: UnsafeCell::new(plugin),
-                    host_request,
-                    last_process_status: UnsafeCell::new(ProcessStatus::Continue),
-                },
+                PluginAudioThreadInstance { plugin: UnsafeCell::new(plugin), host_request },
             ),
             id,
         }
@@ -167,9 +204,15 @@ impl SharedPluginAudioThreadInstance {
     }
 }
 
+pub(crate) enum PluginAudioThreadType {
+    Internal(SharedPluginAudioThreadInstance),
+    #[cfg(feature = "clap-host")]
+    Clap(crate::clap::plugin::ClapPluginAudioThread),
+}
+
 struct LoadedPluginInstance {
     main_thread: PluginMainThreadInstance,
-    audio_thread: Option<SharedPluginAudioThreadInstance>,
+    audio_thread: Option<PluginAudioThreadType>,
     save_state: PluginSaveState,
     audio_ports_ext: AudioPortsExtension,
 }
@@ -335,7 +378,7 @@ impl PluginInstancePool {
 
     pub fn add_graph_plugin(
         &mut self,
-        plugin_and_host_request: Option<(Box<dyn PluginMainThread>, HostRequest)>,
+        plugin_and_host_request: Option<(PluginMainThreadType, HostRequest)>,
         mut save_state: PluginSaveState,
         debug_name: Shared<String>,
         abstract_graph: &mut Graph<PluginInstanceID, PortID, DefaultPortType>,
@@ -360,21 +403,50 @@ impl PluginInstancePool {
 
         let (main_thread, audio_ports_ext, audio_ports_ext_res) =
             if let Some((plugin, host_request)) = plugin_and_host_request {
-                match plugin.audio_ports_extension(&host_request) {
-                    Ok(audio_ports_ext) => {
-                        let num_audio_in = audio_ports_ext.total_in_channels();
-                        let num_audio_out = audio_ports_ext.total_out_channels();
+                match &plugin {
+                    PluginMainThreadType::Internal(p) => {
+                        match p.audio_ports_extension(&host_request) {
+                            Ok(audio_ports_ext) => {
+                                let num_audio_in = audio_ports_ext.total_in_channels();
+                                let num_audio_out = audio_ports_ext.total_out_channels();
 
-                        save_state.audio_in_out_channels =
-                            (num_audio_in as u16, num_audio_out as u16);
+                                save_state.audio_in_out_channels =
+                                    (num_audio_in as u16, num_audio_out as u16);
 
-                        (
-                            Some(PluginMainThreadInstance { plugin, host_request, id: id.clone() }),
-                            Some(audio_ports_ext),
-                            Ok(()),
-                        )
+                                (
+                                    Some(PluginMainThreadInstance {
+                                        plugin,
+                                        host_request,
+                                        id: id.clone(),
+                                    }),
+                                    Some(audio_ports_ext),
+                                    Ok(()),
+                                )
+                            }
+                            Err(e) => (None, None, Err(e)),
+                        }
                     }
-                    Err(e) => (None, None, Err(e)),
+                    #[cfg(feature = "clap-host")]
+                    PluginMainThreadType::Clap(p) => match p.audio_ports_extension() {
+                        Ok(audio_ports_ext) => {
+                            let num_audio_in = audio_ports_ext.total_in_channels();
+                            let num_audio_out = audio_ports_ext.total_out_channels();
+
+                            save_state.audio_in_out_channels =
+                                (num_audio_in as u16, num_audio_out as u16);
+
+                            (
+                                Some(PluginMainThreadInstance {
+                                    plugin,
+                                    host_request,
+                                    id: id.clone(),
+                                }),
+                                Some(audio_ports_ext),
+                                Ok(()),
+                            )
+                        }
+                        Err(e) => (None, None, Err(e)),
+                    },
                 }
             } else {
                 (None, None, Ok(()))
@@ -497,18 +569,28 @@ impl PluginInstancePool {
                 log::trace!("Activating plugin instance {:?}", &loaded_plugin.main_thread.id);
 
                 let res = if check_for_port_change {
-                    let new_audio_ports_ext = match loaded_plugin
-                        .main_thread
-                        .plugin
-                        .audio_ports_extension(&loaded_plugin.main_thread.host_request)
-                    {
-                        Ok(ext) => ext,
-                        Err(e) => {
-                            return PluginActivationStatus::Error(PluginActivationError {
-                                plugin_id: id.clone(),
-                                error: e,
-                            });
+                    let new_audio_ports_ext = match &loaded_plugin.main_thread.plugin {
+                        PluginMainThreadType::Internal(p) => {
+                            match p.audio_ports_extension(&loaded_plugin.main_thread.host_request) {
+                                Ok(ext) => ext,
+                                Err(e) => {
+                                    return PluginActivationStatus::Error(PluginActivationError {
+                                        plugin_id: id.clone(),
+                                        error: e,
+                                    });
+                                }
+                            }
                         }
+                        #[cfg(feature = "clap-host")]
+                        PluginMainThreadType::Clap(p) => match p.audio_ports_extension() {
+                            Ok(ext) => ext,
+                            Err(e) => {
+                                return PluginActivationStatus::Error(PluginActivationError {
+                                    plugin_id: id.clone(),
+                                    error: e,
+                                });
+                            }
+                        },
                     };
 
                     if new_audio_ports_ext != loaded_plugin.audio_ports_ext {
@@ -580,28 +662,63 @@ impl PluginInstancePool {
                     PluginActivationStatus::Activated
                 };
 
-                match loaded_plugin.main_thread.plugin.activate(
-                    self.sample_rate,
-                    self.min_frames,
-                    self.max_frames,
-                    &loaded_plugin.main_thread.host_request,
-                    &self.coll_handle,
-                ) {
-                    Ok(plugin_audio_thread) => {
-                        loaded_plugin.audio_thread = Some(SharedPluginAudioThreadInstance::new(
-                            plugin_audio_thread,
-                            loaded_plugin.main_thread.id.clone(),
-                            loaded_plugin.main_thread.host_request.clone(),
-                            &self.coll_handle,
-                        ));
+                match &mut loaded_plugin.main_thread.plugin {
+                    PluginMainThreadType::Internal(p) => match p.activate(
+                        self.sample_rate,
+                        self.min_frames,
+                        self.max_frames,
+                        &loaded_plugin.main_thread.host_request,
+                        &self.coll_handle,
+                    ) {
+                        Ok(plugin_audio_thread) => {
+                            loaded_plugin
+                                .main_thread
+                                .host_request
+                                .plugin_channel
+                                .processing_state
+                                .set(ProcessingState::Sleeping);
 
-                        log::debug!("Successfully activated plugin instance {:?}", &id);
-                    }
-                    Err(e) => {
-                        return PluginActivationStatus::Error(PluginActivationError {
-                            plugin_id: id.clone(),
-                            error: e,
-                        });
+                            loaded_plugin.audio_thread = Some(PluginAudioThreadType::Internal(
+                                SharedPluginAudioThreadInstance::new(
+                                    plugin_audio_thread,
+                                    loaded_plugin.main_thread.id.clone(),
+                                    loaded_plugin.main_thread.host_request.clone(),
+                                    &self.coll_handle,
+                                ),
+                            ));
+
+                            log::debug!("Successfully activated plugin instance {:?}", &id);
+                        }
+                        Err(e) => {
+                            return PluginActivationStatus::Error(PluginActivationError {
+                                plugin_id: id.clone(),
+                                error: e,
+                            });
+                        }
+                    },
+                    #[cfg(feature = "clap-host")]
+                    PluginMainThreadType::Clap(p) => {
+                        match p.activate(self.sample_rate, self.min_frames, self.max_frames) {
+                            Ok(plugin_audio_thread) => {
+                                loaded_plugin
+                                    .main_thread
+                                    .host_request
+                                    .plugin_channel
+                                    .processing_state
+                                    .set(ProcessingState::Sleeping);
+
+                                loaded_plugin.audio_thread =
+                                    Some(PluginAudioThreadType::Clap(plugin_audio_thread));
+
+                                log::debug!("Successfully activated plugin instance {:?}", &id);
+                            }
+                            Err(e) => {
+                                return PluginActivationStatus::Error(PluginActivationError {
+                                    plugin_id: id.clone(),
+                                    error: e,
+                                });
+                            }
+                        }
                     }
                 }
 
@@ -633,10 +750,13 @@ impl PluginInstancePool {
 
                 log::debug!("Deactivating plugin instance {:?}", &loaded_plugin.main_thread.id);
 
-                loaded_plugin
-                    .main_thread
-                    .plugin
-                    .deactivate(&loaded_plugin.main_thread.host_request);
+                match &mut loaded_plugin.main_thread.plugin {
+                    PluginMainThreadType::Internal(p) => {
+                        p.deactivate(&loaded_plugin.main_thread.host_request)
+                    }
+                    #[cfg(feature = "clap-host")]
+                    PluginMainThreadType::Clap(p) => p.deactivate(),
+                }
 
                 loaded_plugin.audio_thread = None;
             }
@@ -732,7 +852,7 @@ impl PluginInstancePool {
     pub fn get_graph_plugin_audio_thread(
         &self,
         id: &PluginInstanceID,
-    ) -> Result<Option<&SharedPluginAudioThreadInstance>, ()> {
+    ) -> Result<Option<&PluginAudioThreadType>, ()> {
         let node_i: usize = id.node_id.into();
         if let Some(plugin_instance) = self.graph_plugins[node_i].as_ref() {
             if let Some(loaded_plugin) = plugin_instance.loaded.as_ref() {
@@ -797,30 +917,13 @@ impl PluginInstancePool {
                         .callback_requested
                         .store(false, Ordering::Relaxed);
 
-                    loaded_plugin
-                        .main_thread
-                        .plugin
-                        .on_main_thread(&loaded_plugin.main_thread.host_request);
-                }
-                if loaded_plugin
-                    .main_thread
-                    .host_request
-                    .plugin_channel
-                    .process_requested
-                    .load(Ordering::Relaxed)
-                {
-                    log::trace!("Got process request from plugin {:?}", &plugin.id);
-
-                    loaded_plugin
-                        .main_thread
-                        .host_request
-                        .plugin_channel
-                        .process_requested
-                        .store(false, Ordering::Relaxed);
-
-                    // TODO
-
-                    //recompile_audio_graph = true;
+                    match &mut loaded_plugin.main_thread.plugin {
+                        PluginMainThreadType::Internal(p) => {
+                            p.on_main_thread(&loaded_plugin.main_thread.host_request)
+                        }
+                        #[cfg(feature = "clap-host")]
+                        PluginMainThreadType::Clap(p) => p.on_main_thread(),
+                    }
                 }
                 if loaded_plugin
                     .main_thread
@@ -829,7 +932,7 @@ impl PluginInstancePool {
                     .restart_requested
                     .load(Ordering::Relaxed)
                 {
-                    log::trace!("Gotprestart request from plugin {:?}", &plugin.id);
+                    log::trace!("Got restart request from plugin {:?}", &plugin.id);
 
                     loaded_plugin
                         .main_thread

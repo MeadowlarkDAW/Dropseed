@@ -4,6 +4,7 @@ use rusty_daw_core::SampleRate;
 use std::error::Error;
 use std::ffi::CString;
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 
 use clap_sys::entry::clap_plugin_entry as RawClapEntry;
 use clap_sys::plugin::clap_plugin as RawClapPlugin;
@@ -11,22 +12,18 @@ use clap_sys::plugin::clap_plugin_descriptor as RawClapPluginDescriptor;
 use clap_sys::plugin_factory::clap_plugin_factory as RawClapPluginFactory;
 use clap_sys::plugin_factory::CLAP_PLUGIN_FACTORY_ID;
 use clap_sys::process::clap_process as RawClapProcess;
-use clap_sys::process::{
-    CLAP_PROCESS_CONTINUE, CLAP_PROCESS_CONTINUE_IF_NOT_QUIET, CLAP_PROCESS_ERROR,
-    CLAP_PROCESS_SLEEP, CLAP_PROCESS_TAIL,
-};
 use clap_sys::string_sizes::CLAP_PATH_SIZE;
 use clap_sys::version::clap_version as ClapVersion;
 
 use super::c_char_helpers::c_char_ptr_to_maybe_str;
 use super::host_request::ClapHostRequest;
 use crate::clap::c_char_helpers::c_char_buf_to_str;
+use crate::graph::plugin_pool::ProcessingState;
 use crate::host_request::HostRequest;
-use crate::plugin::{ext, PluginAudioThread, PluginDescriptor, PluginFactory, PluginMainThread};
+use crate::plugin::{ext, PluginDescriptor};
 use crate::AudioPortInfo;
 use crate::AudioPortsExtension;
 use crate::MainPortsLayout;
-use crate::{AudioPortBuffer, ProcInfo, ProcessStatus};
 
 struct SharedClapLib {
     // We hold on to this to make sure the host callback stays alive for as long as a
@@ -165,10 +162,6 @@ impl ClapPluginFactory {
         Ok(factories)
     }
 
-    pub fn descriptor(&self) -> &PluginDescriptor {
-        &self.descriptor
-    }
-
     pub fn clap_version(&self) -> &ClapVersion {
         &self.clap_version
     }
@@ -176,11 +169,9 @@ impl ClapPluginFactory {
     pub fn id(&self) -> Shared<String> {
         Shared::clone(&self.id)
     }
-}
 
-impl PluginFactory for ClapPluginFactory {
-    fn description(&self) -> PluginDescriptor {
-        self.descriptor.clone()
+    pub fn description(&self) -> &PluginDescriptor {
+        &self.descriptor
     }
 
     /// Create a new instance of this plugin.
@@ -190,11 +181,11 @@ impl PluginFactory for ClapPluginFactory {
     /// A `basedrop` collector handle is provided for realtime-safe garbage collection.
     ///
     /// `[main-thread]`
-    fn new(
+    pub fn new(
         &mut self,
         host_request: &HostRequest,
         coll_handle: &basedrop::Handle,
-    ) -> Result<Box<dyn PluginMainThread>, Box<dyn Error>> {
+    ) -> Result<ClapPluginMainThread, Box<dyn Error>> {
         let mut clap_host_request = ClapHostRequest::new(host_request.clone(), coll_handle);
 
         let raw_plugin = unsafe {
@@ -233,22 +224,23 @@ impl PluginFactory for ClapPluginFactory {
             SharedClapPluginInstance {
                 raw_plugin,
                 id: Shared::clone(&self.id),
-                _host_request: clap_host_request,
+                host_request: clap_host_request,
                 _shared_lib: Shared::clone(&self.shared_lib),
             },
         );
 
-        Ok(Box::new(ClapPluginMainThread { shared_plugin }))
+        Ok(ClapPluginMainThread { shared_plugin })
     }
 }
 
-struct SharedClapPluginInstance {
+pub(crate) struct SharedClapPluginInstance {
+    pub id: Shared<String>,
+
     raw_plugin: *const RawClapPlugin,
-    id: Shared<String>,
 
     // We hold on to these to make sure these stay alive for as long as a
     // reference to this struct exists.
-    _host_request: ClapHostRequest,
+    host_request: ClapHostRequest,
     _shared_lib: Shared<SharedClapLib>,
 }
 
@@ -266,25 +258,17 @@ unsafe impl Send for SharedClapPluginInstance {}
 // This is safe because we are upholding the threading model as defined in the CLAP spec.
 unsafe impl Sync for SharedClapPluginInstance {}
 
-struct ClapPluginMainThread {
+pub(crate) struct ClapPluginMainThread {
     shared_plugin: Shared<SharedClapPluginInstance>,
 }
 
-impl PluginMainThread for ClapPluginMainThread {
+impl ClapPluginMainThread {
     /// This is called after creating a plugin instance and once it's safe for the plugin to
     /// use the host callback methods.
     ///
-    /// A `basedrop` collector handle is provided for realtime-safe garbage collection.
-    ///
-    /// By default this does nothing.
-    ///
     /// `[main-thread & !active_state]`
     #[allow(unused)]
-    fn init(
-        &mut self,
-        _host_request: &HostRequest,
-        coll_handle: &basedrop::Handle,
-    ) -> Result<(), Box<dyn Error>> {
+    pub fn init(&mut self) -> Result<(), Box<dyn Error>> {
         let res =
             unsafe { ((&*self.shared_plugin.raw_plugin).init)(self.shared_plugin.raw_plugin) };
 
@@ -305,19 +289,15 @@ impl PluginMainThread for ClapPluginMainThread {
     /// call. The process's sample rate will be constant and process's frame count will included in
     /// the `[min, max]` range, which is bounded by `[1, INT32_MAX]`.
     ///
-    /// A `basedrop` collector handle is provided for realtime-safe garbage collection.
-    ///
     /// Once activated the latency and port configuration must remain constant, until deactivation.
     ///
     /// `[main-thread & !active_state]`
-    fn activate(
+    pub fn activate(
         &mut self,
         sample_rate: SampleRate,
         min_frames: usize,
         max_frames: usize,
-        _host_request: &HostRequest,
-        _coll_handle: &basedrop::Handle,
-    ) -> Result<Box<dyn PluginAudioThread>, Box<dyn Error>> {
+    ) -> Result<ClapPluginAudioThread, Box<dyn Error>> {
         let res = unsafe {
             ((&*self.shared_plugin.raw_plugin).activate)(
                 self.shared_plugin.raw_plugin,
@@ -328,9 +308,7 @@ impl PluginMainThread for ClapPluginMainThread {
         };
 
         if res {
-            Ok(Box::new(ClapPluginAudioThread {
-                shared_plugin: Shared::clone(&self.shared_plugin),
-            }))
+            Ok(ClapPluginAudioThread { shared_plugin: Shared::clone(&self.shared_plugin) })
         } else {
             return Err(format!(
                 "Plugin with ID {} returned false on call to clap_plugin.activate()",
@@ -344,7 +322,7 @@ impl PluginMainThread for ClapPluginMainThread {
     /// counterpart has/will be dropped.
     ///
     /// `[main-thread & active_state]`
-    fn deactivate(&mut self, _host_request: &HostRequest) {
+    pub fn deactivate(&mut self) {
         unsafe { ((&*self.shared_plugin.raw_plugin).deactivate)(self.shared_plugin.raw_plugin) };
     }
 
@@ -354,7 +332,7 @@ impl PluginMainThread for ClapPluginMainThread {
     ///
     /// [main-thread]
     #[allow(unused)]
-    fn on_main_thread(&mut self, _host_request: &HostRequest) {
+    pub fn on_main_thread(&mut self) {
         unsafe {
             ((&*self.shared_plugin.raw_plugin).on_main_thread)(self.shared_plugin.raw_plugin)
         };
@@ -368,9 +346,8 @@ impl PluginMainThread for ClapPluginMainThread {
     ///
     /// [main-thread & !active_state]
     #[allow(unused)]
-    fn audio_ports_extension(
+    pub fn audio_ports_extension(
         &self,
-        host_request: &HostRequest,
     ) -> Result<ext::audio_ports::AudioPortsExtension, Box<dyn Error>> {
         use clap_sys::ext::audio_ports::clap_audio_port_info as RawAudioPortInfo;
         use clap_sys::ext::audio_ports::clap_plugin_audio_ports as RawAudioPorts;
@@ -560,71 +537,73 @@ impl PluginMainThread for ClapPluginMainThread {
     }
 }
 
-struct ClapPluginAudioThread {
+pub(crate) struct ClapPluginAudioThread {
     shared_plugin: Shared<SharedClapPluginInstance>,
 }
 
 impl ClapPluginAudioThread {
-    fn process_clap(&mut self, clap_process: *const RawClapProcess) -> ProcessStatus {
-        let res = unsafe {
-            ((&*self.shared_plugin.raw_plugin).process)(self.shared_plugin.raw_plugin, clap_process)
-        };
+    pub fn processing_state(&self) -> ProcessingState {
+        self.shared_plugin.host_request.host_request.plugin_channel.processing_state.get()
+    }
 
-        match res {
-            CLAP_PROCESS_ERROR => ProcessStatus::Error,
-            CLAP_PROCESS_CONTINUE => ProcessStatus::Continue,
-            CLAP_PROCESS_CONTINUE_IF_NOT_QUIET => ProcessStatus::ContinueIfNotQuiet,
-            CLAP_PROCESS_TAIL => ProcessStatus::Tail,
-            CLAP_PROCESS_SLEEP => ProcessStatus::Sleep,
-            _ => ProcessStatus::Error,
+    pub fn set_processing_state(&mut self, state: ProcessingState) {
+        self.shared_plugin.host_request.host_request.plugin_channel.processing_state.set(state)
+    }
+
+    pub fn processing_requested(&mut self) -> bool {
+        let res = self
+            .shared_plugin
+            .host_request
+            .host_request
+            .plugin_channel
+            .process_requested
+            .load(Ordering::Relaxed);
+        if res {
+            self.shared_plugin
+                .host_request
+                .host_request
+                .plugin_channel
+                .process_requested
+                .store(false, Ordering::Relaxed);
+        }
+        res
+    }
+
+    pub fn process(&mut self, clap_process: *const RawClapProcess) -> i32 {
+        unsafe {
+            ((&*self.shared_plugin.raw_plugin).process)(self.shared_plugin.raw_plugin, clap_process)
         }
     }
-}
 
-impl PluginAudioThread for ClapPluginAudioThread {
     /// This will be called each time before a call to `process()`.
     ///
     /// Return an error if the plugin failed to start processing. In this case the host will not
     /// call `process()` this process cycle.
     ///
-    /// By default this just returns `Ok(())`.
-    ///
     /// `[audio-thread & active_state & !processing_state]`
-    #[allow(unused)]
-    fn start_processing(&mut self, host_request: &HostRequest) -> Result<(), ()> {
-        let res = unsafe {
+    pub fn start_processing(&mut self) -> bool {
+        unsafe {
             ((&*self.shared_plugin.raw_plugin).start_processing)(self.shared_plugin.raw_plugin)
-        };
-
-        if res {
-            Ok(())
-        } else {
-            Err(())
         }
     }
 
     /// This will be called each time after a call to `process()`.
     ///
-    /// By default this does nothing.
-    ///
     /// `[audio-thread & active_state & processing_state]`
-    #[allow(unused)]
-    fn stop_processing(&mut self, host_request: &HostRequest) {
+    pub fn stop_processing(&mut self) {
         unsafe {
             ((&*self.shared_plugin.raw_plugin).stop_processing)(self.shared_plugin.raw_plugin)
-        };
+        }
     }
 
-    /// This will not be used for CLAP plugins. Instead, the host will call
-    /// `ClapPluginAudioThread::process_clap()`.
-    fn process(
-        &mut self,
-        _info: &ProcInfo,
-        _audio_in: &[AudioPortBuffer],
-        _audio_out: &mut [AudioPortBuffer],
-        _host_request: &HostRequest,
-    ) -> ProcessStatus {
-        ProcessStatus::Error
+    pub fn id(&self) -> &Shared<String> {
+        &self.shared_plugin.id
+    }
+}
+
+impl Clone for ClapPluginAudioThread {
+    fn clone(&self) -> Self {
+        Self { shared_plugin: Shared::clone(&self.shared_plugin) }
     }
 }
 

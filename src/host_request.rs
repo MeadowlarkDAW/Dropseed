@@ -1,7 +1,9 @@
 use std::ffi::{CStr, CString};
 use std::pin::Pin;
-use std::sync::atomic::Ordering;
-use std::thread::ThreadId;
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    Arc,
+};
 
 use basedrop::Shared;
 

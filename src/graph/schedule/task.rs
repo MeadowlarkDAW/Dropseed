@@ -1,7 +1,10 @@
 use smallvec::SmallVec;
+use std::sync::atomic::Ordering;
 
 use crate::graph::audio_buffer_pool::SharedAudioBuffer;
-use crate::graph::plugin_pool::{SharedDelayCompNode, SharedPluginAudioThreadInstance};
+use crate::graph::plugin_pool::{
+    ProcessingState, SharedDelayCompNode, SharedPluginAudioThreadInstance,
+};
 use crate::{AudioPortBuffer, ProcInfo, ProcessStatus};
 
 #[cfg(feature = "clap-host")]
@@ -50,9 +53,25 @@ impl std::fmt::Debug for Task {
             Task::ClapPlugin(t) => {
                 let mut f = f.debug_struct("ClapPlugin");
 
-                // TODO: Processor ID
+                f.field("id", &**t.plugin.id());
 
-                //t.ports.debug_fields(&mut f);
+                if !t.clap_process.audio_in.is_empty() {
+                    let mut s = String::new();
+                    for b in t.clap_process.audio_in.iter() {
+                        s.push_str(&format!("{:?}, ", b))
+                    }
+
+                    f.field("audio_in", &s);
+                }
+
+                if !t.clap_process.audio_out.is_empty() {
+                    let mut s = String::new();
+                    for b in t.clap_process.audio_out.iter() {
+                        s.push_str(&format!("{:?}, ", b))
+                    }
+
+                    f.field("audio_out", &s);
+                }
 
                 f.finish()
             }
@@ -108,9 +127,7 @@ impl Task {
         match self {
             Task::InternalPlugin(task) => task.process(proc_info),
             #[cfg(feature = "clap-host")]
-            Task::ClapPlugin(task) => {
-                todo!()
-            }
+            Task::ClapPlugin(task) => task.process(proc_info),
             Task::DelayComp(task) => task.process(proc_info),
             Task::Sum(task) => task.process(proc_info),
             Task::DeactivatedPlugin(task) => task.process(proc_info),
@@ -127,7 +144,26 @@ pub(crate) struct InternalPluginTask {
 
 impl InternalPluginTask {
     fn process(&mut self, proc_info: &ProcInfo) {
+        let clear_outputs = |audio_out: &mut [AudioPortBuffer]| {
+            for b in audio_out.iter_mut() {
+                b.clear(proc_info);
+            }
+        };
+
         let Self { plugin, audio_in, audio_out } = self;
+
+        let state = plugin.shared.host_request.plugin_channel.processing_state.get();
+
+        let processing_requested =
+            plugin.shared.host_request.plugin_channel.process_requested.load(Ordering::Relaxed);
+        if processing_requested {
+            plugin
+                .shared
+                .host_request
+                .plugin_channel
+                .process_requested
+                .store(false, Ordering::Relaxed);
+        }
 
         // This is safe because the audio thread counterpart of a plugin is only
         // ever borrowed in this method. Also, the verifier has verified that no
@@ -135,34 +171,110 @@ impl InternalPluginTask {
         // multi-threaded schedules of course).
         let plugin_audio_thread = unsafe { &mut *plugin.shared.plugin.get() };
 
-        // TODO: input event stuff
+        if let ProcessingState::Sleeping = state {
+            let has_input_event = true; // TODO
 
-        let status =
-            if let Err(_) = plugin_audio_thread.start_processing(&plugin.shared.host_request) {
-                ProcessStatus::Error
+            if processing_requested || has_input_event {
+                if plugin_audio_thread.start_processing(&plugin.shared.host_request).is_ok() {
+                    plugin
+                        .shared
+                        .host_request
+                        .plugin_channel
+                        .processing_state
+                        .set(ProcessingState::Processing);
+                } else {
+                    plugin
+                        .shared
+                        .host_request
+                        .plugin_channel
+                        .processing_state
+                        .set(ProcessingState::Sleeping);
+
+                    clear_outputs(audio_out);
+                    return;
+                }
             } else {
-                let status = plugin_audio_thread.process(
-                    proc_info,
-                    audio_in,
-                    audio_out,
-                    &plugin.shared.host_request,
-                );
-
-                plugin_audio_thread.stop_processing(&plugin.shared.host_request);
-
-                status
-            };
-
-        // TODO: output event stuff
-
-        if let ProcessStatus::Error = status {
-            // As per the spec, we must clear all output buffers.
-            for b in audio_out.iter_mut() {
-                b.clear(proc_info);
+                clear_outputs(audio_out);
+                return;
             }
         }
 
-        // TODO: Other process status stuff
+        if let ProcessingState::WaitingForQuietToSleep = state {
+            let mut is_silent = true;
+            for b in audio_in.iter() {
+                if !b.is_silent(proc_info) {
+                    is_silent = false;
+                    break;
+                }
+            }
+
+            if is_silent {
+                plugin
+                    .shared
+                    .host_request
+                    .plugin_channel
+                    .processing_state
+                    .set(ProcessingState::Sleeping);
+
+                plugin_audio_thread.stop_processing(&plugin.shared.host_request);
+
+                clear_outputs(audio_out);
+                return;
+            }
+        }
+
+        if let ProcessingState::WaitingForTailToSleep = state {
+            // TODO
+        }
+
+        // TODO: input event stuff
+
+        let status = plugin_audio_thread.process(
+            proc_info,
+            audio_in,
+            audio_out,
+            &plugin.shared.host_request,
+        );
+
+        // TODO: output event stuff
+
+        match status {
+            ProcessStatus::Continue => {
+                plugin
+                    .shared
+                    .host_request
+                    .plugin_channel
+                    .processing_state
+                    .set(ProcessingState::Processing);
+            }
+            ProcessStatus::ContinueIfNotQuiet => {
+                plugin
+                    .shared
+                    .host_request
+                    .plugin_channel
+                    .processing_state
+                    .set(ProcessingState::WaitingForQuietToSleep);
+            }
+            ProcessStatus::Tail => {
+                plugin
+                    .shared
+                    .host_request
+                    .plugin_channel
+                    .processing_state
+                    .set(ProcessingState::WaitingForTailToSleep);
+            }
+            ProcessStatus::Sleep => {
+                plugin
+                    .shared
+                    .host_request
+                    .plugin_channel
+                    .processing_state
+                    .set(ProcessingState::Sleeping);
+            }
+            ProcessStatus::Error => {
+                clear_outputs(audio_out);
+            }
+        }
     }
 }
 

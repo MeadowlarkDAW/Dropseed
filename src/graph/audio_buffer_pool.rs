@@ -281,6 +281,27 @@ impl AudioPortBuffer {
         }
     }
 
+    pub fn is_silent(&self, proc_info: &ProcInfo) -> bool {
+        // TODO: Use silent flag?
+
+        for b in self.rc_buffers.iter() {
+            // Please refer to the "SAFETY NOTE" above on why this is safe.
+            //
+            // In addition the host will never set `proc_info.frames` to something
+            // higher than the maximum frame size (which is what the Vec's initial
+            // capacity is set to).
+            let buf = unsafe { b.borrow(proc_info) };
+
+            for s in buf.iter() {
+                if *s != 0.0 {
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
+
     // TODO: Methods for borrowing more than 2 channel buffers at a time.
 }
 
@@ -322,7 +343,7 @@ pub struct UniqueBufferID {
 
 impl std::fmt::Debug for UniqueBufferID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}_{}", self.buffer_type, self.index)
+        write!(f, "{:?}{}", self.buffer_type, self.index)
     }
 }
 

@@ -11,11 +11,14 @@ use crate::AudioPortBuffer;
 use super::schedule;
 use super::{
     audio_buffer_pool::{AudioBufferPool, SharedAudioBuffer},
-    plugin_pool::PluginInstancePool,
+    plugin_pool::{PluginAudioThreadType, PluginInstancePool},
     schedule::task::{DeactivatedPluginTask, DelayCompTask, InternalPluginTask, SumTask, Task},
     verifier::{Verifier, VerifyScheduleError},
     DefaultPortType, PluginInstanceID, PortID, Schedule,
 };
+
+#[cfg(feature = "clap-host")]
+use crate::clap::{process::ClapProcess, task::ClapPluginTask};
 
 pub(crate) fn compile_graph(
     plugin_pool: &mut PluginInstancePool,
@@ -206,85 +209,121 @@ pub(crate) fn compile_graph(
             continue;
         }
 
-        match plugin_format {
-            PluginFormat::Internal => {
-                if let Some(plugin_audio_thread) =
-                    plugin_pool.get_graph_plugin_audio_thread(&abstract_task.node).unwrap()
-                {
-                    let mut audio_in: SmallVec<[AudioPortBuffer; 2]> = SmallVec::new();
-                    let mut audio_out: SmallVec<[AudioPortBuffer; 2]> = SmallVec::new();
+        let plugin_audio_thread =
+            plugin_pool.get_graph_plugin_audio_thread(&abstract_task.node).unwrap();
 
-                    // Won't panic because this is always `Some` when `get_graph_plugin_audio_thread()` is `Some`.
-                    let audio_ports_ext =
-                        plugin_pool.get_audio_ports_ext(&abstract_task.node).unwrap().unwrap();
+        if plugin_audio_thread.is_none() {
+            let mut audio_through: SmallVec<[(SharedAudioBuffer<f32>, SharedAudioBuffer<f32>); 4]> =
+                SmallVec::new();
+            let mut extra_audio_out: SmallVec<[SharedAudioBuffer<f32>; 4]> = SmallVec::new();
 
-                    let mut port_i = 0;
-                    for in_port in audio_ports_ext.inputs.iter() {
-                        let mut buffers: SmallVec<[SharedAudioBuffer<f32>; 2]> =
-                            SmallVec::with_capacity(in_port.channels);
-                        for _ in 0..in_port.channels {
-                            buffers.push(audio_in_channel_buffers[port_i].clone());
-                            port_i += 1;
-                        }
+            // Plugin is unloaded/deactivated.
+            let mut port_i = 0;
+            if let Some(audio_ports_ext) =
+                plugin_pool.get_audio_ports_ext(&abstract_task.node).unwrap()
+            {
+                if let MainPortsLayout::InOut = audio_ports_ext.main_ports_layout {
+                    let n_main_channels =
+                        audio_ports_ext.inputs[0].channels.min(audio_ports_ext.outputs[0].channels);
 
-                        audio_in.push(AudioPortBuffer::new(buffers, 0)); // TODO: latency?
+                    for _ in 0..n_main_channels {
+                        audio_through.push((
+                            audio_in_channel_buffers[port_i].clone(),
+                            audio_out_channel_buffers[port_i].clone(),
+                        ));
+                        port_i += 1;
                     }
-                    port_i = 0;
-                    for out_port in audio_ports_ext.outputs.iter() {
-                        let mut buffers: SmallVec<[SharedAudioBuffer<f32>; 2]> =
-                            SmallVec::with_capacity(out_port.channels);
-                        for _ in 0..out_port.channels {
-                            buffers.push(audio_out_channel_buffers[port_i].clone());
-                            port_i += 1;
-                        }
-
-                        audio_out.push(AudioPortBuffer::new(buffers, 0)); // TODO: latency?
-                    }
-
-                    tasks.push(Task::InternalPlugin(InternalPluginTask {
-                        plugin: plugin_audio_thread.clone(),
-                        audio_in,
-                        audio_out,
-                    }));
-                } else {
-                    let mut audio_through: SmallVec<
-                        [(SharedAudioBuffer<f32>, SharedAudioBuffer<f32>); 4],
-                    > = SmallVec::new();
-                    let mut extra_audio_out: SmallVec<[SharedAudioBuffer<f32>; 4]> =
-                        SmallVec::new();
-
-                    // Plugin is unloaded/deactivated.
-                    let mut port_i = 0;
-                    if let Some(audio_ports_ext) =
-                        plugin_pool.get_audio_ports_ext(&abstract_task.node).unwrap()
-                    {
-                        if let MainPortsLayout::InOut = audio_ports_ext.main_ports_layout {
-                            let n_main_channels = audio_ports_ext.inputs[0]
-                                .channels
-                                .min(audio_ports_ext.outputs[0].channels);
-
-                            for _ in 0..n_main_channels {
-                                audio_through.push((
-                                    audio_in_channel_buffers[port_i].clone(),
-                                    audio_out_channel_buffers[port_i].clone(),
-                                ));
-                                port_i += 1;
-                            }
-                        }
-                    }
-
-                    for i in port_i..audio_out_channel_buffers.len() {
-                        extra_audio_out.push(audio_out_channel_buffers[i].clone());
-                    }
-
-                    tasks.push(Task::DeactivatedPlugin(DeactivatedPluginTask {
-                        audio_through,
-                        extra_audio_out,
-                    }));
                 }
             }
-            PluginFormat::Clap => {
-                todo!()
+
+            for i in port_i..audio_out_channel_buffers.len() {
+                extra_audio_out.push(audio_out_channel_buffers[i].clone());
+            }
+
+            tasks.push(Task::DeactivatedPlugin(DeactivatedPluginTask {
+                audio_through,
+                extra_audio_out,
+            }));
+
+            continue;
+        }
+
+        match plugin_audio_thread.unwrap() {
+            PluginAudioThreadType::Internal(plugin_audio_thread) => {
+                let mut audio_in: SmallVec<[AudioPortBuffer; 2]> = SmallVec::new();
+                let mut audio_out: SmallVec<[AudioPortBuffer; 2]> = SmallVec::new();
+
+                // Won't panic because this is always `Some` when `get_graph_plugin_audio_thread()` is `Some`.
+                let audio_ports_ext =
+                    plugin_pool.get_audio_ports_ext(&abstract_task.node).unwrap().unwrap();
+
+                let mut port_i = 0;
+                for in_port in audio_ports_ext.inputs.iter() {
+                    let mut buffers: SmallVec<[SharedAudioBuffer<f32>; 2]> =
+                        SmallVec::with_capacity(in_port.channels);
+                    for _ in 0..in_port.channels {
+                        buffers.push(audio_in_channel_buffers[port_i].clone());
+                        port_i += 1;
+                    }
+
+                    audio_in.push(AudioPortBuffer::new(buffers, 0)); // TODO: latency?
+                }
+                port_i = 0;
+                for out_port in audio_ports_ext.outputs.iter() {
+                    let mut buffers: SmallVec<[SharedAudioBuffer<f32>; 2]> =
+                        SmallVec::with_capacity(out_port.channels);
+                    for _ in 0..out_port.channels {
+                        buffers.push(audio_out_channel_buffers[port_i].clone());
+                        port_i += 1;
+                    }
+
+                    audio_out.push(AudioPortBuffer::new(buffers, 0)); // TODO: latency?
+                }
+
+                tasks.push(Task::InternalPlugin(InternalPluginTask {
+                    plugin: plugin_audio_thread.clone(),
+                    audio_in,
+                    audio_out,
+                }));
+            }
+            #[cfg(feature = "clap-host")]
+            PluginAudioThreadType::Clap(plugin_audio_thread) => {
+                let mut audio_in: SmallVec<[AudioPortBuffer; 2]> = SmallVec::new();
+                let mut audio_out: SmallVec<[AudioPortBuffer; 2]> = SmallVec::new();
+
+                // Won't panic because this is always `Some` when `get_graph_plugin_audio_thread()` is `Some`.
+                let audio_ports_ext =
+                    plugin_pool.get_audio_ports_ext(&abstract_task.node).unwrap().unwrap();
+
+                let mut port_i = 0;
+                for in_port in audio_ports_ext.inputs.iter() {
+                    let mut buffers: SmallVec<[SharedAudioBuffer<f32>; 2]> =
+                        SmallVec::with_capacity(in_port.channels);
+                    for _ in 0..in_port.channels {
+                        buffers.push(audio_in_channel_buffers[port_i].clone());
+                        port_i += 1;
+                    }
+
+                    audio_in.push(AudioPortBuffer::new(buffers, 0)); // TODO: latency?
+                }
+                port_i = 0;
+                for out_port in audio_ports_ext.outputs.iter() {
+                    let mut buffers: SmallVec<[SharedAudioBuffer<f32>; 2]> =
+                        SmallVec::with_capacity(out_port.channels);
+                    for _ in 0..out_port.channels {
+                        buffers.push(audio_out_channel_buffers[port_i].clone());
+                        port_i += 1;
+                    }
+
+                    audio_out.push(AudioPortBuffer::new(buffers, 0)); // TODO: latency?
+                }
+
+                let clap_process = ClapProcess::new(audio_in, audio_out);
+
+                tasks.push(Task::ClapPlugin(ClapPluginTask {
+                    plugin: plugin_audio_thread.clone(),
+                    clap_process,
+                }));
             }
         }
     }

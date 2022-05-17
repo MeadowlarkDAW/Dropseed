@@ -39,26 +39,30 @@ impl Schedule {
 
 impl std::fmt::Debug for Schedule {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut f = f.debug_struct("Schedule");
-
-        f.field("tasks", &self.tasks);
-
         let mut s = String::new();
+
+        s.push_str("Schedule {\n    tasks:\n");
+
+        for t in self.tasks.iter() {
+            s.push_str(format!("        {:?},\n", t).as_str());
+        }
+
+        let mut g_s = String::new();
         for b in self.graph_audio_in.iter() {
-            s.push_str(&format!("{:?}, ", b.unique_id()))
+            g_s.push_str(&format!("{:?}, ", b.unique_id()))
         }
-        f.field("graph_audio_in", &s);
+        s.push_str(format!("\n    graph_audio_in: {:?},\n", &g_s).as_str());
 
-        let mut s = String::new();
+        let mut g_s = String::new();
         for b in self.graph_audio_out.iter() {
-            s.push_str(&format!("{:?}, ", b.unique_id()))
+            g_s.push_str(&format!("{:?}, ", b.unique_id()))
         }
-        f.field("graph_audio_out", &s);
+        s.push_str(format!("    graph_audio_out: {:?},\n", &g_s).as_str());
 
-        f.field("max_block_size", &self.max_block_size);
-        f.field("host_info", &*self.host_info);
+        s.push_str(format!("    max_block_size: {},\n", &self.max_block_size).as_str());
+        s.push_str(format!("    host_info: {:?},\n}}", &*self.host_info).as_str());
 
-        f.finish()
+        write!(f, "{}", s)
     }
 }
 

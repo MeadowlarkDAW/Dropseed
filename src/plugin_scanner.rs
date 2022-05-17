@@ -4,8 +4,9 @@ use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use std::{collections::HashMap, error::Error};
 
+use crate::graph::plugin_pool::PluginMainThreadType;
 use crate::host_request::HostRequest;
-use crate::plugin::{PluginDescriptor, PluginFactory, PluginMainThread, PluginSaveState};
+use crate::plugin::{PluginDescriptor, PluginFactory, PluginSaveState};
 
 #[cfg(feature = "clap-host")]
 use crate::clap::plugin::ClapPluginFactory;
@@ -19,6 +20,7 @@ const DEFAULT_LOCAL_CLAP_SCAN_DIRECTORY: &'static str = "/.clap";
 const MAX_SCAN_DEPTH: usize = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum PluginFormat {
     Internal,
     Clap,
@@ -45,12 +47,18 @@ pub struct ScannedPlugin {
     pub key: ScannedPluginKey,
 }
 
+enum FactoryType {
+    Internal(Box<dyn PluginFactory>),
+    #[cfg(feature = "clap-host")]
+    Clap(ClapPluginFactory),
+}
+
 struct ScannedPluginFactory {
     pub description: PluginDescriptor,
     pub rdn: Shared<String>,
     pub format: PluginFormat,
 
-    factory: Box<dyn PluginFactory>,
+    factory: FactoryType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -203,23 +211,23 @@ impl PluginScanner {
                 match ClapPluginFactory::entry_init(binary_path, &self.coll_handle) {
                     Ok(mut factories) => {
                         for f in factories.drain(..) {
-                            let id: String = f.descriptor().id.clone();
+                            let id: String = f.description().id.clone();
                             let v = f.clap_version();
                             let format_version = format!("{}.{}.{}", v.major, v.minor, v.revision);
 
                             log::info!(
                                 "Successfully scanned CLAP plugin with ID: {}, version {}, and CLAP version {}",
                                 &id,
-                                &f.descriptor().version.as_ref().map(|v| v.as_str()).unwrap_or("(none)"),
+                                &f.description().version.as_ref().map(|v| v.as_str()).unwrap_or("(none)"),
                                 &format_version,
                             );
-                            log::trace!("Full plugin descriptor: {:?}", f.descriptor());
+                            log::trace!("Full plugin descriptor: {:?}", f.description());
 
                             let key =
                                 ScannedPluginKey { rdn: id.clone(), format: PluginFormat::Clap };
 
                             scanned_plugins.push(ScannedPlugin {
-                                description: f.description(),
+                                description: f.description().clone(),
                                 format: PluginFormat::Clap,
                                 format_version: Some(format_version),
                                 key: key.clone(),
@@ -228,10 +236,10 @@ impl PluginScanner {
                             if let Some(_) = self.scanned_external_plugins.insert(
                                 key,
                                 ScannedPluginFactory {
-                                    description: f.description(),
+                                    description: f.description().clone(),
                                     rdn: Shared::new(&self.coll_handle, id.clone()),
                                     format: PluginFormat::Clap,
-                                    factory: Box::new(f),
+                                    factory: FactoryType::Clap(f),
                                 },
                             ) {
                                 // TODO: Handle this better
@@ -269,7 +277,7 @@ impl PluginScanner {
         }
 
         let scanned_plugin = ScannedPluginFactory {
-            factory,
+            factory: FactoryType::Internal(factory),
             description,
             rdn: Shared::new(&self.coll_handle, key.rdn.clone()),
             format: PluginFormat::Internal,
@@ -287,7 +295,7 @@ impl PluginScanner {
         activation_requested: bool,
         fallback_to_other_formats: bool,
     ) -> Result<
-        (Box<dyn PluginMainThread>, Shared<String>, PluginFormat, PluginSaveState),
+        (PluginMainThreadType, Shared<String>, PluginFormat, PluginSaveState),
         NewPluginInstanceError,
     > {
         let check_for_invalid_host_callbacks = |host_request: &HostRequest, id: &String| {
@@ -322,22 +330,33 @@ impl PluginScanner {
             };
 
             if let Some(factory) = res {
-                let res = match factory.factory.new(host_request, &self.coll_handle) {
-                    Ok(p) => {
-                        let save_state = PluginSaveState {
-                            key: key.clone(),
-                            activation_requested,
-                            audio_in_out_channels: (0, 0),
-                            _preset: (),
-                        };
+                if let FactoryType::Internal(f) = &mut factory.factory {
+                    let res = match f.new(host_request, &self.coll_handle) {
+                        Ok(p) => {
+                            let save_state = PluginSaveState {
+                                key: key.clone(),
+                                activation_requested,
+                                audio_in_out_channels: (0, 0),
+                                _preset: (),
+                            };
 
-                        Ok((p, Shared::clone(&factory.rdn), factory.format, save_state))
-                    }
-                    Err(e) => Err(NewPluginInstanceError::InstantiationError(key.rdn.clone(), e)),
-                };
-                check_for_invalid_host_callbacks(host_request, &factory.rdn);
+                            Ok((
+                                PluginMainThreadType::Internal(p),
+                                Shared::clone(&factory.rdn),
+                                factory.format,
+                                save_state,
+                            ))
+                        }
+                        Err(e) => {
+                            Err(NewPluginInstanceError::InstantiationError(key.rdn.clone(), e))
+                        }
+                    };
+                    check_for_invalid_host_callbacks(host_request, &factory.rdn);
 
-                return res;
+                    return res;
+                } else {
+                    panic!("Internal plugin was assigned a clap factory somehow");
+                }
             } else if fallback_to_other_formats {
                 try_other_formats = true;
             } else {
@@ -359,21 +378,33 @@ impl PluginScanner {
             };
 
             if let Some(factory) = res {
-                let res = match factory.factory.new(host_request, &self.coll_handle) {
-                    Ok(p) => {
-                        let save_state = PluginSaveState {
-                            key: key.clone(),
-                            activation_requested,
-                            audio_in_out_channels: (0, 0),
-                            _preset: (),
-                        };
+                if let FactoryType::Clap(f) = &mut factory.factory {
+                    let res = match f.new(host_request, &self.coll_handle) {
+                        Ok(p) => {
+                            let save_state = PluginSaveState {
+                                key: key.clone(),
+                                activation_requested,
+                                audio_in_out_channels: (0, 0),
+                                _preset: (),
+                            };
 
-                        Ok((p, Shared::clone(&factory.rdn), factory.format, save_state))
-                    }
-                    Err(e) => Err(NewPluginInstanceError::InstantiationError(key.rdn.clone(), e)),
-                };
-                check_for_invalid_host_callbacks(host_request, &factory.rdn);
-                return res;
+                            Ok((
+                                PluginMainThreadType::Clap(p),
+                                Shared::clone(&factory.rdn),
+                                factory.format,
+                                save_state,
+                            ))
+                        }
+                        Err(e) => {
+                            Err(NewPluginInstanceError::InstantiationError(key.rdn.clone(), e))
+                        }
+                    };
+                    check_for_invalid_host_callbacks(host_request, &factory.rdn);
+
+                    return res;
+                } else {
+                    panic!("Clap plugin was assigned an internal factory somehow");
+                }
             } else if fallback_to_other_formats {
                 //try_other_formats = true;
             } else {
