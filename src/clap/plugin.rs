@@ -258,9 +258,7 @@ impl Drop for SharedClapPluginInstance {
                     ((&*self.raw_plugin).deactivate)(self.raw_plugin);
                 }
                 if !self.raw_plugin.is_null() {
-                    println!("drop clap");
                     ((&*self.raw_plugin).destroy)(self.raw_plugin);
-                    std::thread::sleep(std::time::Duration::from_secs(3));
                 }
             }
         }
