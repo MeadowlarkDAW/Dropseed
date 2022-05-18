@@ -50,9 +50,9 @@ impl RustyDAWEngine {
             Arc::clone(&garbage_coll_run),
         );
 
-        let mut plugin_scanner = PluginScanner::new(coll_handle.clone());
-
         let host_info = Shared::new(&coll_handle, host_info);
+
+        let mut plugin_scanner = PluginScanner::new(coll_handle.clone(), Shared::clone(&host_info));
 
         let (event_tx, event_rx) = channel::unbounded::<DAWEngineEvent>();
 
@@ -407,6 +407,11 @@ impl RustyDAWEngine {
                 self.compile_audio_graph();
             }
         }
+
+        #[cfg(feature = "clap-host")]
+        // Clap requires us to drop plugins on the main thread, so use a special
+        // garbage collector for just that.
+        self.plugin_scanner.main_thread_collect();
     }
 
     fn compile_audio_graph(&mut self) {

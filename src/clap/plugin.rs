@@ -4,7 +4,10 @@ use rusty_daw_core::SampleRate;
 use std::error::Error;
 use std::ffi::CString;
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use clap_sys::entry::clap_plugin_entry as RawClapEntry;
 use clap_sys::plugin::clap_plugin as RawClapPlugin;
@@ -43,9 +46,11 @@ unsafe impl Sync for SharedClapLib {}
 
 impl Drop for SharedClapLib {
     fn drop(&mut self) {
-        // Safe because the constructor made sure that this is a valid pointer.
-        unsafe {
-            ((&*self.raw_entry).deinit);
+        if !self.raw_entry.is_null() {
+            // Safe because the constructor made sure that this is a valid pointer.
+            unsafe {
+                ((&*self.raw_entry).deinit);
+            }
         }
     }
 }
@@ -166,10 +171,6 @@ impl ClapPluginFactory {
         &self.clap_version
     }
 
-    pub fn id(&self) -> Shared<String> {
-        Shared::clone(&self.id)
-    }
-
     pub fn description(&self) -> &PluginDescriptor {
         &self.descriptor
     }
@@ -184,9 +185,10 @@ impl ClapPluginFactory {
     pub fn new(
         &mut self,
         host_request: &HostRequest,
-        coll_handle: &basedrop::Handle,
+        main_thread_coll_handle: &basedrop::Handle,
     ) -> Result<ClapPluginMainThread, Box<dyn Error>> {
-        let mut clap_host_request = ClapHostRequest::new(host_request.clone(), coll_handle);
+        let mut clap_host_request =
+            ClapHostRequest::new(host_request.clone(), main_thread_coll_handle);
 
         let raw_plugin = unsafe {
             ((&*self.shared_lib.raw_factory).create_plugin)(
@@ -220,9 +222,10 @@ impl ClapPluginFactory {
         }
 
         let shared_plugin = Shared::new(
-            coll_handle,
+            main_thread_coll_handle,
             SharedClapPluginInstance {
                 raw_plugin,
+                activated: Arc::new(AtomicBool::new(false)),
                 id: Shared::clone(&self.id),
                 host_request: clap_host_request,
                 _shared_lib: Shared::clone(&self.shared_lib),
@@ -235,6 +238,7 @@ impl ClapPluginFactory {
 
 pub(crate) struct SharedClapPluginInstance {
     pub id: Shared<String>,
+    activated: Arc<AtomicBool>,
 
     raw_plugin: *const RawClapPlugin,
 
@@ -246,9 +250,17 @@ pub(crate) struct SharedClapPluginInstance {
 
 impl Drop for SharedClapPluginInstance {
     fn drop(&mut self) {
-        // Safe because the constructor ensures that this is a valid pointer.
-        unsafe {
-            ((&*self.raw_plugin).destroy)(self.raw_plugin);
+        if !self.raw_plugin.is_null() {
+            // Safe because the constructor ensures that this is a valid pointer.
+            unsafe {
+                if !self.activated.load(Ordering::Relaxed) {
+                    self.activated.store(false, Ordering::Relaxed);
+                    ((&*self.raw_plugin).deactivate)(self.raw_plugin);
+                }
+                if !self.raw_plugin.is_null() {
+                    ((&*self.raw_plugin).destroy)(self.raw_plugin);
+                }
+            }
         }
     }
 }
@@ -298,6 +310,10 @@ impl ClapPluginMainThread {
         min_frames: usize,
         max_frames: usize,
     ) -> Result<ClapPluginAudioThread, Box<dyn Error>> {
+        if self.shared_plugin.activated.load(Ordering::Relaxed) {
+            return Err("Plugin already activated".into());
+        }
+
         let res = unsafe {
             ((&*self.shared_plugin.raw_plugin).activate)(
                 self.shared_plugin.raw_plugin,
@@ -308,6 +324,7 @@ impl ClapPluginMainThread {
         };
 
         if res {
+            self.shared_plugin.activated.store(true, Ordering::Relaxed);
             Ok(ClapPluginAudioThread { shared_plugin: Shared::clone(&self.shared_plugin) })
         } else {
             return Err(format!(
@@ -323,7 +340,12 @@ impl ClapPluginMainThread {
     ///
     /// `[main-thread & active_state]`
     pub fn deactivate(&mut self) {
-        unsafe { ((&*self.shared_plugin.raw_plugin).deactivate)(self.shared_plugin.raw_plugin) };
+        if self.shared_plugin.activated.load(Ordering::Relaxed) {
+            self.shared_plugin.activated.store(false, Ordering::Relaxed);
+            unsafe {
+                ((&*self.shared_plugin.raw_plugin).deactivate)(self.shared_plugin.raw_plugin)
+            };
+        }
     }
 
     /// Called by the host on the main thread in response to a previous call to `host.request_callback()`.
@@ -349,6 +371,10 @@ impl ClapPluginMainThread {
     pub fn audio_ports_extension(
         &self,
     ) -> Result<ext::audio_ports::AudioPortsExtension, Box<dyn Error>> {
+        if self.shared_plugin.activated.load(Ordering::Relaxed) {
+            return Err("Cannot get audio ports extension while plugin is active".into());
+        }
+
         use clap_sys::ext::audio_ports::clap_audio_port_info as RawAudioPortInfo;
         use clap_sys::ext::audio_ports::clap_plugin_audio_ports as RawAudioPorts;
         use clap_sys::ext::audio_ports::{

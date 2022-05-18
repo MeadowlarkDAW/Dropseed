@@ -15,7 +15,7 @@ mod schedule;
 mod verifier;
 
 use audio_buffer_pool::AudioBufferPool;
-use plugin_pool::{PluginInstanceChannel, PluginInstancePool, ProcessingState};
+use plugin_pool::{PluginInstanceChannel, PluginInstancePool};
 use schedule::Schedule;
 use verifier::Verifier;
 
@@ -145,19 +145,9 @@ impl AudioGraph {
         activate: bool,
         fallback_to_other_formats: bool,
     ) -> NewPluginRes {
-        let host_request = HostRequest {
-            info: Shared::clone(&self.host_info),
-            plugin_channel: Shared::new(&self.coll_handle, PluginInstanceChannel::new()),
-        };
-
         let (plugin_and_host_request, debug_name, format, new_save_state, load_status) =
-            match plugin_scanner.create_plugin(
-                &key,
-                &host_request,
-                activate,
-                fallback_to_other_formats,
-            ) {
-                Ok((plugin, debug_name, format, save_state)) => {
+            match plugin_scanner.create_plugin(&key, activate, fallback_to_other_formats) {
+                Ok((plugin, debug_name, format, save_state, host_request)) => {
                     log::debug!("Loaded plugin {:?} successfully with format {:?}", &key, &format);
 
                     (Some((plugin, host_request)), debug_name, format, save_state, Ok(()))
@@ -572,6 +562,15 @@ impl AudioGraph {
         &mut self,
     ) -> SmallVec<[(PluginInstanceID, PluginActivationStatus); 4]> {
         self.plugin_pool.on_main_thread(&mut self.abstract_graph)
+    }
+}
+
+impl Drop for AudioGraph {
+    fn drop(&mut self) {
+        self.shared_schedule.set_new_schedule(
+            Schedule::empty(self.max_frames, Shared::clone(&self.host_info)),
+            &self.coll_handle,
+        );
     }
 }
 

@@ -4,9 +4,10 @@ use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use std::{collections::HashMap, error::Error};
 
-use crate::graph::plugin_pool::PluginMainThreadType;
+use crate::graph::plugin_pool::{PluginInstanceChannel, PluginMainThreadType};
 use crate::host_request::HostRequest;
 use crate::plugin::{PluginDescriptor, PluginFactory, PluginSaveState};
+use crate::HostInfo;
 
 #[cfg(feature = "clap-host")]
 use crate::clap::plugin::ClapPluginFactory;
@@ -76,17 +77,29 @@ pub(crate) struct PluginScanner {
     #[cfg(feature = "clap-host")]
     clap_scan_directories: Vec<PathBuf>,
 
+    #[cfg(feature = "clap-host")]
+    // Clap requires us to drop plugins on the main thread, so use a special
+    // garbage collector just for that.
+    main_thread_collector: basedrop::Collector,
+
+    host_info: Shared<HostInfo>,
+
     coll_handle: basedrop::Handle,
 }
 
 impl PluginScanner {
-    pub fn new(coll_handle: basedrop::Handle) -> Self {
+    pub fn new(coll_handle: basedrop::Handle, host_info: Shared<HostInfo>) -> Self {
         Self {
             scanned_internal_plugins: HashMap::default(),
             scanned_external_plugins: HashMap::default(),
 
             #[cfg(any(feature = "clap-host"))]
             clap_scan_directories: Vec::new(),
+
+            #[cfg(any(feature = "clap-host"))]
+            main_thread_collector: basedrop::Collector::new(),
+
+            host_info,
 
             coll_handle,
         }
@@ -291,11 +304,10 @@ impl PluginScanner {
     pub(crate) fn create_plugin(
         &mut self,
         key: &ScannedPluginKey,
-        host_request: &HostRequest,
         activation_requested: bool,
         fallback_to_other_formats: bool,
     ) -> Result<
-        (PluginMainThreadType, Shared<String>, PluginFormat, PluginSaveState),
+        (PluginMainThreadType, Shared<String>, PluginFormat, PluginSaveState, HostRequest),
         NewPluginInstanceError,
     > {
         let check_for_invalid_host_callbacks = |host_request: &HostRequest, id: &String| {
@@ -331,7 +343,15 @@ impl PluginScanner {
 
             if let Some(factory) = res {
                 if let FactoryType::Internal(f) = &mut factory.factory {
-                    let res = match f.new(host_request, &self.coll_handle) {
+                    let host_request = HostRequest {
+                        info: Shared::clone(&self.host_info),
+                        plugin_channel: Shared::new(
+                            &self.coll_handle,
+                            PluginInstanceChannel::new(),
+                        ),
+                    };
+
+                    let res = match f.new(&host_request, &self.coll_handle) {
                         Ok(p) => {
                             let save_state = PluginSaveState {
                                 key: key.clone(),
@@ -345,13 +365,14 @@ impl PluginScanner {
                                 Shared::clone(&factory.rdn),
                                 factory.format,
                                 save_state,
+                                host_request.clone(),
                             ))
                         }
                         Err(e) => {
                             Err(NewPluginInstanceError::InstantiationError(key.rdn.clone(), e))
                         }
                     };
-                    check_for_invalid_host_callbacks(host_request, &factory.rdn);
+                    check_for_invalid_host_callbacks(&host_request, &factory.rdn);
 
                     return res;
                 } else {
@@ -379,7 +400,15 @@ impl PluginScanner {
 
             if let Some(factory) = res {
                 if let FactoryType::Clap(f) = &mut factory.factory {
-                    let res = match f.new(host_request, &self.coll_handle) {
+                    let host_request = HostRequest {
+                        info: Shared::clone(&self.host_info),
+                        plugin_channel: Shared::new(
+                            &self.coll_handle,
+                            PluginInstanceChannel::new(),
+                        ),
+                    };
+
+                    let res = match f.new(&host_request, &self.main_thread_collector.handle()) {
                         Ok(p) => {
                             let save_state = PluginSaveState {
                                 key: key.clone(),
@@ -393,13 +422,14 @@ impl PluginScanner {
                                 Shared::clone(&factory.rdn),
                                 factory.format,
                                 save_state,
+                                host_request.clone(),
                             ))
                         }
                         Err(e) => {
                             Err(NewPluginInstanceError::InstantiationError(key.rdn.clone(), e))
                         }
                     };
-                    check_for_invalid_host_callbacks(host_request, &factory.rdn);
+                    check_for_invalid_host_callbacks(&host_request, &factory.rdn);
 
                     return res;
                 } else {
@@ -416,6 +446,13 @@ impl PluginScanner {
         }
 
         Err(NewPluginInstanceError::NotFound(key.rdn.clone()))
+    }
+
+    #[cfg(feature = "clap-host")]
+    /// Clap requires us to drop plugins on the main thread, so use a special
+    /// garbage collector for just that.
+    pub fn main_thread_collect(&mut self) {
+        self.main_thread_collector.collect();
     }
 }
 
