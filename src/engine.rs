@@ -436,6 +436,9 @@ impl RustyDAWEngine {
 
 impl Drop for RustyDAWEngine {
     fn drop(&mut self) {
+        // Make sure all of the stuff in the audio thread gets dropped properly.
+        let _ = self.audio_graph;
+
         self.garbage_coll_run.store(false, Ordering::Relaxed);
         if let Some(handle) = self.garbage_coll_handle.take() {
             if let Err(e) = handle.join() {

@@ -115,7 +115,7 @@ struct BasicDawExampleGUI {
     engine_rx: Receiver<DAWEngineEvent>,
 
     to_audio_thread_tx: ringbuf::Producer<UIToAudioThreadMsg>,
-    _cpal_stream: Stream,
+    _cpal_stream: Option<Stream>,
 
     sample_rate: SampleRate,
 
@@ -140,7 +140,7 @@ impl BasicDawExampleGUI {
             engine,
             engine_rx,
             to_audio_thread_tx,
-            _cpal_stream: cpal_stream,
+            _cpal_stream: Some(cpal_stream),
             sample_rate,
             plugin_list: Vec::new(),
             failed_plugins_text: Vec::new(),
@@ -347,6 +347,10 @@ impl eframe::App for BasicDawExampleGUI {
         });
 
         self.engine.on_main_thread();
+    }
+
+    fn on_exit(&mut self, _gl: &eframe::glow::Context) {
+        self._cpal_stream = None;
     }
 }
 

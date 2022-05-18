@@ -26,5 +26,8 @@ pub(crate) fn run_garbage_collector_thread(
 
             std::thread::sleep(WAIT_INTERVAL);
         }
+
+        // Collect one last time.
+        collector.collect();
     })
 }
