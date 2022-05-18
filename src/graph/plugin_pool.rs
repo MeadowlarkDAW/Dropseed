@@ -106,6 +106,7 @@ pub(crate) struct PluginInstanceChannel {
     pub restart_requested: AtomicBool,
     pub process_requested: AtomicBool,
     pub callback_requested: AtomicBool,
+    pub deactivation_requested: AtomicBool,
     pub processing_state: SharedProcessingState,
     // TODO: parameter stuff
 }
@@ -116,6 +117,7 @@ impl PluginInstanceChannel {
             restart_requested: AtomicBool::new(false),
             process_requested: AtomicBool::new(false),
             callback_requested: AtomicBool::new(false),
+            deactivation_requested: AtomicBool::new(false),
             processing_state: SharedProcessingState::new(),
         }
     }
@@ -565,6 +567,13 @@ impl PluginInstancePool {
                     return PluginActivationStatus::Activated;
                 }
 
+                loaded_plugin
+                    .main_thread
+                    .host_request
+                    .plugin_channel
+                    .deactivation_requested
+                    .store(false, Ordering::Relaxed);
+
                 log::trace!("Activating plugin instance {:?}", &loaded_plugin.main_thread.id);
 
                 let res = if check_for_port_change {
@@ -670,13 +679,6 @@ impl PluginInstancePool {
                         &self.coll_handle,
                     ) {
                         Ok(plugin_audio_thread) => {
-                            loaded_plugin
-                                .main_thread
-                                .host_request
-                                .plugin_channel
-                                .processing_state
-                                .set(ProcessingState::Sleeping);
-
                             loaded_plugin.audio_thread = Some(PluginAudioThreadType::Internal(
                                 SharedPluginAudioThreadInstance::new(
                                     plugin_audio_thread,
@@ -699,13 +701,6 @@ impl PluginInstancePool {
                     PluginMainThreadType::Clap(p) => {
                         match p.activate(self.sample_rate, self.min_frames, self.max_frames) {
                             Ok(plugin_audio_thread) => {
-                                loaded_plugin
-                                    .main_thread
-                                    .host_request
-                                    .plugin_channel
-                                    .processing_state
-                                    .set(ProcessingState::Sleeping);
-
                                 loaded_plugin.audio_thread =
                                     Some(PluginAudioThreadType::Clap(plugin_audio_thread));
 
@@ -741,6 +736,13 @@ impl PluginInstancePool {
         if let Some(plugin_instance) = &mut self.graph_plugins[node_i] {
             if let Some(loaded_plugin) = &mut plugin_instance.loaded {
                 loaded_plugin.save_state.activation_requested = false;
+
+                loaded_plugin
+                    .main_thread
+                    .host_request
+                    .plugin_channel
+                    .deactivation_requested
+                    .store(true, Ordering::Relaxed);
 
                 if loaded_plugin.audio_thread.is_none() {
                     // Plugin is already inactive.

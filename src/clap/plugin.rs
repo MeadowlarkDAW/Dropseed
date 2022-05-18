@@ -253,7 +253,7 @@ impl Drop for SharedClapPluginInstance {
         if !self.raw_plugin.is_null() {
             // Safe because the constructor ensures that this is a valid pointer.
             unsafe {
-                if !self.activated.load(Ordering::Relaxed) {
+                if self.activated.load(Ordering::Relaxed) {
                     self.activated.store(false, Ordering::Relaxed);
                     ((&*self.raw_plugin).deactivate)(self.raw_plugin);
                 }
@@ -262,6 +262,8 @@ impl Drop for SharedClapPluginInstance {
                 }
             }
         }
+
+        self.raw_plugin = std::ptr::null();
     }
 }
 
@@ -590,6 +592,25 @@ impl ClapPluginAudioThread {
                 .host_request
                 .plugin_channel
                 .process_requested
+                .store(false, Ordering::Relaxed);
+        }
+        res
+    }
+
+    pub fn deactivation_requested(&mut self) -> bool {
+        let res = self
+            .shared_plugin
+            .host_request
+            .host_request
+            .plugin_channel
+            .deactivation_requested
+            .load(Ordering::Relaxed);
+        if res {
+            self.shared_plugin
+                .host_request
+                .host_request
+                .plugin_channel
+                .deactivation_requested
                 .store(false, Ordering::Relaxed);
         }
         res

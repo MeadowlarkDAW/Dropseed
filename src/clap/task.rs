@@ -26,6 +26,14 @@ impl ClapPluginTask {
 
         let processing_requested = self.plugin.processing_requested();
 
+        if self.plugin.deactivation_requested() && state != ProcessingState::Sleeping {
+            self.plugin.set_processing_state(ProcessingState::Sleeping);
+            self.plugin.stop_processing();
+
+            clear_outputs(&mut self.clap_process);
+            return;
+        }
+
         if let ProcessingState::Sleeping = state {
             let has_input_event = true; // TODO
 
@@ -85,8 +93,10 @@ impl ClapPluginTask {
                 self.plugin.set_processing_state(ProcessingState::WaitingForTailToSleep);
             }
             CLAP_PROCESS_SLEEP => {
-                self.plugin.set_processing_state(ProcessingState::Sleeping);
-                self.plugin.stop_processing();
+                if state != ProcessingState::Sleeping {
+                    self.plugin.set_processing_state(ProcessingState::Sleeping);
+                    self.plugin.stop_processing();
+                }
             }
             _ => {
                 clear_outputs(&mut self.clap_process);

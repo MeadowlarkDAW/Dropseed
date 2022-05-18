@@ -171,6 +171,33 @@ impl InternalPluginTask {
         // multi-threaded schedules of course).
         let plugin_audio_thread = unsafe { &mut *plugin.shared.plugin.get() };
 
+        let deactivation_requested = plugin
+            .shared
+            .host_request
+            .plugin_channel
+            .deactivation_requested
+            .load(Ordering::Relaxed);
+        if deactivation_requested && state != ProcessingState::Sleeping {
+            plugin
+                .shared
+                .host_request
+                .plugin_channel
+                .deactivation_requested
+                .store(false, Ordering::Relaxed);
+
+            plugin
+                .shared
+                .host_request
+                .plugin_channel
+                .processing_state
+                .set(ProcessingState::Processing);
+
+            plugin_audio_thread.stop_processing(&plugin.shared.host_request);
+
+            clear_outputs(audio_out);
+            return;
+        }
+
         if let ProcessingState::Sleeping = state {
             let has_input_event = true; // TODO
 
@@ -264,12 +291,16 @@ impl InternalPluginTask {
                     .set(ProcessingState::WaitingForTailToSleep);
             }
             ProcessStatus::Sleep => {
-                plugin
-                    .shared
-                    .host_request
-                    .plugin_channel
-                    .processing_state
-                    .set(ProcessingState::Sleeping);
+                if state != ProcessingState::Sleeping {
+                    plugin
+                        .shared
+                        .host_request
+                        .plugin_channel
+                        .processing_state
+                        .set(ProcessingState::Sleeping);
+
+                    plugin_audio_thread.stop_processing(&plugin.shared.host_request);
+                }
             }
             ProcessStatus::Error => {
                 clear_outputs(audio_out);
