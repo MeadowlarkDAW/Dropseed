@@ -15,7 +15,7 @@ mod schedule;
 mod verifier;
 
 use audio_buffer_pool::AudioBufferPool;
-use plugin_pool::{PluginInstanceChannel, PluginInstancePool};
+use plugin_pool::PluginInstancePool;
 use schedule::Schedule;
 use verifier::Verifier;
 
@@ -47,10 +47,10 @@ use crate::{
     host_request::HostInfo,
     plugin::PluginSaveState,
     plugin_scanner::{NewPluginInstanceError, PluginScanner},
-    HostRequest,
 };
 
 use self::compiler::compile_graph;
+use self::plugin_pool::MainThreadStatus;
 
 pub(crate) struct AudioGraph {
     plugin_pool: PluginInstancePool,
@@ -176,7 +176,7 @@ impl AudioGraph {
                 }
             };
 
-        let (plugin_id, activation_status) = self.plugin_pool.add_graph_plugin(
+        let (plugin_id, activation_status) = self.plugin_pool.add_plugin_instance(
             plugin_and_host_request,
             new_save_state,
             debug_name,
@@ -226,7 +226,7 @@ impl AudioGraph {
                         let _ = affected_plugins.insert(e.dst_plugin_id.clone());
                     }
 
-                    self.plugin_pool.remove_graph_plugin(id, &mut self.abstract_graph);
+                    self.plugin_pool.remove_plugin_instance(id, &mut self.abstract_graph);
                 } else {
                     let _ = removed_plugins.remove(id);
                     log::warn!("Ignored request to remove plugin instance {:?}: Plugin is already removed.", id);
@@ -558,19 +558,19 @@ impl AudioGraph {
         }
     }
 
-    pub(crate) fn on_main_thread(
-        &mut self,
-    ) -> SmallVec<[(PluginInstanceID, PluginActivationStatus); 4]> {
+    pub(crate) fn on_main_thread(&mut self) -> SmallVec<[(PluginInstanceID, MainThreadStatus); 4]> {
         self.plugin_pool.on_main_thread(&mut self.abstract_graph)
     }
 }
 
 impl Drop for AudioGraph {
     fn drop(&mut self) {
+        /*
         self.shared_schedule.set_new_schedule(
             Schedule::empty(self.max_frames, Shared::clone(&self.host_info)),
             &self.coll_handle,
         );
+        */
     }
 }
 
@@ -593,7 +593,7 @@ pub enum PluginActivationStatus {
     /// This means that the plugin loaded but did not activate yet. This
     /// can happen when the user loads a project with a deactivated
     /// plugin.
-    DeactivatedFromSaveState,
+    Inactive,
 
     /// This means that the plugin failed to activate.
     Error(PluginActivationError),

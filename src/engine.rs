@@ -12,6 +12,7 @@ use std::sync::{
 use std::time::Duration;
 
 use crate::event::{DAWEngineEvent, PluginScannerEvent};
+use crate::graph::plugin_pool::MainThreadStatus;
 use crate::graph::{
     AudioGraph, AudioGraphSaveState, Edge, NewPluginRes, PluginActivationStatus, PluginEdges,
     PluginInstanceID, SharedSchedule,
@@ -364,27 +365,49 @@ impl RustyDAWEngine {
     /// handle the state of plugins.
     pub fn on_main_thread(&mut self) {
         if let Some(audio_graph) = &mut self.audio_graph {
-            let mut restarted_plugins = audio_graph.on_main_thread();
+            let mut recompile = false;
 
-            for (plugin_id, res) in restarted_plugins.drain(..) {
+            let mut changed_plugins = audio_graph.on_main_thread();
+
+            for (plugin_id, res) in changed_plugins.drain(..) {
                 match res {
-                    PluginActivationStatus::Activated => {
-                        self.event_tx
-                            .send(DAWEngineEvent::PluginActivated {
-                                plugin_id: plugin_id.clone(),
-                                new_audio_ports: None,
-                            })
-                            .unwrap();
-                    }
-                    PluginActivationStatus::ActivatedWithNewPortConfig { audio_ports } => {
-                        self.event_tx
-                            .send(DAWEngineEvent::PluginActivated {
-                                plugin_id: plugin_id.clone(),
-                                new_audio_ports: Some(audio_ports),
-                            })
-                            .unwrap();
-                    }
-                    PluginActivationStatus::DeactivatedFromSaveState => {
+                    MainThreadStatus::Activated(status) => match status {
+                        PluginActivationStatus::Activated => {
+                            self.event_tx
+                                .send(DAWEngineEvent::PluginActivated {
+                                    plugin_id: plugin_id.clone(),
+                                    new_audio_ports: None,
+                                })
+                                .unwrap();
+                        }
+                        PluginActivationStatus::ActivatedWithNewPortConfig { audio_ports } => {
+                            recompile = true;
+
+                            self.event_tx
+                                .send(DAWEngineEvent::PluginActivated {
+                                    plugin_id: plugin_id.clone(),
+                                    new_audio_ports: Some(audio_ports),
+                                })
+                                .unwrap();
+                        }
+                        PluginActivationStatus::Inactive => {
+                            self.event_tx
+                                .send(DAWEngineEvent::PluginDeactivated {
+                                    plugin_id: plugin_id.clone(),
+                                    status: Ok(()),
+                                })
+                                .unwrap();
+                        }
+                        PluginActivationStatus::Error(e) => {
+                            self.event_tx
+                                .send(DAWEngineEvent::PluginDeactivated {
+                                    plugin_id: plugin_id.clone(),
+                                    status: Err(e),
+                                })
+                                .unwrap();
+                        }
+                    },
+                    MainThreadStatus::Deactivated => {
                         self.event_tx
                             .send(DAWEngineEvent::PluginDeactivated {
                                 plugin_id: plugin_id.clone(),
@@ -392,18 +415,15 @@ impl RustyDAWEngine {
                             })
                             .unwrap();
                     }
-                    PluginActivationStatus::Error(e) => {
-                        self.event_tx
-                            .send(DAWEngineEvent::PluginDeactivated {
-                                plugin_id: plugin_id.clone(),
-                                status: Err(e),
-                            })
-                            .unwrap();
+                    MainThreadStatus::Removed => {
+                        // We don't really need to alert the user because they would have already
+                        // seen that the plugin was being removed in a `DAWEngineEvent::AudioGraphModified`
+                        // event.
                     }
                 }
             }
 
-            if !restarted_plugins.is_empty() {
+            if recompile {
                 self.compile_audio_graph();
             }
         }

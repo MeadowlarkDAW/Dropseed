@@ -598,22 +598,12 @@ impl ClapPluginAudioThread {
     }
 
     pub fn deactivation_requested(&mut self) -> bool {
-        let res = self
-            .shared_plugin
+        self.shared_plugin
             .host_request
             .host_request
             .plugin_channel
             .deactivation_requested
-            .load(Ordering::Relaxed);
-        if res {
-            self.shared_plugin
-                .host_request
-                .host_request
-                .plugin_channel
-                .deactivation_requested
-                .store(false, Ordering::Relaxed);
-        }
-        res
+            .load(Ordering::Relaxed)
     }
 
     pub fn process(&mut self, clap_process: *const RawClapProcess) -> i32 {

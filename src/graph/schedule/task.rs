@@ -152,7 +152,7 @@ impl InternalPluginTask {
 
         let Self { plugin, audio_in, audio_out } = self;
 
-        let state = plugin.shared.host_request.plugin_channel.processing_state.get();
+        let state = plugin.shared.host_request.plugin_channel.plugin_state.get();
 
         let processing_requested =
             plugin.shared.host_request.plugin_channel.process_requested.load(Ordering::Relaxed);
@@ -171,6 +171,11 @@ impl InternalPluginTask {
         // multi-threaded schedules of course).
         let plugin_audio_thread = unsafe { &mut *plugin.shared.plugin.get() };
 
+        if let ProcessingState::Deactivated = state {
+            clear_outputs(audio_out);
+            return;
+        }
+
         let deactivation_requested = plugin
             .shared
             .host_request
@@ -182,15 +187,8 @@ impl InternalPluginTask {
                 .shared
                 .host_request
                 .plugin_channel
-                .deactivation_requested
-                .store(false, Ordering::Relaxed);
-
-            plugin
-                .shared
-                .host_request
-                .plugin_channel
                 .processing_state
-                .set(ProcessingState::Processing);
+                .set(ProcessingState::Deactivated);
 
             plugin_audio_thread.stop_processing(&plugin.shared.host_request);
 

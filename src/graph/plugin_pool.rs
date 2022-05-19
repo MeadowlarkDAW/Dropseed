@@ -107,7 +107,7 @@ pub(crate) struct PluginInstanceChannel {
     pub process_requested: AtomicBool,
     pub callback_requested: AtomicBool,
     pub deactivation_requested: AtomicBool,
-    pub processing_state: SharedProcessingState,
+    pub plugin_state: SharedPluginState,
     // TODO: parameter stuff
 }
 
@@ -118,43 +118,86 @@ impl PluginInstanceChannel {
             process_requested: AtomicBool::new(false),
             callback_requested: AtomicBool::new(false),
             deactivation_requested: AtomicBool::new(false),
-            processing_state: SharedProcessingState::new(),
+            plugin_state: SharedPluginState::new(),
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
-pub(crate) enum ProcessingState {
-    Processing = 0,
-    Sleeping = 1,
-    WaitingForQuietToSleep = 2,
-    WaitingForTailToSleep = 3,
+pub(crate) enum PluginState {
+    /// The plugin is inactive, only the main thread uses it
+    Inactive = 0,
+
+    /// Activation failed
+    InactiveWithError = 1,
+
+    /// The plugin is active and sleeping, the audio engine can call start_processing()
+    ActiveAndSleeping = 2,
+
+    /// The plugin is processing
+    ActiveAndProcessing = 3,
+
+    /// The plugin is processing, but will be put to sleep the next time all input buffers
+    /// are silent.
+    ActiveAndWaitingForQuiet = 4,
+
+    /// The plugin is processing, but will be put to sleep at the end of the plugin's tail.
+    ActiveAndWaitingForTail = 5,
+
+    /// The plugin did process but is in error
+    ActiveWithError = 6,
+
+    /// The plugin is not used anymore by the audio engine and can be deactivated on the main
+    /// thread
+    ActiveAndReadyToDeactivate = 7,
+}
+
+impl PluginState {
+    pub fn is_active(&self) -> bool {
+        match self {
+            PluginState::Inactive | PluginState::InactiveWithError => false,
+            _ => true,
+        }
+    }
+
+    pub fn is_processing(&self) -> bool {
+        match self {
+            PluginState::ActiveAndProcessing
+            | PluginState::ActiveAndWaitingForQuiet
+            | PluginState::ActiveAndWaitingForTail => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_sleeping(&self) -> bool {
+        *self == PluginState::ActiveAndSleeping
+    }
 }
 
 #[derive(Debug)]
-pub(crate) struct SharedProcessingState {
+pub(crate) struct SharedPluginState {
     state: AtomicU32,
 }
 
-impl SharedProcessingState {
+impl SharedPluginState {
     pub fn new() -> Self {
-        Self { state: AtomicU32::new(1) }
+        Self { state: AtomicU32::new(0) }
     }
 
     #[inline]
-    pub fn get(&self) -> ProcessingState {
+    pub fn get(&self) -> PluginState {
         let s = self.state.load(Ordering::Relaxed);
 
         // Safe because we set `#[repr(u32)]` on this enum, and this AtomicU32
         // can never be set to a value that is out of range.
-        unsafe { *(&s as *const u32 as *const ProcessingState) }
+        unsafe { *(&s as *const u32 as *const PluginState) }
     }
 
     #[inline]
-    pub fn set(&self, state: ProcessingState) {
+    pub fn set(&self, state: PluginState) {
         // Safe because we set `#[repr(u32)]` on this enum.
-        let s = unsafe { *(&state as *const ProcessingState as *const u32) };
+        let s = unsafe { *(&state as *const PluginState as *const u32) };
 
         self.state.store(s, Ordering::Relaxed);
     }
@@ -164,13 +207,6 @@ pub(crate) enum PluginMainThreadType {
     Internal(Box<dyn PluginMainThread>),
     #[cfg(feature = "clap-host")]
     Clap(crate::clap::plugin::ClapPluginMainThread),
-}
-
-pub(crate) struct PluginMainThreadInstance {
-    pub plugin: PluginMainThreadType,
-    pub host_request: HostRequest,
-
-    id: PluginInstanceID,
 }
 
 pub(crate) struct PluginAudioThreadInstance {
@@ -212,8 +248,10 @@ pub(crate) enum PluginAudioThreadType {
 }
 
 struct LoadedPluginInstance {
-    main_thread: PluginMainThreadInstance,
+    main_thread: PluginMainThreadType,
     audio_thread: Option<PluginAudioThreadType>,
+    host_request: HostRequest,
+    channel: Shared<PluginInstanceChannel>,
     save_state: PluginSaveState,
     audio_ports_ext: AudioPortsExtension,
 }
@@ -225,7 +263,439 @@ struct PluginInstance {
     audio_out_channel_refs: Vec<PortRef>,
     format: PluginFormat,
 
+    remove_requested: bool,
+
     id: PluginInstanceID,
+}
+
+impl PluginInstance {
+    pub fn new(
+        plugin_and_host_request: Option<(PluginMainThreadType, HostRequest)>,
+        mut save_state: PluginSaveState,
+        id: PluginInstanceID,
+        abstract_graph: &mut Graph<PluginInstanceID, PortID, DefaultPortType>,
+        activate: bool,
+    ) -> Self {
+        if activate {
+            save_state.activation_requested = true
+        }
+        let format = save_state.key.format;
+
+        let loaded = if let Some((plugin, host_request)) = plugin_and_host_request {
+            match &plugin {
+                PluginMainThreadType::Internal(p) => match p.audio_ports_extension(&host_request) {
+                    Ok(audio_ports_ext) => {
+                        let num_audio_in = audio_ports_ext.total_in_channels();
+                        let num_audio_out = audio_ports_ext.total_out_channels();
+
+                        save_state.audio_in_out_channels =
+                            (num_audio_in as u16, num_audio_out as u16);
+
+                        Some(LoadedPluginInstance {
+                            main_thread: PluginMainThreadType::Internal(*p),
+                            audio_thread: None,
+                            host_request,
+                            channel: Shared::clone(&host_request.plugin_channel),
+                            save_state,
+                            audio_ports_ext,
+                        })
+                    }
+                    Err(e) => {
+                        log::error!("Failed to load plugin instance, plugin return error while getting the audio ports extension: {}", e);
+                        None
+                    }
+                },
+                #[cfg(feature = "clap-host")]
+                PluginMainThreadType::Clap(p) => match p.audio_ports_extension() {
+                    Ok(audio_ports_ext) => {
+                        let num_audio_in = audio_ports_ext.total_in_channels();
+                        let num_audio_out = audio_ports_ext.total_out_channels();
+
+                        save_state.audio_in_out_channels =
+                            (num_audio_in as u16, num_audio_out as u16);
+
+                        Some(LoadedPluginInstance {
+                            main_thread: PluginMainThreadType::Clap(*p),
+                            audio_thread: None,
+                            host_request,
+                            channel: Shared::clone(&host_request.plugin_channel),
+                            save_state,
+                            audio_ports_ext,
+                        })
+                    }
+                    Err(e) => {
+                        log::error!("Failed to load plugin instance, plugin return error while getting the audio ports extension: {}", e);
+                        None
+                    }
+                },
+            }
+        } else {
+            None
+        };
+
+        let mut audio_in_channel_refs: Vec<PortRef> =
+            Vec::with_capacity(usize::from(save_state.audio_in_out_channels.0));
+        let mut audio_out_channel_refs: Vec<PortRef> =
+            Vec::with_capacity(usize::from(save_state.audio_in_out_channels.1));
+        let (audio_in_channels, audio_out_channels) = if let Some(plugin) = &loaded {
+            let audio_in_channels = plugin.audio_ports_ext.total_in_channels();
+            let audio_out_channels = plugin.audio_ports_ext.total_out_channels();
+            save_state.audio_in_out_channels =
+                (audio_in_channels as u16, audio_out_channels as u16);
+            (audio_in_channels as u16, audio_out_channels as u16)
+        } else {
+            // If the plugin failed to load, try to retrieve the number of channels
+            // from the save state
+            save_state.audio_in_out_channels
+        };
+        for i in 0..audio_in_channels {
+            let port_ref = abstract_graph
+                .port(id.node_id, DefaultPortType::Audio, PortID::AudioIn(i))
+                .unwrap();
+            audio_in_channel_refs.push(port_ref);
+        }
+        for i in 0..audio_out_channels {
+            let port_ref = abstract_graph
+                .port(id.node_id, DefaultPortType::Audio, PortID::AudioOut(i))
+                .unwrap();
+            audio_out_channel_refs.push(port_ref);
+        }
+
+        PluginInstance {
+            loaded,
+            audio_in_channel_refs,
+            audio_out_channel_refs,
+            format,
+            id,
+            remove_requested: false,
+        }
+    }
+
+    pub fn can_activate(&self) -> bool {
+        if let Some(plugin) = &self.loaded {
+            if plugin.channel.plugin_state.get().is_active() {
+                return false;
+            }
+            if plugin.channel.restart_requested.load(Ordering::Relaxed) {
+                return false;
+            }
+            if self.remove_requested {
+                return false;
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn can_remove(&self) -> bool {
+        if let Some(plugin) = &self.loaded {
+            if plugin.channel.plugin_state.get().is_active() {
+                return false;
+            }
+            if plugin.channel.restart_requested.load(Ordering::Relaxed) {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub fn request_remove(&mut self) {
+        self.remove_requested = true;
+        self.deactivate();
+    }
+
+    pub fn activate(
+        &mut self,
+        sample_rate: SampleRate,
+        min_block_size: usize,
+        max_block_size: usize,
+        check_for_port_change: bool,
+        abstract_graph: &mut Graph<PluginInstanceID, PortID, DefaultPortType>,
+        coll_handle: &basedrop::Handle,
+    ) -> PluginActivationStatus {
+        assert!(self.can_activate());
+
+        let plugin = self.loaded.as_mut().unwrap();
+
+        plugin.save_state.activation_requested = true;
+
+        log::trace!("Activating plugin instance {:?}", &self.id);
+
+        let status = if check_for_port_change {
+            let new_audio_ports_ext = match &plugin.main_thread {
+                PluginMainThreadType::Internal(p) => {
+                    match p.audio_ports_extension(&plugin.host_request) {
+                        Ok(ext) => ext,
+                        Err(e) => {
+                            return PluginActivationStatus::Error(PluginActivationError {
+                                plugin_id: self.id.clone(),
+                                error: e,
+                            });
+                        }
+                    }
+                }
+                #[cfg(feature = "clap-host")]
+                PluginMainThreadType::Clap(p) => match p.audio_ports_extension() {
+                    Ok(ext) => ext,
+                    Err(e) => {
+                        return PluginActivationStatus::Error(PluginActivationError {
+                            plugin_id: self.id.clone(),
+                            error: e,
+                        });
+                    }
+                },
+            };
+
+            if new_audio_ports_ext != plugin.audio_ports_ext {
+                plugin.audio_ports_ext = new_audio_ports_ext;
+
+                // Make sure the abstract graph has the updated number of ports.
+
+                let node_id = self.id.node_id;
+
+                let audio_in_channels = plugin.audio_ports_ext.total_in_channels();
+                let audio_out_channels = plugin.audio_ports_ext.total_out_channels();
+
+                if audio_in_channels > self.audio_in_channel_refs.len() {
+                    let len = self.audio_in_channel_refs.len() as u16;
+                    for i in len..audio_in_channels as u16 {
+                        let port_ref = abstract_graph
+                            .port(node_id, DefaultPortType::Audio, PortID::AudioIn(i))
+                            .unwrap();
+                        self.audio_in_channel_refs.push(port_ref);
+                    }
+                } else if audio_in_channels < self.audio_in_channel_refs.len() {
+                    let n_to_remove = self.audio_in_channel_refs.len() - audio_in_channels;
+                    for _ in 0..n_to_remove {
+                        let port_ref = self.audio_in_channel_refs.pop().unwrap();
+                        if let Err(e) = abstract_graph.delete_port(port_ref) {
+                            log::error!(
+                                "Unexpected error while removing port from abstract graph: {}",
+                                e
+                            );
+                        }
+                    }
+                }
+
+                if audio_out_channels > self.audio_out_channel_refs.len() {
+                    let len = self.audio_in_channel_refs.len() as u16;
+                    for i in len..audio_out_channels as u16 {
+                        let port_ref = abstract_graph
+                            .port(node_id, DefaultPortType::Audio, PortID::AudioOut(i))
+                            .unwrap();
+                        self.audio_out_channel_refs.push(port_ref);
+                    }
+                } else if audio_out_channels < self.audio_out_channel_refs.len() {
+                    let n_to_remove = self.audio_out_channel_refs.len() - audio_out_channels;
+                    for _ in 0..n_to_remove {
+                        let port_ref = self.audio_out_channel_refs.pop().unwrap();
+                        if let Err(e) = abstract_graph.delete_port(port_ref) {
+                            log::error!(
+                                "Unexpected error while removing port from abstract graph: {}",
+                                e
+                            );
+                        }
+                    }
+                }
+
+                plugin.save_state.audio_in_out_channels =
+                    (audio_in_channels as u16, audio_out_channels as u16);
+
+                PluginActivationStatus::ActivatedWithNewPortConfig {
+                    audio_ports: plugin.audio_ports_ext.clone(),
+                }
+            } else {
+                PluginActivationStatus::Activated
+            }
+        } else {
+            PluginActivationStatus::Activated
+        };
+
+        match &mut plugin.main_thread {
+            PluginMainThreadType::Internal(p) => match p.activate(
+                sample_rate,
+                min_block_size,
+                max_block_size,
+                &plugin.host_request,
+                coll_handle,
+            ) {
+                Ok(plugin_audio_thread) => {
+                    plugin.channel.deactivation_requested.store(false, Ordering::Relaxed);
+
+                    plugin.channel.process_requested.store(true, Ordering::Relaxed);
+                    plugin.channel.plugin_state.set(PluginState::ActiveAndSleeping);
+
+                    plugin.audio_thread = Some(PluginAudioThreadType::Internal(
+                        SharedPluginAudioThreadInstance::new(
+                            plugin_audio_thread,
+                            self.id.clone(),
+                            plugin.host_request.clone(),
+                            coll_handle,
+                        ),
+                    ));
+
+                    log::debug!("Successfully activated plugin instance {:?}", &self.id);
+                }
+                Err(e) => {
+                    plugin.channel.plugin_state.set(PluginState::InactiveWithError);
+
+                    return PluginActivationStatus::Error(PluginActivationError {
+                        plugin_id: self.id.clone(),
+                        error: e,
+                    });
+                }
+            },
+            #[cfg(feature = "clap-host")]
+            PluginMainThreadType::Clap(p) => {
+                match p.activate(sample_rate, min_block_size, max_block_size) {
+                    Ok(plugin_audio_thread) => {
+                        plugin.channel.deactivation_requested.store(false, Ordering::Relaxed);
+
+                        plugin.channel.process_requested.store(true, Ordering::Relaxed);
+                        plugin.channel.plugin_state.set(PluginState::ActiveAndSleeping);
+
+                        plugin.audio_thread =
+                            Some(PluginAudioThreadType::Clap(plugin_audio_thread));
+
+                        log::debug!("Successfully activated plugin instance {:?}", &self.id);
+                    }
+                    Err(e) => {
+                        plugin.channel.plugin_state.set(PluginState::InactiveWithError);
+
+                        return PluginActivationStatus::Error(PluginActivationError {
+                            plugin_id: self.id.clone(),
+                            error: e,
+                        });
+                    }
+                }
+            }
+        }
+
+        status
+    }
+
+    pub fn deactivate(&mut self) {
+        if let Some(plugin) = &mut self.loaded {
+            let state = plugin.channel.plugin_state.get();
+
+            if !state.is_active() {
+                return;
+            }
+
+            if state.is_processing() || state.is_sleeping() {
+                // Wait until the audio thread is done using the plugin to deactivate.
+                plugin.channel.deactivation_requested.store(true, Ordering::Relaxed);
+            } else {
+                // Safe to deactivate now.
+                match &mut plugin.main_thread {
+                    PluginMainThreadType::Internal(p) => p.deactivate(&plugin.host_request),
+                    PluginMainThreadType::Clap(p) => p.deactivate(),
+                }
+
+                plugin.audio_thread = None;
+
+                plugin.channel.plugin_state.set(PluginState::Inactive);
+            }
+        }
+    }
+
+    pub fn on_main_thread(
+        &mut self,
+        sample_rate: SampleRate,
+        min_block_size: usize,
+        max_block_size: usize,
+        abstract_graph: &mut Graph<PluginInstanceID, PortID, DefaultPortType>,
+        coll_handle: &basedrop::Handle,
+    ) -> Option<MainThreadStatus> {
+        if self.loaded.is_none() {
+            return None;
+        }
+
+        let plugin = self.loaded.as_mut().unwrap();
+
+        let did_deactivate = if plugin.channel.deactivation_requested.load(Ordering::Relaxed) {
+            let state = plugin.channel.plugin_state.get();
+
+            if !(state.is_processing() || state.is_sleeping()) {
+                // The audio thread has finished using the plugin, it is safe to deactivate now.
+                match &mut plugin.main_thread {
+                    PluginMainThreadType::Internal(p) => p.deactivate(&plugin.host_request),
+                    #[cfg(feature = "clap-host")]
+                    PluginMainThreadType::Clap(p) => p.deactivate(),
+                }
+
+                plugin.audio_thread = None;
+
+                plugin.channel.plugin_state.set(PluginState::Inactive);
+
+                plugin.channel.deactivation_requested.store(false, Ordering::Relaxed);
+
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if plugin.channel.callback_requested.load(Ordering::Relaxed) {
+            log::trace!("Got callback request from plugin {:?}", &self.id);
+
+            plugin.channel.callback_requested.store(false, Ordering::Relaxed);
+
+            match &mut plugin.main_thread {
+                PluginMainThreadType::Internal(p) => p.on_main_thread(&plugin.host_request),
+                #[cfg(feature = "clap-host")]
+                PluginMainThreadType::Clap(p) => p.on_main_thread(),
+            }
+        }
+
+        if plugin.channel.restart_requested.load(Ordering::Relaxed) && !self.remove_requested {
+            log::trace!("Got restart request from plugin {:?}", &self.id);
+
+            let state = plugin.channel.plugin_state.get();
+
+            if state.is_active() {
+                // Wait for the plugin to deactivate before reactivating.
+                self.deactivate();
+            }
+
+            if !state.is_active() {
+                // Safe to restart now.
+                plugin.channel.restart_requested.store(false, Ordering::Relaxed);
+
+                let res = self.activate(
+                    sample_rate,
+                    min_block_size,
+                    max_block_size,
+                    true,
+                    abstract_graph,
+                    coll_handle,
+                );
+
+                return Some(MainThreadStatus::Activated(res));
+            }
+        }
+
+        if self.remove_requested {
+            if self.can_remove() {
+                return Some(MainThreadStatus::Removed);
+            }
+        }
+
+        if did_deactivate {
+            Some(MainThreadStatus::Deactivated)
+        } else {
+            None
+        }
+    }
+}
+
+pub enum MainThreadStatus {
+    Deactivated,
+    Activated(PluginActivationStatus),
+    Removed,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -261,6 +731,7 @@ pub(crate) struct PluginInstancePool {
 
     graph_plugins: Vec<Option<PluginInstance>>,
     free_graph_plugins: Vec<NodeRef>,
+    plugins_to_remove: Vec<PluginInstanceID>,
 
     host_info: Shared<HostInfo>,
 
@@ -288,6 +759,7 @@ impl PluginInstancePool {
             delay_comp_nodes: FnvHashMap::default(),
             graph_plugins: Vec::new(),
             free_graph_plugins: Vec::new(),
+            plugins_to_remove: Vec::new(),
             host_info,
             coll_handle,
             num_plugins: 0,
@@ -331,6 +803,7 @@ impl PluginInstancePool {
             audio_out_channel_refs: graph_in_channel_refs,
             format: PluginFormat::Internal,
             id: graph_in_id.clone(),
+            remove_requested: false,
         });
 
         new_self.num_plugins += 1;
@@ -370,6 +843,7 @@ impl PluginInstancePool {
             audio_out_channel_refs: Vec::new(),
             format: PluginFormat::Internal,
             id: graph_out_id.clone(),
+            remove_requested: false,
         });
 
         new_self.num_plugins += 1;
@@ -377,7 +851,7 @@ impl PluginInstancePool {
         (new_self, graph_in_id, graph_out_id)
     }
 
-    pub fn add_graph_plugin(
+    pub fn add_plugin_instance(
         &mut self,
         plugin_and_host_request: Option<(PluginMainThreadType, HostRequest)>,
         mut save_state: PluginSaveState,
@@ -402,152 +876,53 @@ impl PluginInstancePool {
         // If this isn't right then I did something wrong.
         assert_eq!(node_ref, id.node_id);
 
-        let (main_thread, audio_ports_ext, audio_ports_ext_res) =
-            if let Some((plugin, host_request)) = plugin_and_host_request {
-                match &plugin {
-                    PluginMainThreadType::Internal(p) => {
-                        match p.audio_ports_extension(&host_request) {
-                            Ok(audio_ports_ext) => {
-                                let num_audio_in = audio_ports_ext.total_in_channels();
-                                let num_audio_out = audio_ports_ext.total_out_channels();
+        let mut plugin = PluginInstance::new(
+            plugin_and_host_request,
+            save_state,
+            id.clone(),
+            abstract_graph,
+            activate,
+        );
 
-                                save_state.audio_in_out_channels =
-                                    (num_audio_in as u16, num_audio_out as u16);
-
-                                (
-                                    Some(PluginMainThreadInstance {
-                                        plugin,
-                                        host_request,
-                                        id: id.clone(),
-                                    }),
-                                    Some(audio_ports_ext),
-                                    Ok(()),
-                                )
-                            }
-                            Err(e) => (None, None, Err(e)),
-                        }
-                    }
-                    #[cfg(feature = "clap-host")]
-                    PluginMainThreadType::Clap(p) => match p.audio_ports_extension() {
-                        Ok(audio_ports_ext) => {
-                            let num_audio_in = audio_ports_ext.total_in_channels();
-                            let num_audio_out = audio_ports_ext.total_out_channels();
-
-                            save_state.audio_in_out_channels =
-                                (num_audio_in as u16, num_audio_out as u16);
-
-                            (
-                                Some(PluginMainThreadInstance {
-                                    plugin,
-                                    host_request,
-                                    id: id.clone(),
-                                }),
-                                Some(audio_ports_ext),
-                                Ok(()),
-                            )
-                        }
-                        Err(e) => (None, None, Err(e)),
-                    },
-                }
-            } else {
-                (None, None, Ok(()))
-            };
-
-        save_state.activation_requested = activate;
-
-        let mut audio_in_channel_refs: Vec<PortRef> =
-            Vec::with_capacity(usize::from(save_state.audio_in_out_channels.0));
-        let mut audio_out_channel_refs: Vec<PortRef> =
-            Vec::with_capacity(usize::from(save_state.audio_in_out_channels.1));
-        let (audio_in_channels, audio_out_channels) =
-            if let Some(audio_ports_ext) = &audio_ports_ext {
-                let audio_in_channels = audio_ports_ext.total_in_channels();
-                let audio_out_channels = audio_ports_ext.total_out_channels();
-                save_state.audio_in_out_channels =
-                    (audio_in_channels as u16, audio_out_channels as u16);
-                (audio_in_channels as u16, audio_out_channels as u16)
-            } else {
-                // If the plugin failed to load, try to retrieve the number of channels
-                // from the save state
-                save_state.audio_in_out_channels
-            };
-        for i in 0..audio_in_channels {
-            let port_ref =
-                abstract_graph.port(node_id, DefaultPortType::Audio, PortID::AudioIn(i)).unwrap();
-            audio_in_channel_refs.push(port_ref);
-        }
-        for i in 0..audio_out_channels {
-            let port_ref =
-                abstract_graph.port(node_id, DefaultPortType::Audio, PortID::AudioOut(i)).unwrap();
-            audio_out_channel_refs.push(port_ref);
-        }
-
-        save_state.audio_in_out_channels = (audio_in_channels, audio_out_channels);
-        let format = save_state.key.format;
-
-        let new_instance = if main_thread.is_some() {
-            PluginInstance {
-                loaded: Some(LoadedPluginInstance {
-                    main_thread: main_thread.unwrap(),
-                    audio_thread: None,
-                    save_state,
-                    audio_ports_ext: audio_ports_ext.unwrap(),
-                }),
-                audio_in_channel_refs,
-                audio_out_channel_refs,
-                format,
-                id: id.clone(),
-            }
+        let activation_status = if activate && plugin.can_activate() {
+            plugin.activate(
+                self.sample_rate,
+                self.min_frames,
+                self.max_frames,
+                false,
+                abstract_graph,
+                &self.coll_handle,
+            )
         } else {
-            PluginInstance {
-                loaded: None,
-                audio_in_channel_refs,
-                audio_out_channel_refs,
-                format,
-                id: id.clone(),
-            }
+            PluginActivationStatus::Inactive
         };
+
         let node_i: usize = node_id.into();
-        self.graph_plugins[node_i] = Some(new_instance);
+        self.graph_plugins[node_i] = Some(plugin);
 
         self.num_plugins += 1;
 
         log::debug!("Added plugin instance {:?} to audio graph", &id);
 
-        let activate_res = if activate && audio_ports_ext_res.is_ok() {
-            self.activate_plugin_instance(&id, abstract_graph, false)
-        } else if let Err(e) = audio_ports_ext_res {
-            PluginActivationStatus::Error(PluginActivationError { plugin_id: id.clone(), error: e })
-        } else {
-            PluginActivationStatus::DeactivatedFromSaveState
-        };
-
-        (id, activate_res)
+        (id, activation_status)
     }
 
-    pub fn remove_graph_plugin(
+    pub fn remove_plugin_instance(
         &mut self,
         id: &PluginInstanceID,
         abstract_graph: &mut Graph<PluginInstanceID, PortID, DefaultPortType>,
     ) {
-        // Deactivate the plugin first.
-        self.deactivate_plugin_instance(id);
-
         let node_i: usize = id.node_id.into();
-        if let Some(plugin_instance) = self.graph_plugins[node_i].take() {
-            // Drop the plugin instance here.
-            let _ = plugin_instance;
-
-            // Re-use this node ID for the next new plugin.
-            self.free_graph_plugins.push(id.node_id);
-
-            self.num_plugins -= 1;
-
-            abstract_graph.delete_node(id.node_id).unwrap();
-
-            log::debug!("Removed plugin instance {:?} from audio graph", id);
+        let do_remove_now = if let Some(plugin_instance) = self.graph_plugins[node_i].as_mut() {
+            plugin_instance.request_remove();
+            plugin_instance.can_remove()
         } else {
-            log::warn!("Ignored request to remove plugin instance {:?} from audio graph: plugin already removed", id);
+            log::debug!("Ignored request to remove plugin instance {:?} from audio graph: plugin was already removed", id);
+            false
+        };
+
+        if do_remove_now {
+            self.remove_plugin_instance(id, abstract_graph);
         }
     }
 
@@ -559,168 +934,19 @@ impl PluginInstancePool {
     ) -> PluginActivationStatus {
         let node_i: usize = id.node_id.into();
         if let Some(plugin_instance) = &mut self.graph_plugins[node_i] {
-            if let Some(loaded_plugin) = &mut plugin_instance.loaded {
-                loaded_plugin.save_state.activation_requested = true;
-
-                if loaded_plugin.audio_thread.is_some() {
-                    // Cannot activate plugin that is already active.
-                    return PluginActivationStatus::Activated;
-                }
-
-                loaded_plugin
-                    .main_thread
-                    .host_request
-                    .plugin_channel
-                    .deactivation_requested
-                    .store(false, Ordering::Relaxed);
-
-                log::trace!("Activating plugin instance {:?}", &loaded_plugin.main_thread.id);
-
-                let res = if check_for_port_change {
-                    let new_audio_ports_ext = match &loaded_plugin.main_thread.plugin {
-                        PluginMainThreadType::Internal(p) => {
-                            match p.audio_ports_extension(&loaded_plugin.main_thread.host_request) {
-                                Ok(ext) => ext,
-                                Err(e) => {
-                                    return PluginActivationStatus::Error(PluginActivationError {
-                                        plugin_id: id.clone(),
-                                        error: e,
-                                    });
-                                }
-                            }
-                        }
-                        #[cfg(feature = "clap-host")]
-                        PluginMainThreadType::Clap(p) => match p.audio_ports_extension() {
-                            Ok(ext) => ext,
-                            Err(e) => {
-                                return PluginActivationStatus::Error(PluginActivationError {
-                                    plugin_id: id.clone(),
-                                    error: e,
-                                });
-                            }
-                        },
-                    };
-
-                    if new_audio_ports_ext != loaded_plugin.audio_ports_ext {
-                        loaded_plugin.audio_ports_ext = new_audio_ports_ext;
-
-                        // Make sure the abstract graph has the updated number of ports.
-
-                        let node_id = loaded_plugin.main_thread.id.node_id;
-
-                        let audio_in_channels = loaded_plugin.audio_ports_ext.total_in_channels();
-                        let audio_out_channels = loaded_plugin.audio_ports_ext.total_out_channels();
-
-                        if audio_in_channels > plugin_instance.audio_in_channel_refs.len() {
-                            let len = plugin_instance.audio_in_channel_refs.len() as u16;
-                            for i in len..audio_in_channels as u16 {
-                                let port_ref = abstract_graph
-                                    .port(node_id, DefaultPortType::Audio, PortID::AudioIn(i))
-                                    .unwrap();
-                                plugin_instance.audio_in_channel_refs.push(port_ref);
-                            }
-                        } else if audio_in_channels < plugin_instance.audio_in_channel_refs.len() {
-                            let n_to_remove =
-                                plugin_instance.audio_in_channel_refs.len() - audio_in_channels;
-                            for _ in 0..n_to_remove {
-                                let port_ref = plugin_instance.audio_in_channel_refs.pop().unwrap();
-                                if let Err(e) = abstract_graph.delete_port(port_ref) {
-                                    log::error!(
-                                        "Unexpected error while removing port from abstract graph: {}",
-                                        e
-                                    );
-                                }
-                            }
-                        }
-
-                        if audio_out_channels > plugin_instance.audio_out_channel_refs.len() {
-                            let len = plugin_instance.audio_in_channel_refs.len() as u16;
-                            for i in len..audio_out_channels as u16 {
-                                let port_ref = abstract_graph
-                                    .port(node_id, DefaultPortType::Audio, PortID::AudioOut(i))
-                                    .unwrap();
-                                plugin_instance.audio_out_channel_refs.push(port_ref);
-                            }
-                        } else if audio_out_channels < plugin_instance.audio_out_channel_refs.len()
-                        {
-                            let n_to_remove =
-                                plugin_instance.audio_out_channel_refs.len() - audio_out_channels;
-                            for _ in 0..n_to_remove {
-                                let port_ref =
-                                    plugin_instance.audio_out_channel_refs.pop().unwrap();
-                                if let Err(e) = abstract_graph.delete_port(port_ref) {
-                                    log::error!(
-                                        "Unexpected error while removing port from abstract graph: {}",
-                                        e
-                                    );
-                                }
-                            }
-                        }
-
-                        loaded_plugin.save_state.audio_in_out_channels =
-                            (audio_in_channels as u16, audio_out_channels as u16);
-
-                        PluginActivationStatus::ActivatedWithNewPortConfig {
-                            audio_ports: loaded_plugin.audio_ports_ext.clone(),
-                        }
-                    } else {
-                        PluginActivationStatus::Activated
-                    }
-                } else {
-                    PluginActivationStatus::Activated
-                };
-
-                match &mut loaded_plugin.main_thread.plugin {
-                    PluginMainThreadType::Internal(p) => match p.activate(
-                        self.sample_rate,
-                        self.min_frames,
-                        self.max_frames,
-                        &loaded_plugin.main_thread.host_request,
-                        &self.coll_handle,
-                    ) {
-                        Ok(plugin_audio_thread) => {
-                            loaded_plugin.audio_thread = Some(PluginAudioThreadType::Internal(
-                                SharedPluginAudioThreadInstance::new(
-                                    plugin_audio_thread,
-                                    loaded_plugin.main_thread.id.clone(),
-                                    loaded_plugin.main_thread.host_request.clone(),
-                                    &self.coll_handle,
-                                ),
-                            ));
-
-                            log::debug!("Successfully activated plugin instance {:?}", &id);
-                        }
-                        Err(e) => {
-                            return PluginActivationStatus::Error(PluginActivationError {
-                                plugin_id: id.clone(),
-                                error: e,
-                            });
-                        }
-                    },
-                    #[cfg(feature = "clap-host")]
-                    PluginMainThreadType::Clap(p) => {
-                        match p.activate(self.sample_rate, self.min_frames, self.max_frames) {
-                            Ok(plugin_audio_thread) => {
-                                loaded_plugin.audio_thread =
-                                    Some(PluginAudioThreadType::Clap(plugin_audio_thread));
-
-                                log::debug!("Successfully activated plugin instance {:?}", &id);
-                            }
-                            Err(e) => {
-                                return PluginActivationStatus::Error(PluginActivationError {
-                                    plugin_id: id.clone(),
-                                    error: e,
-                                });
-                            }
-                        }
-                    }
-                }
-
-                res
+            if plugin_instance.can_activate() {
+                plugin_instance.activate(
+                    self.sample_rate,
+                    self.min_frames,
+                    self.max_frames,
+                    check_for_port_change,
+                    abstract_graph,
+                    &self.coll_handle,
+                )
             } else {
                 PluginActivationStatus::Error(PluginActivationError {
                     plugin_id: id.clone(),
-                    error: "Plugin is not loaded".into(),
+                    error: "Plugin is not in an activatable state".into(),
                 })
             }
         } else {
@@ -734,57 +960,7 @@ impl PluginInstancePool {
     pub fn deactivate_plugin_instance(&mut self, id: &PluginInstanceID) {
         let node_i: usize = id.node_id.into();
         if let Some(plugin_instance) = &mut self.graph_plugins[node_i] {
-            if let Some(loaded_plugin) = &mut plugin_instance.loaded {
-                loaded_plugin.save_state.activation_requested = false;
-
-                loaded_plugin
-                    .main_thread
-                    .host_request
-                    .plugin_channel
-                    .deactivation_requested
-                    .store(true, Ordering::Relaxed);
-
-                if loaded_plugin.audio_thread.is_none() {
-                    // Plugin is already inactive.
-                    return;
-                }
-
-                log::debug!("Deactivating plugin instance {:?}", &loaded_plugin.main_thread.id);
-
-                match &mut loaded_plugin.main_thread.plugin {
-                    PluginMainThreadType::Internal(p) => {
-                        p.deactivate(&loaded_plugin.main_thread.host_request)
-                    }
-                    #[cfg(feature = "clap-host")]
-                    PluginMainThreadType::Clap(p) => p.deactivate(),
-                }
-
-                loaded_plugin.audio_thread = None;
-            }
-        }
-    }
-
-    #[inline]
-    pub fn is_plugin_loaded(&self, id: &PluginInstanceID) -> Result<bool, ()> {
-        let node_i: usize = id.node_id.into();
-        if let Some(plugin_instance) = &self.graph_plugins[node_i] {
-            Ok(plugin_instance.loaded.is_some())
-        } else {
-            Err(())
-        }
-    }
-
-    #[inline]
-    pub fn is_plugin_active(&self, id: &PluginInstanceID) -> Result<bool, ()> {
-        let node_i: usize = id.node_id.into();
-        if let Some(plugin_instance) = &self.graph_plugins[node_i] {
-            if let Some(loaded_plugin) = plugin_instance.loaded.as_ref() {
-                Ok(loaded_plugin.audio_thread.is_some())
-            } else {
-                Ok(false)
-            }
-        } else {
-            Err(())
+            plugin_instance.deactivate();
         }
     }
 
@@ -856,8 +1032,8 @@ impl PluginInstancePool {
     ) -> Result<Option<&PluginAudioThreadType>, ()> {
         let node_i: usize = id.node_id.into();
         if let Some(plugin_instance) = self.graph_plugins[node_i].as_ref() {
-            if let Some(loaded_plugin) = plugin_instance.loaded.as_ref() {
-                Ok(loaded_plugin.audio_thread.as_ref())
+            if let Some(plugin) = plugin_instance.loaded.as_ref() {
+                Ok(plugin.audio_thread.as_ref())
             } else {
                 Ok(None)
             }
@@ -890,72 +1066,71 @@ impl PluginInstancePool {
     pub fn on_main_thread(
         &mut self,
         abstract_graph: &mut Graph<PluginInstanceID, PortID, DefaultPortType>,
-    ) -> SmallVec<[(PluginInstanceID, PluginActivationStatus); 4]> {
+    ) -> SmallVec<[(PluginInstanceID, MainThreadStatus); 4]> {
         //log::trace!("Engine start on main thread calls...");
 
-        let mut plugins_to_restart: SmallVec<[(PluginInstanceID, PluginActivationStatus); 4]> =
+        let mut changed_plugins_status: SmallVec<[(PluginInstanceID, MainThreadStatus); 4]> =
             SmallVec::new();
+        let mut plugins_to_remove: SmallVec<[PluginInstanceID; 4]> = SmallVec::new();
 
         // TODO: Find a more optimal way to poll for requests? We can't just use an spsc message
         // channel because CLAP plugins use the same host pointer for requests in the audio thread
         // and in the main thread. Is there some thread-safe way to get a list of only the plugins
         // that have requested something?
         for plugin in self.graph_plugins.iter_mut().filter_map(|p| p.as_mut()) {
-            if let Some(loaded_plugin) = plugin.loaded.as_mut() {
-                if loaded_plugin
-                    .main_thread
-                    .host_request
-                    .plugin_channel
-                    .callback_requested
-                    .load(Ordering::Relaxed)
-                {
-                    log::trace!("Got callback request from plugin {:?}", &plugin.id);
+            let status = plugin.on_main_thread(
+                self.sample_rate,
+                self.min_frames,
+                self.max_frames,
+                abstract_graph,
+                &self.coll_handle,
+            );
 
-                    loaded_plugin
-                        .main_thread
-                        .host_request
-                        .plugin_channel
-                        .callback_requested
-                        .store(false, Ordering::Relaxed);
-
-                    match &mut loaded_plugin.main_thread.plugin {
-                        PluginMainThreadType::Internal(p) => {
-                            p.on_main_thread(&loaded_plugin.main_thread.host_request)
-                        }
-                        #[cfg(feature = "clap-host")]
-                        PluginMainThreadType::Clap(p) => p.on_main_thread(),
-                    }
+            if let Some(status) = status.take() {
+                if let MainThreadStatus::Removed = status {
+                    // Remove the plugin from the graph.
+                    plugins_to_remove.push(plugin.id.clone());
                 }
-                if loaded_plugin
-                    .main_thread
-                    .host_request
-                    .plugin_channel
-                    .restart_requested
-                    .load(Ordering::Relaxed)
-                {
-                    log::trace!("Got restart request from plugin {:?}", &plugin.id);
-
-                    loaded_plugin
-                        .main_thread
-                        .host_request
-                        .plugin_channel
-                        .restart_requested
-                        .store(false, Ordering::Relaxed);
-
-                    plugins_to_restart.push((
-                        loaded_plugin.main_thread.id.clone(),
-                        PluginActivationStatus::Activated,
-                    ));
-                }
+                changed_plugins_status.push((plugin.id.clone(), status));
             }
         }
 
-        for id in plugins_to_restart.iter_mut() {
-            self.deactivate_plugin_instance(&id.0);
-            id.1 = self.activate_plugin_instance(&id.0, abstract_graph, true);
+        for id in plugins_to_remove.iter() {
+            self.remove_plugin(&id, abstract_graph);
         }
 
-        plugins_to_restart
+        changed_plugins_status
+    }
+
+    fn remove_plugin(
+        &mut self,
+        id: &PluginInstanceID,
+        abstract_graph: &mut Graph<PluginInstanceID, PortID, DefaultPortType>,
+    ) {
+        let node_i: usize = id.node_id.into();
+
+        // Drop the plugin instance here.
+        self.graph_plugins[node_i] = None;
+
+        // Re-use this node ID for the next new plugin.
+        self.free_graph_plugins.push(id.node_id);
+
+        self.num_plugins -= 1;
+
+        abstract_graph.delete_node(id.node_id).unwrap();
+
+        log::debug!("Removed plugin instance {:?} from audio graph", id);
+    }
+}
+
+impl Drop for PluginInstancePool {
+    fn drop(&mut self) {
+        let ids: Vec<PluginInstanceID> = self.iter_plugin_ids().map(|id| id.clone()).collect();
+        for id in ids.iter() {
+            self.deactivate_plugin_instance(id);
+        }
+
+        std::thread::sleep(std::time::Duration::from_secs(4));
     }
 }
 
