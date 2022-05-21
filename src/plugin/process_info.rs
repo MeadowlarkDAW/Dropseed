@@ -1,3 +1,7 @@
+use smallvec::SmallVec;
+
+use super::audio_buffer::{AudioPortBuffer, AudioPortBufferMut};
+
 /// The status of a call to a plugin's `process()` method.
 #[non_exhaustive]
 #[repr(i32)]
@@ -21,17 +25,50 @@ pub enum ProcessStatus {
     Sleep = 4,
 }
 
-pub struct ProcInfo {
+pub struct ProcInfo<'a> {
     /// A steady sample time counter.
     ///
     /// This field can be used to calculate the sleep duration between two process calls.
     /// This value may be specific to this plugin instance and have no relation to what
     /// other plugin instances may receive.
     ///
-    /// This will be `None` if not available, otherwise the value will be increased by
+    /// This will be `-1` if not available, otherwise the value will be increased by
     /// at least `frames_count` for the next call to process.
-    pub steady_time: Option<i64>,
+    pub steady_time: i64,
 
-    /// The number of frames to process.
+    /// The number of frames to process. All buffers in this struct are gauranteed to be
+    /// at-least this length.
     pub frames: usize,
+
+    pub audio_in: &'a SmallVec<[AudioPortBuffer; 2]>,
+    pub audio_out: &'a mut SmallVec<[AudioPortBufferMut; 2]>,
+
+    /// Used to let external plugins know when it should update its list of buffers.
+    pub(crate) task_version: u64,
+}
+
+impl<'a> ProcInfo<'a> {
+    pub fn audio_inputs_silent(&self) -> bool {
+        for buf in self.audio_in.iter() {
+            if !buf.is_silent(self.frames) {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub fn audio_outputs_silent(&self) -> bool {
+        for buf in self.audio_out.iter() {
+            if !buf.is_silent(self.frames) {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub fn clear_all_outputs(&mut self) {
+        for buf in self.audio_out.iter_mut() {
+            buf.clear_all(self.frames);
+        }
+    }
 }

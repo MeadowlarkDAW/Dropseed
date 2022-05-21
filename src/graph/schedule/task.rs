@@ -2,9 +2,7 @@ use smallvec::SmallVec;
 use std::sync::atomic::Ordering;
 
 use crate::graph::audio_buffer_pool::SharedAudioBuffer;
-use crate::graph::plugin_pool::{
-    ProcessingState, SharedDelayCompNode, SharedPluginAudioThreadInstance,
-};
+use crate::graph::plugin_pool::{SharedDelayCompNode, SharedPluginAudioThreadInstance};
 use crate::{AudioPortBuffer, ProcInfo, ProcessStatus};
 
 #[cfg(feature = "clap-host")]

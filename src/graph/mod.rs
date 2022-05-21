@@ -6,16 +6,14 @@ use rusty_daw_core::SampleRate;
 use smallvec::SmallVec;
 use std::error::Error;
 
-pub(crate) mod audio_buffer_pool;
-pub(crate) mod plugin_pool;
+pub(crate) mod shared_pool;
 
 mod compiler;
+mod plugin_host;
 mod save_state;
 mod schedule;
 mod verifier;
 
-use audio_buffer_pool::AudioBufferPool;
-use plugin_pool::PluginInstancePool;
 use schedule::Schedule;
 use verifier::Verifier;
 
@@ -23,7 +21,6 @@ use crate::plugin::ext::audio_ports::AudioPortsExtension;
 use crate::plugin_scanner::ScannedPluginKey;
 
 pub use compiler::GraphCompilerError;
-pub use plugin_pool::{PluginActivatedInfo, PluginActivationError, PluginInstanceID};
 pub use save_state::{AudioGraphSaveState, EdgeSaveState};
 pub use schedule::SharedSchedule;
 pub use verifier::VerifyScheduleError;
@@ -50,7 +47,6 @@ use crate::{
 };
 
 use self::compiler::compile_graph;
-use self::plugin_pool::MainThreadStatus;
 
 pub(crate) struct AudioGraph {
     plugin_pool: PluginInstancePool,
