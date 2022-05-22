@@ -6,10 +6,10 @@ use rusty_daw_core::SampleRate;
 use smallvec::SmallVec;
 use std::error::Error;
 
+pub(crate) mod plugin_host;
 pub(crate) mod shared_pool;
 
 mod compiler;
-mod plugin_host;
 mod save_state;
 mod schedule;
 mod verifier;

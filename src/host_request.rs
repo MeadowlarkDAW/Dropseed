@@ -1,13 +1,11 @@
 use std::ffi::{CStr, CString};
 use std::pin::Pin;
 use std::sync::{
-    atomic::{AtomicU32, Ordering},
+    atomic::{AtomicBool, Ordering},
     Arc,
 };
 
 use basedrop::Shared;
-
-use crate::graph::plugin_pool::PluginInstanceChannel;
 
 #[derive(Debug, Clone)]
 pub struct HostInfo {
@@ -70,12 +68,21 @@ impl HostInfo {
 /// Used to get info and request actions from the host.
 pub struct HostRequest {
     pub(crate) info: Shared<HostInfo>,
-    // We are storing this as a slice so we can get a raw pointer to the channel
-    // for external plugins.
-    pub(crate) plugin_channel: Shared<PluginInstanceChannel>,
+    pub(crate) restart_requested: Arc<AtomicBool>,
+    pub(crate) process_requested: Arc<AtomicBool>,
+    pub(crate) callback_requested: Arc<AtomicBool>,
 }
 
 impl HostRequest {
+    pub(crate) fn new(info: Shared<HostInfo>) -> Self {
+        Self {
+            info,
+            restart_requested: Arc::new(AtomicBool::new(false)),
+            process_requested: Arc::new(AtomicBool::new(false)),
+            callback_requested: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
     /// Retrieve info about this host.
     pub fn info(&self) -> Shared<HostInfo> {
         Shared::clone(&self.info)
@@ -86,7 +93,7 @@ impl HostRequest {
     ///
     /// `[thread-safe]`
     pub fn request_restart(&self) {
-        self.plugin_channel.restart_requested.store(true, Ordering::Relaxed);
+        self.restart_requested.store(true, Ordering::Relaxed);
     }
 
     /// Request the host to activate and start processing the plugin.
@@ -94,14 +101,14 @@ impl HostRequest {
     ///
     /// `[thread-safe]`
     pub fn request_process(&self) {
-        self.plugin_channel.process_requested.store(true, Ordering::Relaxed);
+        self.process_requested.store(true, Ordering::Relaxed);
     }
 
     /// Request the host to schedule a call to `PluginMainThread::on_main_thread()` on the main thread.
     ///
     /// `[thread-safe]`
     pub fn request_callback(&self) {
-        self.plugin_channel.callback_requested.store(true, Ordering::Relaxed);
+        self.callback_requested.store(true, Ordering::Relaxed);
     }
 }
 
@@ -109,7 +116,9 @@ impl Clone for HostRequest {
     fn clone(&self) -> Self {
         Self {
             info: Shared::clone(&self.info),
-            plugin_channel: Shared::clone(&self.plugin_channel),
+            restart_requested: Arc::clone(&self.restart_requested),
+            process_requested: Arc::clone(&self.process_requested),
+            callback_requested: Arc::clone(&self.callback_requested),
         }
     }
 }

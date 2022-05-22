@@ -3,7 +3,9 @@ use fnv::FnvHashMap;
 use std::cell::UnsafeCell;
 use std::hash::Hash;
 
-use super::plugin_host::PluginHost;
+use crate::plugin_scanner::PluginFormat;
+
+use super::plugin_host::PluginInstanceHost;
 
 /// Used for debugging and verifying purposes.
 #[repr(u8)]
@@ -50,6 +52,7 @@ impl<T: Clone + Copy + Send + Default + 'static> Clone for SharedBuffer<T> {
 pub(crate) enum PluginInstanceType {
     Internal,
     Clap,
+    Unloaded,
     Sum,
     DelayComp,
     GraphInput,
@@ -64,6 +67,7 @@ impl std::fmt::Debug for PluginInstanceType {
             match self {
                 PluginInstanceType::Internal => "Int",
                 PluginInstanceType::Clap => "CLAP",
+                &PluginInstanceType::Unloaded => "Unloaded",
                 PluginInstanceType::Sum => "Sum",
                 PluginInstanceType::DelayComp => "Dly",
                 PluginInstanceType::GraphInput => "GraphIn",
@@ -73,11 +77,20 @@ impl std::fmt::Debug for PluginInstanceType {
     }
 }
 
+impl From<PluginFormat> for PluginInstanceType {
+    fn from(f: PluginFormat) -> Self {
+        match f {
+            PluginFormat::Internal => PluginInstanceType::Internal,
+            PluginFormat::Clap => PluginInstanceType::Clap,
+        }
+    }
+}
+
 /// Used to uniquely identify a plugin instance and for debugging purposes.
 pub struct PluginInstanceID {
     pub(crate) node_index: usize,
     pub(crate) format: PluginInstanceType,
-    name: Option<Shared<String>>,
+    pub(crate) name: Option<Shared<String>>,
 }
 
 impl std::fmt::Debug for PluginInstanceID {
@@ -117,18 +130,8 @@ impl Hash for PluginInstanceID {
     }
 }
 
-struct SharedPluginHost {
-    plugin: Shared<UnsafeCell<PluginHost>>,
-}
-
-impl Clone for SharedPluginHost {
-    fn clone(&self) -> Self {
-        Self { plugin: Shared::clone(&self.plugin) }
-    }
-}
-
 pub(crate) struct SharedPool {
-    pub plugins: FnvHashMap<PluginInstanceID, SharedPluginHost>,
+    pub plugins: FnvHashMap<PluginInstanceID, PluginInstanceHost>,
 
     audio_buffers_f32: Vec<Option<SharedBuffer<f32>>>,
     audio_buffers_f64: Vec<Option<SharedBuffer<f64>>>,

@@ -102,13 +102,11 @@ pub trait PluginMainThread {
     ///
     /// By default this returns `Ok(())`.
     ///
+    /// TODO: preset
+    ///
     /// `[main-thread & !active_state]`
     #[allow(unused)]
-    fn init(
-        &mut self,
-        host_request: HostRequest,
-        coll_handle: &basedrop::Handle,
-    ) -> Result<(), Box<dyn Error>> {
+    fn init(&mut self, _preset: (), coll_handle: &basedrop::Handle) -> Result<(), Box<dyn Error>> {
         Ok(())
     }
 

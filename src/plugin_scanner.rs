@@ -4,7 +4,8 @@ use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use std::{collections::HashMap, error::Error};
 
-use crate::graph::plugin_pool::{PluginInstanceChannel, PluginMainThreadType};
+use crate::graph::plugin_host::PluginInstanceHost;
+use crate::graph::shared_pool::{PluginInstanceID, PluginInstanceType};
 use crate::host_request::HostRequest;
 use crate::plugin::{PluginDescriptor, PluginFactory, PluginSaveState};
 use crate::HostInfo;
@@ -48,18 +49,12 @@ pub struct ScannedPlugin {
     pub key: ScannedPluginKey,
 }
 
-enum FactoryType {
-    Internal(Box<dyn PluginFactory>),
-    #[cfg(feature = "clap-host")]
-    Clap(ClapPluginFactory),
-}
-
 struct ScannedPluginFactory {
     pub description: PluginDescriptor,
     pub rdn: Shared<String>,
     pub format: PluginFormat,
 
-    factory: FactoryType,
+    factory: Box<dyn PluginFactory>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -231,7 +226,7 @@ impl PluginScanner {
                             log::info!(
                                 "Successfully scanned CLAP plugin with ID: {}, version {}, and CLAP version {}",
                                 &id,
-                                &f.description().version.as_ref().map(|v| v.as_str()).unwrap_or("(none)"),
+                                &f.description().version,
                                 &format_version,
                             );
                             log::trace!("Full plugin descriptor: {:?}", f.description());
@@ -252,7 +247,7 @@ impl PluginScanner {
                                     description: f.description().clone(),
                                     rdn: Shared::new(&self.coll_handle, id.clone()),
                                     format: PluginFormat::Clap,
-                                    factory: FactoryType::Clap(f),
+                                    factory: f,
                                 },
                             ) {
                                 // TODO: Handle this better
@@ -290,7 +285,7 @@ impl PluginScanner {
         }
 
         let scanned_plugin = ScannedPluginFactory {
-            factory: FactoryType::Internal(factory),
+            factory,
             description,
             rdn: Shared::new(&self.coll_handle, key.rdn.clone()),
             format: PluginFormat::Internal,
@@ -303,149 +298,130 @@ impl PluginScanner {
 
     pub(crate) fn create_plugin(
         &mut self,
-        key: &ScannedPluginKey,
-        activation_requested: bool,
+        mut save_state: PluginSaveState,
+        node_index: usize,
         fallback_to_other_formats: bool,
-    ) -> Result<
-        (PluginMainThreadType, Shared<String>, PluginFormat, PluginSaveState, HostRequest),
-        NewPluginInstanceError,
-    > {
+    ) -> CreatePluginResult {
         let check_for_invalid_host_callbacks = |host_request: &HostRequest, id: &String| {
-            if host_request.plugin_channel.restart_requested.load(Ordering::Relaxed) {
-                host_request.plugin_channel.restart_requested.store(false, Ordering::Relaxed);
+            if host_request.restart_requested.load(Ordering::Relaxed) {
+                host_request.restart_requested.store(false, Ordering::Relaxed);
                 log::warn!("Plugin with ID {} attempted to call host_request.request_restart() during PluginFactory::new(). Request was ignored.", id);
             }
-            if host_request.plugin_channel.process_requested.load(Ordering::Relaxed) {
-                host_request.plugin_channel.process_requested.store(false, Ordering::Relaxed);
+            if host_request.process_requested.load(Ordering::Relaxed) {
+                host_request.process_requested.store(false, Ordering::Relaxed);
                 log::warn!("Plugin with ID {} attempted to call host_request.request_process() during PluginFactory::new(). Request was ignored.", id);
             }
-            if host_request.plugin_channel.callback_requested.load(Ordering::Relaxed) {
-                host_request.plugin_channel.callback_requested.store(false, Ordering::Relaxed);
+            if host_request.callback_requested.load(Ordering::Relaxed) {
+                host_request.callback_requested.store(false, Ordering::Relaxed);
                 log::warn!("Plugin with ID {} attempted to call host_request.request_callback() during PluginFactory::new(). Request was ignored.", id);
             }
         };
 
         let mut try_other_formats = false;
 
-        #[cfg(not(feature = "clap-host"))]
-        if key.format == PluginFormat::Clap && fallback_to_other_formats {
-            try_other_formats = true;
-        }
+        let mut factory = None;
+        let mut status = Ok(());
 
-        if key.format == PluginFormat::Internal || try_other_formats {
-            let res = if key.format == PluginFormat::Internal {
-                self.scanned_internal_plugins.get_mut(key)
+        // Always try to use internal plugins when available.
+        if save_state.key.format == PluginFormat::Internal || fallback_to_other_formats {
+            let res = if save_state.key.format == PluginFormat::Internal {
+                self.scanned_internal_plugins.get_mut(&save_state.key)
             } else {
-                let new_key =
-                    ScannedPluginKey { rdn: key.rdn.clone(), format: PluginFormat::Internal };
+                let new_key = ScannedPluginKey {
+                    rdn: save_state.key.rdn.clone(),
+                    format: PluginFormat::Internal,
+                };
                 self.scanned_internal_plugins.get_mut(&new_key)
             };
 
-            if let Some(factory) = res {
-                if let FactoryType::Internal(f) = &mut factory.factory {
-                    let host_request = HostRequest {
-                        info: Shared::clone(&self.host_info),
-                        plugin_channel: Shared::new(
-                            &self.coll_handle,
-                            PluginInstanceChannel::new(),
-                        ),
-                    };
-
-                    let res = match f.new(&host_request, &self.coll_handle) {
-                        Ok(p) => {
-                            let save_state = PluginSaveState {
-                                key: key.clone(),
-                                activation_requested,
-                                audio_in_out_channels: (0, 0),
-                                _preset: (),
-                            };
-
-                            Ok((
-                                PluginMainThreadType::Internal(p),
-                                Shared::clone(&factory.rdn),
-                                factory.format,
-                                save_state,
-                                host_request.clone(),
-                            ))
-                        }
-                        Err(e) => {
-                            Err(NewPluginInstanceError::InstantiationError(key.rdn.clone(), e))
-                        }
-                    };
-                    check_for_invalid_host_callbacks(&host_request, &factory.rdn);
-
-                    return res;
-                } else {
-                    panic!("Internal plugin was assigned a clap factory somehow");
-                }
-            } else if fallback_to_other_formats {
-                try_other_formats = true;
+            if let Some(f) = res {
+                factory = Some(f);
             } else {
-                return Err(NewPluginInstanceError::FormatNotFound(
-                    key.rdn.clone(),
+                status = Err(NewPluginInstanceError::FormatNotFound(
+                    save_state.key.rdn.clone(),
                     PluginFormat::Internal,
                 ));
             }
         }
 
-        // Next try the CLAP format
         #[cfg(feature = "clap-host")]
-        if key.format == PluginFormat::Clap || try_other_formats {
-            let res = if key.format == PluginFormat::Clap {
-                self.scanned_external_plugins.get_mut(key)
+        // Next try to use the clap version of the plugin.
+        if factory.is_none()
+            && (save_state.key.format == PluginFormat::Clap || fallback_to_other_formats)
+        {
+            let res = if save_state.key.format == PluginFormat::Clap {
+                self.scanned_external_plugins.get_mut(&save_state.key)
             } else {
-                let new_key = ScannedPluginKey { rdn: key.rdn.clone(), format: PluginFormat::Clap };
+                let new_key = ScannedPluginKey {
+                    rdn: save_state.key.rdn.clone(),
+                    format: PluginFormat::Clap,
+                };
                 self.scanned_external_plugins.get_mut(&new_key)
             };
 
-            if let Some(factory) = res {
-                if let FactoryType::Clap(f) = &mut factory.factory {
-                    let host_request = HostRequest {
-                        info: Shared::clone(&self.host_info),
-                        plugin_channel: Shared::new(
-                            &self.coll_handle,
-                            PluginInstanceChannel::new(),
-                        ),
-                    };
-
-                    let res = match f.new(&host_request, &self.main_thread_collector.handle()) {
-                        Ok(p) => {
-                            let save_state = PluginSaveState {
-                                key: key.clone(),
-                                activation_requested,
-                                audio_in_out_channels: (0, 0),
-                                _preset: (),
-                            };
-
-                            Ok((
-                                PluginMainThreadType::Clap(p),
-                                Shared::clone(&factory.rdn),
-                                factory.format,
-                                save_state,
-                                host_request.clone(),
-                            ))
-                        }
-                        Err(e) => {
-                            Err(NewPluginInstanceError::InstantiationError(key.rdn.clone(), e))
-                        }
-                    };
-                    check_for_invalid_host_callbacks(&host_request, &factory.rdn);
-
-                    return res;
-                } else {
-                    panic!("Clap plugin was assigned an internal factory somehow");
-                }
-            } else if fallback_to_other_formats {
-                //try_other_formats = true;
+            if let Some(f) = res {
+                factory = Some(f);
             } else {
-                return Err(NewPluginInstanceError::FormatNotFound(
-                    key.rdn.clone(),
-                    PluginFormat::Internal,
+                status = Err(NewPluginInstanceError::FormatNotFound(
+                    save_state.key.rdn.clone(),
+                    PluginFormat::Clap,
                 ));
             }
         }
 
-        Err(NewPluginInstanceError::NotFound(key.rdn.clone()))
+        let mut id =
+            PluginInstanceID { node_index, format: PluginInstanceType::Unloaded, name: None };
+        let host_request = HostRequest::new(Shared::clone(&self.host_info));
+        let mut main_thread = None;
+
+        if let Some(factory) = factory {
+            id.format = factory.format.into();
+            id.name = Some(factory.rdn.clone());
+
+            if save_state.key.format != factory.format {
+                save_state.key =
+                    ScannedPluginKey { rdn: save_state.key.rdn.clone(), format: factory.format };
+            }
+
+            match factory.factory.new(host_request.clone(), &self.coll_handle) {
+                Ok(plugin_main_thread) => {
+                    check_for_invalid_host_callbacks(&host_request, &factory.rdn);
+
+                    if let Err(e) =
+                        plugin_main_thread.init(save_state._preset.clone(), &self.coll_handle)
+                    {
+                        status = Err(NewPluginInstanceError::PluginFailedToInit(
+                            *factory.rdn.clone(),
+                            e,
+                        ));
+                    } else {
+                        main_thread = Some(plugin_main_thread);
+                        id.format = factory.format.into();
+                        status = Ok(());
+                    }
+                }
+                Err(e) => {
+                    check_for_invalid_host_callbacks(&host_request, &factory.rdn);
+
+                    status = Err(NewPluginInstanceError::FactoryFailedToCreateNewInstance(
+                        *factory.rdn.clone(),
+                        e,
+                    ));
+                }
+            };
+        } else {
+            id.name = Some(Shared::new(&self.coll_handle, save_state.key.rdn.clone()));
+
+            if status.is_ok() {
+                status = Err(NewPluginInstanceError::NotFound(save_state.key.rdn.clone()));
+            }
+        }
+
+        CreatePluginResult {
+            plugin_host: PluginInstanceHost::new(id, main_thread, host_request, &self.coll_handle),
+            status,
+            save_state,
+        }
     }
 
     #[cfg(feature = "clap-host")]
@@ -456,6 +432,12 @@ impl PluginScanner {
     }
 }
 
+pub(crate) struct CreatePluginResult {
+    pub plugin_host: PluginInstanceHost,
+    pub status: Result<(), NewPluginInstanceError>,
+    pub save_state: PluginSaveState,
+}
+
 #[derive(Debug)]
 pub struct RescanPluginDirectoriesRes {
     pub scanned_plugins: Vec<ScannedPlugin>,
@@ -464,7 +446,8 @@ pub struct RescanPluginDirectoriesRes {
 
 #[derive(Debug)]
 pub enum NewPluginInstanceError {
-    InstantiationError(String, Box<dyn Error>),
+    FactoryFailedToCreateNewInstance(String, Box<dyn Error>),
+    PluginFailedToInit(String, Box<dyn Error>),
     NotFound(String),
     FormatNotFound(String, PluginFormat),
 }
@@ -474,8 +457,11 @@ impl Error for NewPluginInstanceError {}
 impl std::fmt::Display for NewPluginInstanceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            NewPluginInstanceError::InstantiationError(n, e) => {
-                write!(f, "Failed to create instance of plugin {}: {}", n, e)
+            NewPluginInstanceError::FactoryFailedToCreateNewInstance(n, e) => {
+                write!(f, "Failed to create instance of plugin {}: plugin factory failed to create new instance: {}", n, e)
+            }
+            NewPluginInstanceError::PluginFailedToInit(n, e) => {
+                write!(f, "Failed to create instance of plugin {}: plugin instance failed to initialize: {}", n, e)
             }
             NewPluginInstanceError::NotFound(n) => {
                 write!(

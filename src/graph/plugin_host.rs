@@ -9,9 +9,14 @@ use std::sync::{
 use rusty_daw_core::SampleRate;
 
 use crate::plugin::{PluginAudioThread, PluginMainThread};
-use crate::{ProcInfo, ProcessStatus};
+use crate::plugin_scanner::NewPluginInstanceError;
+use crate::{HostInfo, HostRequest, ProcInfo, ProcessStatus};
+
+use super::shared_pool::PluginInstanceID;
 
 pub(crate) struct PluginInstanceHost {
+    pub id: PluginInstanceID,
+
     main_thread: Option<Box<dyn PluginMainThread>>,
 
     audio_thread: Option<PluginInstanceHostAudioThread>,
@@ -25,6 +30,36 @@ pub(crate) struct PluginInstanceHost {
 }
 
 impl PluginInstanceHost {
+    pub fn new(
+        id: PluginInstanceID,
+        mut main_thread: Option<Box<dyn PluginMainThread>>,
+        host_request: HostRequest,
+        coll_handle: &basedrop::Handle,
+    ) -> Self {
+        let state = Arc::new(SharedPluginState::new());
+
+        let restart_requested = Arc::clone(&host_request.restart_requested);
+        let process_requested = Arc::clone(&host_request.process_requested);
+        let callback_requested = Arc::clone(&host_request.callback_requested);
+
+        let deactivate_requested = Arc::new(AtomicBool::new(false));
+
+        if main_thread.is_none() {
+            state.set(PluginState::InactiveWithError);
+        }
+
+        Self {
+            id,
+            main_thread,
+            audio_thread: None,
+            state: Arc::new(SharedPluginState::new()),
+            restart_requested,
+            process_requested,
+            callback_requested,
+            deactivate_requested,
+        }
+    }
+
     pub fn can_activate(&self) -> Result<(), ActivatePluginError> {
         if self.main_thread.is_none() {
             return Err(ActivatePluginError::NotLoaded);
@@ -52,8 +87,11 @@ impl PluginInstanceHost {
         match plugin_main_thread.activate(sample_rate, min_frames, max_frames, coll_handle) {
             Ok(plugin_audio_thread) => {
                 self.audio_thread = Some(PluginInstanceHostAudioThread {
+                    id: self.id.clone(),
                     plugin: Shared::new(coll_handle, UnsafeCell::new(plugin_audio_thread)),
                     state: Arc::clone(&self.state),
+                    process_requested: Arc::clone(&self.process_requested),
+                    deactivate_requested: Arc::clone(&self.deactivate_requested),
                 });
 
                 self.process_requested.store(true, Ordering::Relaxed);
@@ -71,37 +109,98 @@ impl PluginInstanceHost {
     }
 
     pub fn deactivate(&mut self) {
-        let state = self.state.get();
-
-        if !state.is_active() {
+        if !self.state.get().is_active() {
             return;
         }
 
-        if !(state.is_processing() || state.is_sleeping()) {
-            // Safe to deactive right now.
+        // Wait for the audio thread part to go to sleep before
+        // deactivating.
+        self.deactivate_requested.store(true, Ordering::Relaxed);
+    }
 
-            // This is always `Some` when `state.is_active() == true`.
-            let plugin_main_thread = self.main_thread.as_mut().unwrap();
+    pub fn on_idle(
+        &mut self,
+        sample_rate: SampleRate,
+        min_frames: u32,
+        max_frames: u32,
+        coll_handle: &basedrop::Handle,
+    ) -> OnIdleResult {
+        let res = OnIdleResult::Ok;
 
-            plugin_main_thread.deactivate();
-
-            self.state.set(PluginState::Inactive);
+        if self.main_thread.is_none() {
+            return res;
         }
-        {
-            // Else wait for the audio thread part to go to sleep before
-            // deactivating.
-            self.deactivate_requested.store(true, Ordering::Relaxed);
+
+        let plugin_main_thread = self.main_thread.as_mut().unwrap();
+
+        if self.callback_requested.load(Ordering::Relaxed) {
+            self.callback_requested.store(false, Ordering::Relaxed);
+
+            plugin_main_thread.on_main_thread();
         }
+
+        if self.restart_requested.load(Ordering::Relaxed) {
+            self.deactivate();
+        }
+
+        if self.deactivate_requested.load(Ordering::Relaxed) {
+            if self.state.get() == PluginState::ActiveAndReadyToDeactivate {
+                // Safe to deactive now.
+
+                plugin_main_thread.deactivate();
+
+                res = OnIdleResult::PluginDeactivated;
+
+                self.state.set(PluginState::Inactive);
+                self.deactivate_requested.store(false, Ordering::Relaxed);
+
+                if self.restart_requested.load(Ordering::Relaxed) {
+                    self.restart_requested.store(false, Ordering::Relaxed);
+
+                    match self.activate(sample_rate, min_frames, max_frames, coll_handle) {
+                        Ok(_) => res = OnIdleResult::PluginRestarted,
+                        Err(e) => res = OnIdleResult::PluginFailedToRestart(e),
+                    }
+                }
+            }
+        }
+
+        res
+    }
+
+    pub fn audio_thread(&self) -> Option<PluginInstanceHostAudioThread> {
+        self.audio_thread.as_ref().map(|a| a.clone())
     }
 }
 
+pub enum OnIdleResult {
+    Ok,
+    PluginDeactivated,
+    PluginRestarted,
+    PluginFailedToRestart(ActivatePluginError),
+}
+
 pub(crate) struct PluginInstanceHostAudioThread {
+    id: PluginInstanceID,
+
     plugin: Shared<UnsafeCell<Box<dyn PluginAudioThread>>>,
 
     state: Arc<SharedPluginState>,
 
     process_requested: Arc<AtomicBool>,
     deactivate_requested: Arc<AtomicBool>,
+}
+
+impl Clone for PluginInstanceHostAudioThread {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id.clone(),
+            plugin: Shared::clone(&self.plugin),
+            state: Arc::clone(&self.state),
+            process_requested: Arc::clone(&self.process_requested),
+            deactivate_requested: Arc::clone(&self.deactivate_requested),
+        }
+    }
 }
 
 impl PluginInstanceHostAudioThread {
@@ -114,6 +213,9 @@ impl PluginInstanceHostAudioThread {
             return;
         }
 
+        // This is safe because this method in the audio thread is the only place this
+        // is ever borrowed. Also the schedule verifier ensured that this plugin instance
+        // does not appear twice in the same schedule so there is no risk of data races.
         let plugin = unsafe { &mut *self.plugin.get() };
 
         // Do we want to deactivate the plugin?
@@ -146,7 +248,7 @@ impl PluginInstanceHostAudioThread {
         // TODO: Handle input events
 
         if state.is_sleeping() {
-            let has_in_events = true; // TODO
+            let has_in_events = true; // TODO: Check if there are any input events.
 
             if !self.process_requested.load(Ordering::Relaxed) && !has_in_events {
                 // The plugin is sleeping, there is no request to wake it up, and there
@@ -209,7 +311,12 @@ impl PluginInstanceHostAudioThread {
             if proc_info.audio_outputs_silent() {
                 plugin.stop_processing();
 
-                self.state.set(PluginState::ActiveAndSleeping);
+                // Do we want to deactivate the plugin?
+                if self.deactivate_requested.load(Ordering::Relaxed) {
+                    self.state.set(PluginState::ActiveAndReadyToDeactivate);
+                } else {
+                    self.state.set(PluginState::ActiveAndSleeping);
+                }
             }
         }
     }
