@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::ffi::{CStr, FromBytesWithNulError};
+use std::ffi::CStr;
 use std::mem::MaybeUninit;
 use std::os::raw::c_char;
 

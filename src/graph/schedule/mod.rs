@@ -6,9 +6,10 @@ use smallvec::SmallVec;
 use crate::host_request::HostInfo;
 use crate::ProcInfo;
 
-use super::audio_buffer_pool::SharedAudioBuffer;
+use super::shared_pool::SharedBuffer;
 
 pub(crate) mod delay_comp_node;
+pub(crate) mod sum;
 pub(crate) mod task;
 
 use task::Task;
@@ -16,8 +17,8 @@ use task::Task;
 pub struct Schedule {
     pub(crate) tasks: Vec<Task>,
 
-    pub(crate) graph_audio_in: SmallVec<[SharedAudioBuffer<f32>; 4]>,
-    pub(crate) graph_audio_out: SmallVec<[SharedAudioBuffer<f32>; 4]>,
+    pub(crate) graph_audio_in: SmallVec<[SharedBuffer<f32>; 4]>,
+    pub(crate) graph_audio_out: SmallVec<[SharedBuffer<f32>; 4]>,
 
     pub(crate) max_block_size: usize,
 
@@ -49,13 +50,13 @@ impl std::fmt::Debug for Schedule {
 
         let mut g_s = String::new();
         for b in self.graph_audio_in.iter() {
-            g_s.push_str(&format!("{:?}, ", b.unique_id()))
+            g_s.push_str(&format!("{:?}, ", b.id()))
         }
         s.push_str(format!("\n    graph_audio_in: {:?},\n", &g_s).as_str());
 
         let mut g_s = String::new();
         for b in self.graph_audio_out.iter() {
-            g_s.push_str(&format!("{:?}, ", b.unique_id()))
+            g_s.push_str(&format!("{:?}, ", b.id()))
         }
         s.push_str(format!("    graph_audio_out: {:?},\n", &g_s).as_str());
 
@@ -96,20 +97,20 @@ impl Schedule {
             let frames = (total_frames - processed_frames).min(self.max_block_size);
 
             let proc_info = ProcInfo {
-                steady_time: None, // TODO
+                steady_time: -1, // TODO
                 frames,
             };
 
             // We are ignoring sytem inputs with the CPAL backend for now.
             for buffer in self.graph_audio_in.iter() {
-                // Please refer to the "SAFETY NOTE" at the top of the file
-                // `src/graph/audio_buffer_pool.rs` on why it is considered safe to
-                // borrow these buffers.
-                //
-                // In addition the host will never set `proc_info.frames` to something
-                // higher than the maximum frame size (which is what the Vec's initial
-                // capacity is set to).
-                let buffer = unsafe { buffer.borrow_mut(&proc_info) };
+                // SAFETY
+                // - These buffers are only ever borrowed in the audio thread.
+                // - The schedule verifier has ensured that no data races can occur between parallel
+                // audio threads due to aliasing buffer pointers.
+                // - `proc_info.frames` will always be less than or equal to the allocated size of
+                // all process audio buffers.
+                let buffer = unsafe { buffer.slice_from_frames_unchecked_mut(proc_info.frames) };
+
                 buffer.fill(0.0);
             }
 
@@ -121,14 +122,14 @@ impl Schedule {
                 ..((processed_frames + frames) * num_out_channels)];
             for ch_i in 0..num_out_channels {
                 if let Some(buffer) = self.graph_audio_out.get(ch_i) {
-                    // Please refer to the "SAFETY NOTE" at the top of the file
-                    // `src/graph/audio_buffer_pool.rs` on why it is considered safe to
-                    // borrow these buffers.
-                    //
-                    // In addition the host will never set `proc_info.frames` to something
-                    // higher than the maximum frame size (which is what the Vec's initial
-                    // capacity is set to).
-                    let buffer = unsafe { buffer.borrow(&proc_info) };
+                    // SAFETY
+                    // - These buffers are only ever borrowed in the audio thread.
+                    // - The schedule verifier has ensured that no data races can occur between parallel
+                    // audio threads due to aliasing buffer pointers.
+                    // - `proc_info.frames` will always be less than or equal to the allocated size of
+                    // all process audio buffers.
+                    let buffer =
+                        unsafe { buffer.slice_from_frames_unchecked_mut(proc_info.frames) };
 
                     for i in 0..frames {
                         // TODO: Optimize with unsafe bounds checking?

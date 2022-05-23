@@ -5,7 +5,8 @@ use std::hash::Hash;
 
 use crate::plugin_scanner::PluginFormat;
 
-use super::plugin_host::PluginInstanceHost;
+use super::plugin_host::{PluginInstanceHost, PluginInstanceHostAudioThread};
+use super::schedule::delay_comp_node::DelayCompNode;
 
 /// Used for debugging and verifying purposes.
 #[repr(u8)]
@@ -25,7 +26,7 @@ impl std::fmt::Debug for DebugBufferType {
 
 /// Used for debugging and verifying purposes.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct DebugBufferID {
+pub(crate) struct DebugBufferID {
     buffer_type: DebugBufferType,
     index: u32,
 }
@@ -38,6 +39,30 @@ impl std::fmt::Debug for DebugBufferID {
 
 pub(crate) struct SharedBuffer<T: Clone + Copy + Send + Default + 'static> {
     pub buffer: Shared<(UnsafeCell<Vec<T>>, DebugBufferID)>,
+}
+
+impl<T: Clone + Copy + Send + Default + 'static> SharedBuffer<T> {
+    #[inline]
+    pub unsafe fn slice_from_frames_unchecked(&self, frames: usize) -> &[T] {
+        #[cfg(debug_assertions)]
+        return &(&*self.buffer.0.get())[0..frames];
+
+        #[cfg(not(debug_assertions))]
+        return std::slice::from_raw_parts((*self.buffer.0.get()).as_ptr(), frames);
+    }
+
+    #[inline]
+    pub unsafe fn slice_from_frames_unchecked_mut(&self, frames: usize) -> &mut [T] {
+        #[cfg(debug_assertions)]
+        return &mut (&mut *self.buffer.0.get())[0..frames];
+
+        #[cfg(not(debug_assertions))]
+        return std::slice::from_raw_parts_mut((*self.buffer.0.get()).as_mut_ptr(), frames);
+    }
+
+    pub fn id(&self) -> &DebugBufferID {
+        &self.buffer.1
+    }
 }
 
 impl<T: Clone + Copy + Send + Default + 'static> Clone for SharedBuffer<T> {
@@ -88,7 +113,7 @@ impl From<PluginFormat> for PluginInstanceType {
 
 /// Used to uniquely identify a plugin instance and for debugging purposes.
 pub struct PluginInstanceID {
-    pub(crate) node_index: usize,
+    pub(crate) node_ref: audio_graph::NodeRef,
     pub(crate) format: PluginInstanceType,
     pub(crate) name: Option<Shared<String>>,
 }
@@ -97,10 +122,10 @@ impl std::fmt::Debug for PluginInstanceID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.format {
             PluginInstanceType::Internal => {
-                write!(f, "Int({})_{}", &**self.name.as_ref().unwrap(), self.node_index)
+                write!(f, "Int({})_{}", &**self.name.as_ref().unwrap(), self.node_ref.as_usize())
             }
             _ => {
-                write!(f, "{:?}_{}", self.format, self.node_index)
+                write!(f, "{:?}_{}", self.format, self.node_ref.as_usize())
             }
         }
     }
@@ -109,7 +134,7 @@ impl std::fmt::Debug for PluginInstanceID {
 impl Clone for PluginInstanceID {
     fn clone(&self) -> Self {
         Self {
-            node_index: self.node_index,
+            node_ref: self.node_ref,
             format: self.format,
             name: self.name.as_ref().map(|n| Shared::clone(n)),
         }
@@ -118,7 +143,7 @@ impl Clone for PluginInstanceID {
 
 impl PartialEq for PluginInstanceID {
     fn eq(&self, other: &Self) -> bool {
-        self.node_index.eq(&other.node_index)
+        self.node_ref.eq(&other.node_ref)
     }
 }
 
@@ -126,12 +151,61 @@ impl Eq for PluginInstanceID {}
 
 impl Hash for PluginInstanceID {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.node_index.hash(state)
+        self.node_ref.hash(state)
+    }
+}
+
+pub(crate) struct SharedPluginHostAudioThread {
+    pub plugin: Shared<UnsafeCell<PluginInstanceHostAudioThread>>,
+}
+
+impl SharedPluginHostAudioThread {
+    pub fn new(plugin: PluginInstanceHostAudioThread, coll_handle: &basedrop::Handle) -> Self {
+        Self { plugin: Shared::new(coll_handle, UnsafeCell::new(plugin)) }
+    }
+}
+
+impl SharedPluginHostAudioThread {
+    pub fn id(&self) -> &PluginInstanceID {
+        // Safe because we are just borrowing this immutably.
+        unsafe { &(*self.plugin.get()).id }
+    }
+}
+
+impl Clone for SharedPluginHostAudioThread {
+    fn clone(&self) -> Self {
+        Self { plugin: Shared::clone(&self.plugin) }
+    }
+}
+
+pub(crate) struct PluginInstanceHostEntry {
+    pub plugin_host: PluginInstanceHost,
+    pub audio_thread: Option<SharedPluginHostAudioThread>,
+
+    pub audio_in_channel_refs: Vec<audio_graph::PortRef>,
+    pub audio_out_channel_refs: Vec<audio_graph::PortRef>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct DelayCompKey {
+    pub src_port_id: audio_graph::PortRef,
+    pub delay: u32,
+}
+
+pub(crate) struct SharedDelayCompNode {
+    pub node: Shared<UnsafeCell<DelayCompNode>>,
+}
+
+impl SharedDelayCompNode {
+    pub fn delay(&self) -> u32 {
+        // Safe because we are just borrowing this immutably.
+        unsafe { (*self.node.get()).delay() }
     }
 }
 
 pub(crate) struct SharedPool {
-    pub plugins: FnvHashMap<PluginInstanceID, PluginInstanceHost>,
+    pub plugins: FnvHashMap<PluginInstanceID, PluginInstanceHostEntry>,
+    pub delay_comp_nodes: FnvHashMap<DelayCompKey, SharedDelayCompNode>,
 
     audio_buffers_f32: Vec<Option<SharedBuffer<f32>>>,
     audio_buffers_f64: Vec<Option<SharedBuffer<f64>>>,
@@ -147,6 +221,7 @@ impl SharedPool {
 
         Self {
             plugins: FnvHashMap::default(),
+            delay_comp_nodes: FnvHashMap::default(),
             audio_buffers_f32: Vec::new(),
             audio_buffers_f64: Vec::new(),
             buffer_size,

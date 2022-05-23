@@ -14,16 +14,16 @@ use clap_sys::plugin::clap_plugin as RawClapPlugin;
 use clap_sys::plugin::clap_plugin_descriptor as RawClapPluginDescriptor;
 use clap_sys::plugin_factory::clap_plugin_factory as RawClapPluginFactory;
 use clap_sys::plugin_factory::CLAP_PLUGIN_FACTORY_ID;
-use clap_sys::process::clap_process as RawClapProcess;
 use clap_sys::string_sizes::CLAP_PATH_SIZE;
 use clap_sys::version::clap_version as ClapVersion;
 
 use super::c_char_helpers::c_char_ptr_to_maybe_str;
 use super::host_request::ClapHostRequest;
+use super::process::ClapProcess;
 use crate::clap::c_char_helpers::c_char_buf_to_str;
-use crate::graph::plugin_pool::ProcessingState;
 use crate::host_request::HostRequest;
-use crate::plugin::{ext, PluginDescriptor};
+use crate::plugin::process_info::{ProcBuffers, ProcInfo, ProcessStatus};
+use crate::plugin::{ext, PluginAudioThread, PluginDescriptor, PluginFactory, PluginMainThread};
 use crate::AudioPortInfo;
 use crate::AudioPortsExtension;
 use crate::MainPortsLayout;
@@ -55,124 +55,116 @@ impl Drop for SharedClapLib {
     }
 }
 
+pub fn entry_init(
+    plugin_path: &PathBuf,
+    coll_handle: &basedrop::Handle,
+) -> Result<Vec<ClapPluginFactory>, Box<dyn Error>> {
+    // "Safe" because we acknowledge the risk of running foreign code in external
+    // plugin libraries.
+    //
+    // TODO: We should use sandboxing to make this even more safe and to
+    // gaurd against plugin crashes from bringing down the whole application.
+    let lib = unsafe { libloading::Library::new(plugin_path)? };
+
+    // Safe because this is the correct type for this symbol.
+    let entry: libloading::Symbol<*const RawClapEntry> = unsafe { lib.get(b"clap_entry\0")? };
+
+    // Safe because we are storing the library in this struct itself, ensuring
+    // that the lifetime of this doesn't outlive the lifetime of the library.
+    let raw_entry = unsafe { *entry.into_raw() };
+
+    if raw_entry.is_null() {
+        return Err(
+            format!("Plugin from path {:?} has a null pointer for raw_entry", plugin_path).into()
+        );
+    }
+
+    // Safe because we checked that this was not null.
+    let clap_version = unsafe { (*raw_entry).clap_version };
+
+    let plugin_path_parent_folder = plugin_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .ok_or(format!("Plugin path {:?} cannot be in the root path", plugin_path))?;
+
+    let c_path = CString::new(plugin_path_parent_folder.to_string_lossy().to_string())?;
+
+    // Safe because this is the correct format of this function as described in the
+    // CLAP spec.
+    let init_res = unsafe { ((&*raw_entry).init)(c_path.as_ptr()) };
+
+    if !init_res {
+        return Err(format!(
+            "Plugin from path {:?} returned false while calling clap_plugin_entry.init()",
+            plugin_path
+        )
+        .into());
+    }
+
+    // Safe because this is the correct format of this function as described in the
+    // CLAP spec.
+    let raw_factory = unsafe { ((&*raw_entry).get_factory)(CLAP_PLUGIN_FACTORY_ID) }
+        as *const RawClapPluginFactory;
+
+    if raw_factory.is_null() {
+        return Err(format!(
+            "Plugin from path {:?} returned null while calling clap_plugin_entry.get_factory()",
+            plugin_path
+        )
+        .into());
+    }
+
+    let shared_lib = Shared::new(coll_handle, SharedClapLib { _lib: lib, raw_entry, raw_factory });
+
+    // Safe because this is the correct format of this function as described in the
+    // CLAP spec.
+    let num_plugins = unsafe { ((&*raw_factory).get_plugin_count)(raw_factory) };
+
+    if num_plugins == 0 {
+        return Err(format!(
+            "Plugin from path {:?} returned 0 while calling clap_plugin_factory.get_plugin_count()",
+            plugin_path
+        )
+        .into());
+    }
+
+    let mut factories: Vec<ClapPluginFactory> = Vec::with_capacity(num_plugins as usize);
+
+    for i in 0..num_plugins {
+        // Safe because this is the correct format of this function as described in the
+        // CLAP spec.
+        let raw_descriptor = unsafe { ((&*raw_factory).get_plugin_descriptor)(raw_factory, i) };
+
+        let descriptor = parse_clap_plugin_descriptor(raw_descriptor, plugin_path, i)?;
+
+        let id = Shared::new(coll_handle, descriptor.id.clone());
+
+        let c_id = CString::new(descriptor.id.clone()).unwrap();
+
+        factories.push(ClapPluginFactory {
+            shared_lib: Shared::clone(&shared_lib),
+            descriptor,
+            id,
+            c_id,
+            clap_version,
+        });
+    }
+
+    Ok(factories)
+}
+
 pub(crate) struct ClapPluginFactory {
+    pub clap_version: ClapVersion,
+
     shared_lib: Shared<SharedClapLib>,
     descriptor: PluginDescriptor,
     id: Shared<String>,
     c_id: CString,
-    clap_version: ClapVersion,
 }
 
-impl ClapPluginFactory {
-    pub fn entry_init(
-        plugin_path: &PathBuf,
-        coll_handle: &basedrop::Handle,
-    ) -> Result<Vec<Self>, Box<dyn Error>> {
-        // "Safe" because we acknowledge the risk of running foreign code in external
-        // plugin libraries.
-        //
-        // TODO: We should use sandboxing to make this even more safe and to
-        // gaurd against plugin crashes from bringing down the whole application.
-        let lib = unsafe { libloading::Library::new(plugin_path)? };
-
-        // Safe because this is the correct type for this symbol.
-        let entry: libloading::Symbol<*const RawClapEntry> = unsafe { lib.get(b"clap_entry\0")? };
-
-        // Safe because we are storing the library in this struct itself, ensuring
-        // that the lifetime of this doesn't outlive the lifetime of the library.
-        let raw_entry = unsafe { *entry.into_raw() };
-
-        if raw_entry.is_null() {
-            return Err(format!(
-                "Plugin from path {:?} has a null pointer for raw_entry",
-                plugin_path
-            )
-            .into());
-        }
-
-        // Safe because we checked that this was not null.
-        let clap_version = unsafe { (*raw_entry).clap_version };
-
-        let plugin_path_parent_folder = plugin_path
-            .parent()
-            .map(|p| p.to_path_buf())
-            .ok_or(format!("Plugin path {:?} cannot be in the root path", plugin_path))?;
-
-        let c_path = CString::new(plugin_path_parent_folder.to_string_lossy().to_string())?;
-
-        // Safe because this is the correct format of this function as described in the
-        // CLAP spec.
-        let init_res = unsafe { ((&*raw_entry).init)(c_path.as_ptr()) };
-
-        if !init_res {
-            return Err(format!(
-                "Plugin from path {:?} returned false while calling clap_plugin_entry.init()",
-                plugin_path
-            )
-            .into());
-        }
-
-        // Safe because this is the correct format of this function as described in the
-        // CLAP spec.
-        let raw_factory = unsafe { ((&*raw_entry).get_factory)(CLAP_PLUGIN_FACTORY_ID) }
-            as *const RawClapPluginFactory;
-
-        if raw_factory.is_null() {
-            return Err(format!(
-                "Plugin from path {:?} returned null while calling clap_plugin_entry.get_factory()",
-                plugin_path
-            )
-            .into());
-        }
-
-        let shared_lib =
-            Shared::new(coll_handle, SharedClapLib { _lib: lib, raw_entry, raw_factory });
-
-        // Safe because this is the correct format of this function as described in the
-        // CLAP spec.
-        let num_plugins = unsafe { ((&*raw_factory).get_plugin_count)(raw_factory) };
-
-        if num_plugins == 0 {
-            return Err(format!(
-                "Plugin from path {:?} returned 0 while calling clap_plugin_factory.get_plugin_count()",
-                plugin_path
-            )
-            .into());
-        }
-
-        let mut factories: Vec<Self> = Vec::with_capacity(num_plugins as usize);
-
-        for i in 0..num_plugins {
-            // Safe because this is the correct format of this function as described in the
-            // CLAP spec.
-            let raw_descriptor = unsafe { ((&*raw_factory).get_plugin_descriptor)(raw_factory, i) };
-
-            let descriptor = parse_clap_plugin_descriptor(raw_descriptor, plugin_path, i)?;
-
-            dbg!(&descriptor);
-
-            let id = Shared::new(coll_handle, descriptor.id.clone());
-
-            let c_id = CString::new(descriptor.id.clone()).unwrap();
-
-            factories.push(Self {
-                shared_lib: Shared::clone(&shared_lib),
-                descriptor,
-                id,
-                c_id,
-                clap_version,
-            });
-        }
-
-        Ok(factories)
-    }
-
-    pub fn clap_version(&self) -> &ClapVersion {
-        &self.clap_version
-    }
-
-    pub fn description(&self) -> &PluginDescriptor {
-        &self.descriptor
+impl PluginFactory for ClapPluginFactory {
+    fn description(&self) -> PluginDescriptor {
+        self.descriptor.clone()
     }
 
     /// Create a new instance of this plugin.
@@ -182,11 +174,11 @@ impl ClapPluginFactory {
     /// A `basedrop` collector handle is provided for realtime-safe garbage collection.
     ///
     /// `[main-thread]`
-    pub fn new(
+    fn new(
         &mut self,
-        host_request: &HostRequest,
+        host_request: HostRequest,
         main_thread_coll_handle: &basedrop::Handle,
-    ) -> Result<ClapPluginMainThread, Box<dyn Error>> {
+    ) -> Result<Box<dyn PluginMainThread>, Box<dyn Error>> {
         let mut clap_host_request =
             ClapHostRequest::new(host_request.clone(), main_thread_coll_handle);
 
@@ -232,7 +224,7 @@ impl ClapPluginFactory {
             },
         );
 
-        Ok(ClapPluginMainThread { shared_plugin })
+        Ok(Box::new(ClapPluginMainThread { shared_plugin, audio_ports_ext: None }))
     }
 }
 
@@ -274,103 +266,11 @@ unsafe impl Sync for SharedClapPluginInstance {}
 
 pub(crate) struct ClapPluginMainThread {
     shared_plugin: Shared<SharedClapPluginInstance>,
+    audio_ports_ext: Option<AudioPortsExtension>,
 }
 
 impl ClapPluginMainThread {
-    /// This is called after creating a plugin instance and once it's safe for the plugin to
-    /// use the host callback methods.
-    ///
-    /// `[main-thread & !active_state]`
-    #[allow(unused)]
-    pub fn init(&mut self) -> Result<(), Box<dyn Error>> {
-        let res =
-            unsafe { ((&*self.shared_plugin.raw_plugin).init)(self.shared_plugin.raw_plugin) };
-
-        if res {
-            Ok(())
-        } else {
-            Err(format!(
-                "Plugin with ID {} returned false on call to clap_plugin.init()",
-                &*self.shared_plugin.id
-            )
-            .into())
-        }
-    }
-
-    /// Activate the plugin, and return the `PluginAudioThread` counterpart.
-    ///
-    /// In this call the plugin may allocate memory and prepare everything needed for the process
-    /// call. The process's sample rate will be constant and process's frame count will included in
-    /// the `[min, max]` range, which is bounded by `[1, INT32_MAX]`.
-    ///
-    /// Once activated the latency and port configuration must remain constant, until deactivation.
-    ///
-    /// `[main-thread & !active_state]`
-    pub fn activate(
-        &mut self,
-        sample_rate: SampleRate,
-        min_frames: usize,
-        max_frames: usize,
-    ) -> Result<ClapPluginAudioThread, Box<dyn Error>> {
-        if self.shared_plugin.activated.load(Ordering::Relaxed) {
-            return Err("Plugin already activated".into());
-        }
-
-        let res = unsafe {
-            ((&*self.shared_plugin.raw_plugin).activate)(
-                self.shared_plugin.raw_plugin,
-                sample_rate.0,
-                min_frames as u32,
-                max_frames as u32,
-            )
-        };
-
-        if res {
-            self.shared_plugin.activated.store(true, Ordering::Relaxed);
-            Ok(ClapPluginAudioThread { shared_plugin: Shared::clone(&self.shared_plugin) })
-        } else {
-            return Err(format!(
-                "Plugin with ID {} returned false on call to clap_plugin.activate()",
-                &*self.shared_plugin.id
-            )
-            .into());
-        }
-    }
-
-    /// Deactivate the plugin. When this is called it also means that the `PluginAudioThread`
-    /// counterpart has/will be dropped.
-    ///
-    /// `[main-thread & active_state]`
-    pub fn deactivate(&mut self) {
-        if self.shared_plugin.activated.load(Ordering::Relaxed) {
-            self.shared_plugin.activated.store(false, Ordering::Relaxed);
-            unsafe {
-                ((&*self.shared_plugin.raw_plugin).deactivate)(self.shared_plugin.raw_plugin)
-            };
-        }
-    }
-
-    /// Called by the host on the main thread in response to a previous call to `host.request_callback()`.
-    ///
-    /// By default this does nothing.
-    ///
-    /// [main-thread]
-    #[allow(unused)]
-    pub fn on_main_thread(&mut self) {
-        unsafe {
-            ((&*self.shared_plugin.raw_plugin).on_main_thread)(self.shared_plugin.raw_plugin)
-        };
-    }
-
-    /// An optional extension that describes the configuration of audio ports on this plugin instance.
-    ///
-    /// This will only be called while the plugin is inactive.
-    ///
-    /// The default configuration is a main stereo input port and a main stereo output port.
-    ///
-    /// [main-thread & !active_state]
-    #[allow(unused)]
-    pub fn audio_ports_extension(
+    fn parse_audio_ports_extension(
         &self,
     ) -> Result<ext::audio_ports::AudioPortsExtension, Box<dyn Error>> {
         if self.shared_plugin.activated.load(Ordering::Relaxed) {
@@ -379,9 +279,7 @@ impl ClapPluginMainThread {
 
         use clap_sys::ext::audio_ports::clap_audio_port_info as RawAudioPortInfo;
         use clap_sys::ext::audio_ports::clap_plugin_audio_ports as RawAudioPorts;
-        use clap_sys::ext::audio_ports::{
-            CLAP_AUDIO_PORT_IS_MAIN, CLAP_EXT_AUDIO_PORTS, CLAP_PORT_MONO, CLAP_PORT_STEREO,
-        };
+        use clap_sys::ext::audio_ports::{CLAP_AUDIO_PORT_IS_MAIN, CLAP_EXT_AUDIO_PORTS};
 
         let raw_ext = unsafe {
             ((&*self.shared_plugin.raw_plugin).get_extension)(
@@ -565,82 +463,198 @@ impl ClapPluginMainThread {
     }
 }
 
-pub(crate) struct ClapPluginAudioThread {
-    shared_plugin: Shared<SharedClapPluginInstance>,
-}
+impl PluginMainThread for ClapPluginMainThread {
+    /// This is called after creating a plugin instance and once it's safe for the plugin to
+    /// use the host callback methods.
+    ///
+    /// `[main-thread & !active_state]`
+    #[allow(unused)]
+    fn init(&mut self, _preset: (), coll_handle: &basedrop::Handle) -> Result<(), Box<dyn Error>> {
+        let res =
+            unsafe { ((&*self.shared_plugin.raw_plugin).init)(self.shared_plugin.raw_plugin) };
 
-impl ClapPluginAudioThread {
-    pub fn processing_state(&self) -> ProcessingState {
-        self.shared_plugin.host_request.host_request.plugin_channel.processing_state.get()
-    }
-
-    pub fn set_processing_state(&mut self, state: ProcessingState) {
-        self.shared_plugin.host_request.host_request.plugin_channel.processing_state.set(state)
-    }
-
-    pub fn processing_requested(&mut self) -> bool {
-        let res = self
-            .shared_plugin
-            .host_request
-            .host_request
-            .plugin_channel
-            .process_requested
-            .load(Ordering::Relaxed);
         if res {
-            self.shared_plugin
-                .host_request
-                .host_request
-                .plugin_channel
-                .process_requested
-                .store(false, Ordering::Relaxed);
+            Ok(())
+        } else {
+            Err(format!(
+                "Plugin with ID {} returned false on call to clap_plugin.init()",
+                &*self.shared_plugin.id
+            )
+            .into())
         }
+    }
+
+    /// Activate the plugin, and return the `PluginAudioThread` counterpart.
+    ///
+    /// In this call the plugin may allocate memory and prepare everything needed for the process
+    /// call. The process's sample rate will be constant and process's frame count will included in
+    /// the `[min, max]` range, which is bounded by `[1, INT32_MAX]`.
+    ///
+    /// Once activated the latency and port configuration must remain constant, until deactivation.
+    ///
+    /// `[main-thread & !active_state]`
+    fn activate(
+        &mut self,
+        sample_rate: SampleRate,
+        min_frames: u32,
+        max_frames: u32,
+        coll_handle: &basedrop::Handle,
+    ) -> Result<Box<dyn PluginAudioThread>, Box<dyn Error>> {
+        if self.shared_plugin.activated.load(Ordering::Relaxed) {
+            return Err("Plugin already activated".into());
+        }
+
+        let res = unsafe {
+            ((&*self.shared_plugin.raw_plugin).activate)(
+                self.shared_plugin.raw_plugin,
+                sample_rate.0,
+                min_frames as u32,
+                max_frames as u32,
+            )
+        };
+
+        if res {
+            self.shared_plugin.activated.store(true, Ordering::Relaxed);
+            Ok(Box::new(ClapPluginAudioThread {
+                shared_plugin: Shared::clone(&self.shared_plugin),
+                // The will always call `audio_ports_extension()` at-least once before
+                // activating a plugin.
+                process: ClapProcess::new(self.audio_ports_ext.as_ref().unwrap()),
+                // Make sure that the plugin will always initialize its list of buffers
+                // before the first call to `process()`.
+                task_version: std::u64::MAX,
+            }))
+        } else {
+            return Err(format!(
+                "Plugin with ID {} returned false on call to clap_plugin.activate()",
+                &*self.shared_plugin.id
+            )
+            .into());
+        }
+    }
+
+    /// Deactivate the plugin. When this is called it also means that the `PluginAudioThread`
+    /// counterpart has/will be dropped.
+    ///
+    /// `[main-thread & active_state]`
+    fn deactivate(&mut self) {
+        if self.shared_plugin.activated.load(Ordering::Relaxed) {
+            self.shared_plugin.activated.store(false, Ordering::Relaxed);
+            unsafe {
+                ((&*self.shared_plugin.raw_plugin).deactivate)(self.shared_plugin.raw_plugin)
+            };
+        } else {
+            log::error!("Got request to deactivate CLAP plugin that is already inactive");
+        }
+    }
+
+    /// Called by the host on the main thread in response to a previous call to `host.request_callback()`.
+    ///
+    /// By default this does nothing.
+    ///
+    /// [main-thread]
+    #[allow(unused)]
+    fn on_main_thread(&mut self) {
+        unsafe {
+            ((&*self.shared_plugin.raw_plugin).on_main_thread)(self.shared_plugin.raw_plugin)
+        };
+    }
+
+    /// An optional extension that describes the configuration of audio ports on this plugin instance.
+    ///
+    /// This will only be called while the plugin is inactive.
+    ///
+    /// The default configuration is a main stereo input port and a main stereo output port.
+    ///
+    /// [main-thread & !active_state]
+    fn audio_ports_extension(
+        &self,
+    ) -> Result<ext::audio_ports::AudioPortsExtension, Box<dyn Error>> {
+        let res = self.parse_audio_ports_extension();
+
+        if let Ok(audio_ports_ext) = &res {
+            self.audio_ports_ext = Some(audio_ports_ext.clone());
+        } else {
+            self.audio_ports_ext = None;
+        }
+
         res
     }
-
-    pub fn deactivation_requested(&mut self) -> bool {
-        self.shared_plugin
-            .host_request
-            .host_request
-            .plugin_channel
-            .deactivation_requested
-            .load(Ordering::Relaxed)
-    }
-
-    pub fn process(&mut self, clap_process: *const RawClapProcess) -> i32 {
-        unsafe {
-            ((&*self.shared_plugin.raw_plugin).process)(self.shared_plugin.raw_plugin, clap_process)
-        }
-    }
-
-    /// This will be called each time before a call to `process()`.
-    ///
-    /// Return an error if the plugin failed to start processing. In this case the host will not
-    /// call `process()` this process cycle.
-    ///
-    /// `[audio-thread & active_state & !processing_state]`
-    pub fn start_processing(&mut self) -> bool {
-        unsafe {
-            ((&*self.shared_plugin.raw_plugin).start_processing)(self.shared_plugin.raw_plugin)
-        }
-    }
-
-    /// This will be called each time after a call to `process()`.
-    ///
-    /// `[audio-thread & active_state & processing_state]`
-    pub fn stop_processing(&mut self) {
-        unsafe {
-            ((&*self.shared_plugin.raw_plugin).stop_processing)(self.shared_plugin.raw_plugin)
-        }
-    }
-
-    pub fn id(&self) -> &Shared<String> {
-        &self.shared_plugin.id
-    }
 }
 
-impl Clone for ClapPluginAudioThread {
-    fn clone(&self) -> Self {
-        Self { shared_plugin: Shared::clone(&self.shared_plugin) }
+pub(crate) struct ClapPluginAudioThread {
+    shared_plugin: Shared<SharedClapPluginInstance>,
+    process: ClapProcess,
+    task_version: u64,
+}
+
+impl PluginAudioThread for ClapPluginAudioThread {
+    /// This will be called when the plugin should start processing after just activing/
+    /// waking up from sleep.
+    ///
+    /// Return an error if the plugin failed to start processing. In this case the host will not
+    /// call `process()` and return the plugin to sleep.
+    ///
+    /// By default this just returns `Ok(())`.
+    ///
+    /// `[audio-thread & active_state & !processing_state]`
+    fn start_processing(&mut self) -> Result<(), ()> {
+        let res = unsafe {
+            ((&*self.shared_plugin.raw_plugin).start_processing)(self.shared_plugin.raw_plugin)
+        };
+        if res {
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    /// This will be called when the host puts the plugin to sleep.
+    ///
+    /// By default this trait method does nothing.
+    ///
+    /// `[audio-thread & active_state & processing_state]`
+    fn stop_processing(&mut self) {
+        unsafe {
+            ((&*self.shared_plugin.raw_plugin).stop_processing)(self.shared_plugin.raw_plugin)
+        };
+    }
+
+    /// Process audio and events.
+    ///
+    /// `[audio-thread & active_state & processing_state]`
+    fn process(&mut self, proc_info: &ProcInfo, buffers: &mut ProcBuffers) -> ProcessStatus {
+        use clap_sys::process::{
+            CLAP_PROCESS_CONTINUE, CLAP_PROCESS_CONTINUE_IF_NOT_QUIET, CLAP_PROCESS_ERROR,
+            CLAP_PROCESS_SLEEP, CLAP_PROCESS_TAIL,
+        };
+
+        if buffers.task_version != self.task_version {
+            self.task_version = buffers.task_version;
+
+            // Update the list of buffers.
+            self.process.update_buffers(buffers);
+        }
+
+        self.process.sync_proc_info(proc_info, buffers);
+
+        let res = unsafe {
+            ((&*self.shared_plugin.raw_plugin).process)(
+                self.shared_plugin.raw_plugin,
+                self.process.raw(),
+            )
+        };
+
+        self.process.sync_output_constant_masks(buffers);
+
+        match res {
+            CLAP_PROCESS_ERROR => ProcessStatus::Error,
+            CLAP_PROCESS_CONTINUE => ProcessStatus::Continue,
+            CLAP_PROCESS_CONTINUE_IF_NOT_QUIET => ProcessStatus::ContinueIfNotQuiet,
+            CLAP_PROCESS_TAIL => ProcessStatus::Tail,
+            CLAP_PROCESS_SLEEP => ProcessStatus::Sleep,
+            _ => ProcessStatus::Error,
+        }
     }
 }
 
@@ -675,21 +689,16 @@ fn parse_clap_plugin_descriptor(
         }
     };
 
-    let parse_optional = |raw_s: *const i8, field: &'static str| -> Option<String> {
+    let parse_optional = |raw_s: *const i8, field: &'static str| -> String {
         if let Some(s) = c_char_ptr_to_maybe_str(raw_s, CLAP_PATH_SIZE) {
             if let Ok(s) = s {
-                let s = s.to_string();
-                if s.is_empty() {
-                    None
-                } else {
-                    Some(s)
-                }
+                s.to_string()
             } else {
                 log::warn!("failed to parse {} from clap_plugin_descriptor", field);
-                None
+                String::new()
             }
         } else {
-            None
+            String::new()
         }
     };
 

@@ -6,10 +6,9 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crate::{graph::plugin_pool::PluginInstanceChannel, host_request::HostRequest};
+use crate::host_request::HostRequest;
 
 pub(crate) struct ClapHostRequest {
-    pub host_request: HostRequest,
     // We are storing this as a slice so we can get a raw pointer
     // for external plugins.
     raw: Shared<[RawClapHost; 1]>,
@@ -22,10 +21,7 @@ impl ClapHostRequest {
     pub(crate) fn new(host_request: HostRequest, coll_handle: &basedrop::Handle) -> Self {
         let host_data = Shared::new(
             coll_handle,
-            [HostData {
-                plug_did_create: Arc::new(AtomicBool::new(false)),
-                plugin_channel: Shared::clone(&host_request.plugin_channel),
-            }],
+            [HostData { plug_did_create: Arc::new(AtomicBool::new(false)), host_request }],
         );
 
         // SAFETY: This is safe because the data lives inside the Host struct,
@@ -41,10 +37,10 @@ impl ClapHostRequest {
 
                 host_data: (*host_data).as_ptr() as *mut c_void,
 
-                name: host_request.info._c_name.as_ptr(),
-                vendor: host_request.info._c_vendor.as_ptr(),
-                url: host_request.info._c_url.as_ptr(),
-                version: host_request.info._c_version.as_ptr(),
+                name: host_data[0].host_request.info._c_name.as_ptr(),
+                vendor: host_data[0].host_request.info._c_vendor.as_ptr(),
+                url: host_data[0].host_request.info._c_url.as_ptr(),
+                version: host_data[0].host_request.info._c_version.as_ptr(),
 
                 // This is safe because these functions are static.
                 get_extension,
@@ -54,7 +50,7 @@ impl ClapHostRequest {
             }],
         );
 
-        Self { host_request, raw, host_data }
+        Self { raw, host_data }
     }
 
     // SAFETY: This is safe because the data lives inside this struct,
@@ -74,17 +70,13 @@ impl ClapHostRequest {
 
 impl Clone for ClapHostRequest {
     fn clone(&self) -> Self {
-        Self {
-            host_request: self.host_request.clone(),
-            raw: Shared::clone(&self.raw),
-            host_data: Shared::clone(&self.host_data),
-        }
+        Self { raw: Shared::clone(&self.raw), host_data: Shared::clone(&self.host_data) }
     }
 }
 
 struct HostData {
     plug_did_create: Arc<AtomicBool>,
-    plugin_channel: Shared<PluginInstanceChannel>,
+    host_request: HostRequest,
 }
 
 unsafe extern "C" fn get_extension(
@@ -144,9 +136,9 @@ unsafe extern "C" fn request_restart(clap_host: *const RawClapHost) {
         return;
     }
 
-    let plugin_channel = &*(host.host_data as *const PluginInstanceChannel);
+    let host_data = &*(host.host_data as *const HostData);
 
-    plugin_channel.restart_requested.store(true, Ordering::Relaxed);
+    host_data.host_request.restart_requested.store(true, Ordering::Relaxed);
 }
 
 unsafe extern "C" fn request_process(clap_host: *const RawClapHost) {
@@ -166,9 +158,9 @@ unsafe extern "C" fn request_process(clap_host: *const RawClapHost) {
         return;
     }
 
-    let plugin_channel = &*(host.host_data as *const PluginInstanceChannel);
+    let host_data = &*(host.host_data as *const HostData);
 
-    plugin_channel.process_requested.store(true, Ordering::Relaxed);
+    host_data.host_request.process_requested.store(true, Ordering::Relaxed);
 }
 
 unsafe extern "C" fn request_callback(clap_host: *const RawClapHost) {
@@ -188,7 +180,7 @@ unsafe extern "C" fn request_callback(clap_host: *const RawClapHost) {
         return;
     }
 
-    let plugin_channel = &*(host.host_data as *const PluginInstanceChannel);
+    let host_data = &*(host.host_data as *const HostData);
 
-    plugin_channel.callback_requested.store(true, Ordering::Relaxed);
+    host_data.host_request.callback_requested.store(true, Ordering::Relaxed);
 }

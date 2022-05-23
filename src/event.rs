@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::{
     engine::{EngineActivatedInfo, ModifyGraphRes},
-    graph::{AudioGraphSaveState, GraphCompilerError, PluginActivationError, PluginInstanceID},
+    graph::{ActivatePluginError, AudioGraphSaveState, GraphCompilerError, PluginInstanceID},
     plugin_scanner::RescanPluginDirectoriesRes,
     AudioPortsExtension,
 };
@@ -61,7 +61,7 @@ pub enum DAWEngineEvent {
         ///
         /// If this is `Err(e)`, then it means the plugin became deactivated
         /// because it failed to restart.
-        status: Result<(), PluginActivationError>,
+        status: Result<(), ActivatePluginError>,
     },
 
     /// Sent whenever a plugin becomes activated after being deactivated or

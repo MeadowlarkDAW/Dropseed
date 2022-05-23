@@ -13,7 +13,7 @@ impl ClapInputEvents {
         Self { raw }
     }
 
-    pub fn raw(&self) -> &RawClapInputEvents {
+    pub fn raw(&self) -> *const RawClapInputEvents {
         &self.raw
     }
 }
@@ -29,7 +29,7 @@ impl ClapOutputEvents {
         Self { raw }
     }
 
-    pub fn raw(&self) -> &RawClapOutputEvents {
+    pub fn raw(&self) -> *const RawClapOutputEvents {
         &self.raw
     }
 }

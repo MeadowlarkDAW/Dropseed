@@ -12,7 +12,7 @@ use std::sync::{
 use std::time::Duration;
 
 use crate::event::{DAWEngineEvent, PluginScannerEvent};
-use crate::graph::plugin_pool::MainThreadStatus;
+use crate::graph::plugin_host::OnIdleResult;
 use crate::graph::{
     AudioGraph, AudioGraphSaveState, Edge, NewPluginRes, PluginActivationStatus, PluginEdges,
     PluginInstanceID, SharedSchedule,
@@ -102,8 +102,8 @@ impl RustyDAWEngine {
     pub fn activate_engine(
         &mut self,
         sample_rate: SampleRate,
-        min_block_frames: usize,
-        max_block_frames: usize,
+        min_frames: u32,
+        max_frames: u32,
         num_audio_in_channels: u16,
         num_audio_out_channels: u16,
     ) {
@@ -120,8 +120,8 @@ impl RustyDAWEngine {
             num_audio_in_channels,
             num_audio_out_channels,
             sample_rate,
-            min_block_frames,
-            max_block_frames,
+            min_frames,
+            max_frames,
         );
 
         // TODO: Remove this once compiler is fixed.
@@ -156,8 +156,8 @@ impl RustyDAWEngine {
                 graph_in_node_id: audio_graph.graph_in_node_id().clone(),
                 graph_out_node_id: audio_graph.graph_out_node_id().clone(),
                 sample_rate,
-                min_block_frames,
-                max_block_frames,
+                min_frames,
+                max_frames,
                 num_audio_in_channels,
                 num_audio_out_channels,
             };
@@ -370,8 +370,9 @@ impl RustyDAWEngine {
             let mut changed_plugins = audio_graph.on_main_thread();
 
             for (plugin_id, res) in changed_plugins.drain(..) {
+                /*
                 match res {
-                    MainThreadStatus::Activated(status) => match status {
+                    OnIdleResult::Activated(status) => match status {
                         PluginActivationStatus::Activated => {
                             self.event_tx
                                 .send(DAWEngineEvent::PluginActivated {
@@ -407,7 +408,7 @@ impl RustyDAWEngine {
                                 .unwrap();
                         }
                     },
-                    MainThreadStatus::Deactivated => {
+                    OnIdleResult::Deactivated => {
                         self.event_tx
                             .send(DAWEngineEvent::PluginDeactivated {
                                 plugin_id: plugin_id.clone(),
@@ -415,23 +416,19 @@ impl RustyDAWEngine {
                             })
                             .unwrap();
                     }
-                    MainThreadStatus::Removed => {
+                    OnIdleResult::Removed => {
                         // We don't really need to alert the user because they would have already
                         // seen that the plugin was being removed in a `DAWEngineEvent::AudioGraphModified`
                         // event.
                     }
                 }
+                */
             }
 
             if recompile {
                 self.compile_audio_graph();
             }
         }
-
-        #[cfg(feature = "clap-host")]
-        // Clap requires us to drop plugins on the main thread, so use a special
-        // garbage collector for just that.
-        self.plugin_scanner.main_thread_collect();
     }
 
     fn compile_audio_graph(&mut self) {
@@ -491,8 +488,8 @@ pub struct EngineActivatedInfo {
     pub graph_out_node_id: PluginInstanceID,
 
     pub sample_rate: SampleRate,
-    pub min_block_frames: usize,
-    pub max_block_frames: usize,
+    pub min_frames: u32,
+    pub max_frames: u32,
     pub num_audio_in_channels: u16,
     pub num_audio_out_channels: u16,
 }

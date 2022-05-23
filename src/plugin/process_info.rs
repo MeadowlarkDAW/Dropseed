@@ -25,7 +25,7 @@ pub enum ProcessStatus {
     Sleep = 4,
 }
 
-pub struct ProcInfo<'a> {
+pub struct ProcInfo {
     /// A steady sample time counter.
     ///
     /// This field can be used to calculate the sleep duration between two process calls.
@@ -39,36 +39,38 @@ pub struct ProcInfo<'a> {
     /// The number of frames to process. All buffers in this struct are gauranteed to be
     /// at-least this length.
     pub frames: usize,
+}
 
-    pub audio_in: &'a SmallVec<[AudioPortBuffer; 2]>,
-    pub audio_out: &'a mut SmallVec<[AudioPortBufferMut; 2]>,
+pub struct ProcBuffers {
+    pub audio_in: SmallVec<[AudioPortBuffer; 2]>,
+    pub audio_out: SmallVec<[AudioPortBufferMut; 2]>,
 
     /// Used to let external plugins know when it should update its list of buffers.
     pub(crate) task_version: u64,
 }
 
-impl<'a> ProcInfo<'a> {
-    pub fn audio_inputs_silent(&self) -> bool {
+impl ProcBuffers {
+    pub fn audio_inputs_silent(&self, frames: usize) -> bool {
         for buf in self.audio_in.iter() {
-            if !buf.is_silent(self.frames) {
+            if !buf.is_silent(frames) {
                 return false;
             }
         }
         true
     }
 
-    pub fn audio_outputs_silent(&self) -> bool {
+    pub fn audio_outputs_silent(&self, frames: usize) -> bool {
         for buf in self.audio_out.iter() {
-            if !buf.is_silent(self.frames) {
+            if !buf.is_silent(frames) {
                 return false;
             }
         }
         true
     }
 
-    pub fn clear_all_outputs(&mut self) {
+    pub fn clear_all_outputs(&mut self, frames: usize) {
         for buf in self.audio_out.iter_mut() {
-            buf.clear_all(self.frames);
+            buf.clear_all(frames);
         }
     }
 }

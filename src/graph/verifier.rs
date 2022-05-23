@@ -2,18 +2,19 @@ use audio_graph::NodeRef;
 use fnv::FnvHashSet;
 use std::error::Error;
 
+use super::shared_pool::DebugBufferID;
 use super::PluginInstanceID;
-use super::{audio_buffer_pool::UniqueBufferID, schedule::task::Task, Schedule};
+use super::{schedule::task::Task, Schedule};
 
 pub(crate) struct Verifier {
     plugin_instances: FnvHashSet<NodeRef>,
-    buffer_instances: FnvHashSet<UniqueBufferID>,
+    buffer_instances: FnvHashSet<DebugBufferID>,
 }
 
 impl Verifier {
     pub fn new() -> Self {
         let mut plugin_instances: FnvHashSet<NodeRef> = FnvHashSet::default();
-        let mut buffer_instances: FnvHashSet<UniqueBufferID> = FnvHashSet::default();
+        let mut buffer_instances: FnvHashSet<DebugBufferID> = FnvHashSet::default();
         plugin_instances.reserve(1024);
         buffer_instances.reserve(1024);
 
@@ -42,6 +43,7 @@ impl Verifier {
         for task in schedule.tasks.iter() {
             self.buffer_instances.clear();
 
+            /*
             match task {
                 Task::InternalPlugin(t) => {
                     if !self.plugin_instances.insert(t.plugin.id().node_id) {
@@ -127,6 +129,7 @@ impl Verifier {
                     }
                 }
             }
+            */
         }
 
         Ok(())
@@ -136,11 +139,11 @@ impl Verifier {
 #[derive(Debug, Clone)]
 pub enum VerifyScheduleError {
     BufferAppearsTwiceInSameTask {
-        buffer_id: UniqueBufferID,
+        buffer_id: DebugBufferID,
         task_info: String,
     },
     BufferAppearsTwiceInParallelTasks {
-        buffer_id: UniqueBufferID,
+        buffer_id: DebugBufferID,
     },
     PluginInstanceAppearsTwiceInSchedule {
         plugin_id: PluginInstanceID,

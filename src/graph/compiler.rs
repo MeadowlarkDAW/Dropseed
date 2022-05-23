@@ -3,26 +3,20 @@ use basedrop::Shared;
 use smallvec::SmallVec;
 use std::error::Error;
 
-use crate::graph::plugin_pool::{DelayCompKey, SharedDelayCompNode};
+use crate::graph::shared_pool::{DelayCompKey, SharedDelayCompNode};
 use crate::plugin::ext::audio_ports::MainPortsLayout;
-use crate::plugin_scanner::PluginFormat;
-use crate::AudioPortBuffer;
+use crate::{AudioPortBuffer, AudioPortBufferMut};
 
-use super::schedule;
 use super::{
-    audio_buffer_pool::{AudioBufferPool, SharedAudioBuffer},
-    plugin_pool::{PluginAudioThreadType, PluginInstancePool},
-    schedule::task::{DeactivatedPluginTask, DelayCompTask, InternalPluginTask, SumTask, Task},
+    schedule::sum::SumTask,
+    schedule::task::{DeactivatedPluginTask, DelayCompTask, PluginTask, Task},
+    shared_pool::{SharedBuffer, SharedPool},
     verifier::{Verifier, VerifyScheduleError},
     DefaultPortType, PluginInstanceID, PortID, Schedule,
 };
 
-#[cfg(feature = "clap-host")]
-use crate::clap::{process::ClapProcess, task::ClapPluginTask};
-
 pub(crate) fn compile_graph(
-    plugin_pool: &mut PluginInstancePool,
-    audio_buffer_pool: &mut AudioBufferPool,
+    shared_pool: &mut SharedPool,
     abstract_graph: &mut Graph<PluginInstanceID, PortID, DefaultPortType>,
     graph_in_node_id: &PluginInstanceID,
     graph_out_node_id: &PluginInstanceID,
@@ -30,8 +24,8 @@ pub(crate) fn compile_graph(
 ) -> Result<Schedule, GraphCompilerError> {
     let mut tasks: Vec<Task> = Vec::with_capacity(plugin_pool.num_plugins() * 2);
 
-    let mut graph_audio_in: SmallVec<[SharedAudioBuffer<f32>; 4]> = SmallVec::new();
-    let mut graph_audio_out: SmallVec<[SharedAudioBuffer<f32>; 4]> = SmallVec::new();
+    let mut graph_audio_in: SmallVec<[SharedBuffer<f32>; 4]> = SmallVec::new();
+    let mut graph_audio_out: SmallVec<[SharedBuffer<f32>; 4]> = SmallVec::new();
 
     let mut total_intermediary_buffers = 0;
     let mut max_graph_audio_buffer_id = 0;
@@ -58,9 +52,9 @@ pub(crate) fn compile_graph(
 
         let mut intermediary_buffer_i = 0;
 
-        let mut plugin_in_channel_buffers: SmallVec<[Option<SharedAudioBuffer<f32>>; 4]> =
+        let mut plugin_in_channel_buffers: SmallVec<[Option<SharedBuffer<f32>>; 4]> =
             SmallVec::with_capacity(num_input_channels);
-        let mut plugin_out_channel_buffers: SmallVec<[Option<SharedAudioBuffer<f32>>; 4]> =
+        let mut plugin_out_channel_buffers: SmallVec<[Option<SharedBuffer<f32>>; 4]> =
             SmallVec::with_capacity(num_output_channels);
         for _ in 0..num_input_channels {
             plugin_in_channel_buffers.push(None);
@@ -80,7 +74,7 @@ pub(crate) fn compile_graph(
                 ), abstract_tasks.to_vec()));
             }
 
-            let mut channel_buffers: SmallVec<[SharedAudioBuffer<f32>; 4]> = SmallVec::new();
+            let mut channel_buffers: SmallVec<[SharedBuffer<f32>; 4]> = SmallVec::new();
             for (buffer, delay_comp_info) in buffers.iter() {
                 max_graph_audio_buffer_id = max_graph_audio_buffer_id.max(buffer.buffer_id);
 
@@ -173,9 +167,9 @@ pub(crate) fn compile_graph(
             plugin_out_channel_buffers[channel_index] = Some(graph_buffer);
         }
 
-        let mut audio_in_channel_buffers: SmallVec<[SharedAudioBuffer<f32>; 4]> =
+        let mut audio_in_channel_buffers: SmallVec<[SharedBuffer<f32>; 4]> =
             SmallVec::with_capacity(num_input_channels);
-        let mut audio_out_channel_buffers: SmallVec<[SharedAudioBuffer<f32>; 4]> =
+        let mut audio_out_channel_buffers: SmallVec<[SharedBuffer<f32>; 4]> =
             SmallVec::with_capacity(num_output_channels);
         for i in 0..num_input_channels {
             if let Some(buffer) = plugin_in_channel_buffers[i].take() {
@@ -213,9 +207,9 @@ pub(crate) fn compile_graph(
             plugin_pool.get_graph_plugin_audio_thread(&abstract_task.node).unwrap();
 
         if plugin_audio_thread.is_none() {
-            let mut audio_through: SmallVec<[(SharedAudioBuffer<f32>, SharedAudioBuffer<f32>); 4]> =
+            let mut audio_through: SmallVec<[(SharedBuffer<f32>, SharedBuffer<f32>); 4]> =
                 SmallVec::new();
-            let mut extra_audio_out: SmallVec<[SharedAudioBuffer<f32>; 4]> = SmallVec::new();
+            let mut extra_audio_out: SmallVec<[SharedBuffer<f32>; 4]> = SmallVec::new();
 
             // Plugin is unloaded/deactivated.
             let mut port_i = 0;
@@ -249,6 +243,7 @@ pub(crate) fn compile_graph(
         }
 
         match plugin_audio_thread.unwrap() {
+            /*
             PluginAudioThreadType::Internal(plugin_audio_thread) => {
                 let mut audio_in: SmallVec<[AudioPortBuffer; 2]> = SmallVec::new();
                 let mut audio_out: SmallVec<[AudioPortBuffer; 2]> = SmallVec::new();
@@ -259,7 +254,7 @@ pub(crate) fn compile_graph(
 
                 let mut port_i = 0;
                 for in_port in audio_ports_ext.inputs.iter() {
-                    let mut buffers: SmallVec<[SharedAudioBuffer<f32>; 2]> =
+                    let mut buffers: SmallVec<[SharedBuffer<f32>; 2]> =
                         SmallVec::with_capacity(in_port.channels);
                     for _ in 0..in_port.channels {
                         buffers.push(audio_in_channel_buffers[port_i].clone());
@@ -270,7 +265,7 @@ pub(crate) fn compile_graph(
                 }
                 port_i = 0;
                 for out_port in audio_ports_ext.outputs.iter() {
-                    let mut buffers: SmallVec<[SharedAudioBuffer<f32>; 2]> =
+                    let mut buffers: SmallVec<[SharedBuffer<f32>; 2]> =
                         SmallVec::with_capacity(out_port.channels);
                     for _ in 0..out_port.channels {
                         buffers.push(audio_out_channel_buffers[port_i].clone());
@@ -297,7 +292,7 @@ pub(crate) fn compile_graph(
 
                 let mut port_i = 0;
                 for in_port in audio_ports_ext.inputs.iter() {
-                    let mut buffers: SmallVec<[SharedAudioBuffer<f32>; 2]> =
+                    let mut buffers: SmallVec<[SharedBuffer<f32>; 2]> =
                         SmallVec::with_capacity(in_port.channels);
                     for _ in 0..in_port.channels {
                         buffers.push(audio_in_channel_buffers[port_i].clone());
@@ -308,7 +303,7 @@ pub(crate) fn compile_graph(
                 }
                 port_i = 0;
                 for out_port in audio_ports_ext.outputs.iter() {
-                    let mut buffers: SmallVec<[SharedAudioBuffer<f32>; 2]> =
+                    let mut buffers: SmallVec<[SharedBuffer<f32>; 2]> =
                         SmallVec::with_capacity(out_port.channels);
                     for _ in 0..out_port.channels {
                         buffers.push(audio_out_channel_buffers[port_i].clone());
@@ -325,6 +320,7 @@ pub(crate) fn compile_graph(
                     clap_process,
                 }));
             }
+            */
         }
     }
 

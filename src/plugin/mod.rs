@@ -14,6 +14,8 @@ use process_info::{ProcInfo, ProcessStatus};
 
 pub use save_state::PluginSaveState;
 
+use self::process_info::ProcBuffers;
+
 /// The description of a plugin.
 #[derive(Debug, Clone)]
 pub struct PluginDescriptor {
@@ -185,5 +187,5 @@ pub trait PluginAudioThread: Send + Sync + 'static {
     /// Process audio and events.
     ///
     /// `[audio-thread & active_state & processing_state]`
-    fn process(&mut self, proc_info: &ProcInfo) -> ProcessStatus;
+    fn process(&mut self, proc_info: &ProcInfo, buffers: &mut ProcBuffers) -> ProcessStatus;
 }

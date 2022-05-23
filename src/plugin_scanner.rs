@@ -72,11 +72,6 @@ pub(crate) struct PluginScanner {
     #[cfg(feature = "clap-host")]
     clap_scan_directories: Vec<PathBuf>,
 
-    #[cfg(feature = "clap-host")]
-    // Clap requires us to drop plugins on the main thread, so use a special
-    // garbage collector just for that.
-    main_thread_collector: basedrop::Collector,
-
     host_info: Shared<HostInfo>,
 
     coll_handle: basedrop::Handle,
@@ -90,9 +85,6 @@ impl PluginScanner {
 
             #[cfg(any(feature = "clap-host"))]
             clap_scan_directories: Vec::new(),
-
-            #[cfg(any(feature = "clap-host"))]
-            main_thread_collector: basedrop::Collector::new(),
 
             host_info,
 
@@ -216,11 +208,11 @@ impl PluginScanner {
             }
 
             for binary_path in found_binaries.iter() {
-                match ClapPluginFactory::entry_init(binary_path, &self.coll_handle) {
+                match crate::clap::plugin::entry_init(binary_path, &self.coll_handle) {
                     Ok(mut factories) => {
                         for f in factories.drain(..) {
                             let id: String = f.description().id.clone();
-                            let v = f.clap_version();
+                            let v = f.clap_version;
                             let format_version = format!("{}.{}.{}", v.major, v.minor, v.revision);
 
                             log::info!(
@@ -247,7 +239,7 @@ impl PluginScanner {
                                     description: f.description().clone(),
                                     rdn: Shared::new(&self.coll_handle, id.clone()),
                                     format: PluginFormat::Clap,
-                                    factory: f,
+                                    factory: Box::new(f),
                                 },
                             ) {
                                 // TODO: Handle this better
@@ -299,7 +291,7 @@ impl PluginScanner {
     pub(crate) fn create_plugin(
         &mut self,
         mut save_state: PluginSaveState,
-        node_index: usize,
+        node_ref: audio_graph::NodeRef,
         fallback_to_other_formats: bool,
     ) -> CreatePluginResult {
         let check_for_invalid_host_callbacks = |host_request: &HostRequest, id: &String| {
@@ -370,7 +362,7 @@ impl PluginScanner {
         }
 
         let mut id =
-            PluginInstanceID { node_index, format: PluginInstanceType::Unloaded, name: None };
+            PluginInstanceID { node_ref, format: PluginInstanceType::Unloaded, name: None };
         let host_request = HostRequest::new(Shared::clone(&self.host_info));
         let mut main_thread = None;
 
@@ -422,13 +414,6 @@ impl PluginScanner {
             status,
             save_state,
         }
-    }
-
-    #[cfg(feature = "clap-host")]
-    /// Clap requires us to drop plugins on the main thread, so use a special
-    /// garbage collector for just that.
-    pub fn main_thread_collect(&mut self) {
-        self.main_thread_collector.collect();
     }
 }
 

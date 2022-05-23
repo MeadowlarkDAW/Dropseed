@@ -72,6 +72,19 @@ pub struct AudioPortBuffer {
     constant_mask: Arc<AtomicU64>,
 }
 
+impl std::fmt::Debug for AudioPortBuffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.raw_channels {
+            RawAudioChannelBuffers::F32(buffers) => {
+                f.debug_list().entries(buffers.iter().map(|b| b.buffer.1)).finish()
+            }
+            RawAudioChannelBuffers::F64(buffers) => {
+                f.debug_list().entries(buffers.iter().map(|b| b.buffer.1)).finish()
+            }
+        }
+    }
+}
+
 impl AudioPortBuffer {
     pub fn num_channels(&self) -> usize {
         self.raw_channels.num_channels()
@@ -169,6 +182,19 @@ pub struct AudioPortBufferMut {
     constant_mask: Arc<AtomicU64>,
 }
 
+impl std::fmt::Debug for AudioPortBufferMut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.raw_channels {
+            RawAudioChannelBuffers::F32(buffers) => {
+                f.debug_list().entries(buffers.iter().map(|b| b.buffer.1)).finish()
+            }
+            RawAudioChannelBuffers::F64(buffers) => {
+                f.debug_list().entries(buffers.iter().map(|b| b.buffer.1)).finish()
+            }
+        }
+    }
+}
+
 impl AudioPortBufferMut {
     pub fn num_channels(&self) -> usize {
         self.raw_channels.num_channels()
@@ -180,6 +206,10 @@ impl AudioPortBufferMut {
 
     pub fn constant_mask(&self) -> u64 {
         self.constant_mask.load(Ordering::Relaxed)
+    }
+
+    pub fn set_constant_mask(&mut self, mask: u64) {
+        self.constant_mask.store(mask, Ordering::Relaxed);
     }
 
     #[inline]

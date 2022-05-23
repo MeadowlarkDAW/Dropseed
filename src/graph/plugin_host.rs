@@ -1,5 +1,3 @@
-use basedrop::Shared;
-use std::cell::UnsafeCell;
 use std::error::Error;
 use std::sync::{
     atomic::{AtomicBool, AtomicU32, Ordering},
@@ -8,9 +6,10 @@ use std::sync::{
 
 use rusty_daw_core::SampleRate;
 
+use crate::plugin::ext::audio_ports::AudioPortsExtension;
+use crate::plugin::process_info::ProcBuffers;
 use crate::plugin::{PluginAudioThread, PluginMainThread};
-use crate::plugin_scanner::NewPluginInstanceError;
-use crate::{HostInfo, HostRequest, ProcInfo, ProcessStatus};
+use crate::{HostRequest, ProcInfo, ProcessStatus};
 
 use super::shared_pool::PluginInstanceID;
 
@@ -18,8 +17,6 @@ pub(crate) struct PluginInstanceHost {
     pub id: PluginInstanceID,
 
     main_thread: Option<Box<dyn PluginMainThread>>,
-
-    audio_thread: Option<PluginInstanceHostAudioThread>,
 
     state: Arc<SharedPluginState>,
 
@@ -51,7 +48,6 @@ impl PluginInstanceHost {
         Self {
             id,
             main_thread,
-            audio_thread: None,
             state: Arc::new(SharedPluginState::new()),
             restart_requested,
             process_requested,
@@ -79,26 +75,24 @@ impl PluginInstanceHost {
         min_frames: u32,
         max_frames: u32,
         coll_handle: &basedrop::Handle,
-    ) -> Result<(), ActivatePluginError> {
+    ) -> Result<PluginInstanceHostAudioThread, ActivatePluginError> {
         self.can_activate()?;
 
         let plugin_main_thread = self.main_thread.as_mut().unwrap();
 
         match plugin_main_thread.activate(sample_rate, min_frames, max_frames, coll_handle) {
             Ok(plugin_audio_thread) => {
-                self.audio_thread = Some(PluginInstanceHostAudioThread {
-                    id: self.id.clone(),
-                    plugin: Shared::new(coll_handle, UnsafeCell::new(plugin_audio_thread)),
-                    state: Arc::clone(&self.state),
-                    process_requested: Arc::clone(&self.process_requested),
-                    deactivate_requested: Arc::clone(&self.deactivate_requested),
-                });
-
                 self.process_requested.store(true, Ordering::Relaxed);
                 self.deactivate_requested.store(false, Ordering::Relaxed);
                 self.state.set(PluginState::ActiveAndSleeping);
 
-                Ok(())
+                Ok(PluginInstanceHostAudioThread {
+                    id: self.id.clone(),
+                    plugin: plugin_audio_thread,
+                    state: Arc::clone(&self.state),
+                    process_requested: Arc::clone(&self.process_requested),
+                    deactivate_requested: Arc::clone(&self.deactivate_requested),
+                })
             }
             Err(e) => {
                 self.state.set(PluginState::InactiveWithError);
@@ -116,6 +110,14 @@ impl PluginInstanceHost {
         // Wait for the audio thread part to go to sleep before
         // deactivating.
         self.deactivate_requested.store(true, Ordering::Relaxed);
+    }
+
+    pub fn audio_ports_ext(&self) -> Result<AudioPortsExtension, Box<dyn Error>> {
+        if let Some(main_thread) = &self.main_thread {
+            main_thread.audio_ports_extension()
+        } else {
+            Err("plugin is not loaded".into())
+        }
     }
 
     pub fn on_idle(
@@ -167,10 +169,6 @@ impl PluginInstanceHost {
 
         res
     }
-
-    pub fn audio_thread(&self) -> Option<PluginInstanceHostAudioThread> {
-        self.audio_thread.as_ref().map(|a| a.clone())
-    }
 }
 
 pub enum OnIdleResult {
@@ -181,9 +179,9 @@ pub enum OnIdleResult {
 }
 
 pub(crate) struct PluginInstanceHostAudioThread {
-    id: PluginInstanceID,
+    pub id: PluginInstanceID,
 
-    plugin: Shared<UnsafeCell<Box<dyn PluginAudioThread>>>,
+    plugin: Box<dyn PluginAudioThread>,
 
     state: Arc<SharedPluginState>,
 
@@ -191,56 +189,39 @@ pub(crate) struct PluginInstanceHostAudioThread {
     deactivate_requested: Arc<AtomicBool>,
 }
 
-impl Clone for PluginInstanceHostAudioThread {
-    fn clone(&self) -> Self {
-        Self {
-            id: self.id.clone(),
-            plugin: Shared::clone(&self.plugin),
-            state: Arc::clone(&self.state),
-            process_requested: Arc::clone(&self.process_requested),
-            deactivate_requested: Arc::clone(&self.deactivate_requested),
-        }
-    }
-}
-
 impl PluginInstanceHostAudioThread {
-    pub fn process(&mut self, proc_info: &ProcInfo) {
+    pub fn process<'a>(&mut self, proc_info: &ProcInfo, buffers: &mut ProcBuffers) {
         let state = self.state.get();
 
         if !state.is_active() {
             // Can't process a plugin that is not active.
-            proc_info.clear_all_outputs();
+            buffers.clear_all_outputs(proc_info.frames);
             return;
         }
-
-        // This is safe because this method in the audio thread is the only place this
-        // is ever borrowed. Also the schedule verifier ensured that this plugin instance
-        // does not appear twice in the same schedule so there is no risk of data races.
-        let plugin = unsafe { &mut *self.plugin.get() };
 
         // Do we want to deactivate the plugin?
         if self.deactivate_requested.load(Ordering::Relaxed) {
             if state.is_processing() {
-                plugin.stop_processing();
+                self.plugin.stop_processing();
             }
 
             self.state.set(PluginState::ActiveAndReadyToDeactivate);
-            proc_info.clear_all_outputs();
+            buffers.clear_all_outputs(proc_info.frames);
             return;
         }
 
         if state == PluginState::ActiveWithError {
             // We can't process a plugin which failed to start processing.
-            proc_info.clear_all_outputs();
+            buffers.clear_all_outputs(proc_info.frames);
             return;
         }
 
         if state == PluginState::ActiveAndWaitingForQuiet {
-            if proc_info.audio_inputs_silent() {
-                plugin.stop_processing();
+            if buffers.audio_inputs_silent(proc_info.frames) {
+                self.plugin.stop_processing();
 
                 self.state.set(PluginState::ActiveAndSleeping);
-                proc_info.clear_all_outputs();
+                buffers.clear_all_outputs(proc_info.frames);
                 return;
             }
         }
@@ -253,16 +234,16 @@ impl PluginInstanceHostAudioThread {
             if !self.process_requested.load(Ordering::Relaxed) && !has_in_events {
                 // The plugin is sleeping, there is no request to wake it up, and there
                 // are no events to process.
-                proc_info.clear_all_outputs();
+                buffers.clear_all_outputs(proc_info.frames);
                 return;
             }
 
             self.process_requested.store(false, Ordering::Relaxed);
 
-            if let Err(_) = plugin.start_processing() {
+            if let Err(_) = self.plugin.start_processing() {
                 // The plugin failed to start processing.
                 self.state.set(PluginState::ActiveWithError);
-                proc_info.clear_all_outputs();
+                buffers.clear_all_outputs(proc_info.frames);
                 return;
             }
 
@@ -272,7 +253,7 @@ impl PluginInstanceHostAudioThread {
         let mut status = ProcessStatus::Sleep;
 
         if self.state.get().is_processing() {
-            status = plugin.process(proc_info);
+            status = self.plugin.process(proc_info, buffers);
         }
 
         // TODO: Handle output events
@@ -289,7 +270,7 @@ impl PluginInstanceHostAudioThread {
             }
             ProcessStatus::Sleep => {
                 if self.state.get().is_processing() {
-                    plugin.stop_processing();
+                    self.plugin.stop_processing();
 
                     // Do we want to deactivate the plugin?
                     if self.deactivate_requested.load(Ordering::Relaxed) {
@@ -303,13 +284,13 @@ impl PluginInstanceHostAudioThread {
             }
             ProcessStatus::Error => {
                 // Discard all output buffers.
-                proc_info.clear_all_outputs();
+                buffers.clear_all_outputs(proc_info.frames);
             }
         }
 
         if self.state.get() == PluginState::ActiveAndWaitingForTail {
-            if proc_info.audio_outputs_silent() {
-                plugin.stop_processing();
+            if buffers.audio_outputs_silent(proc_info.frames) {
+                self.plugin.stop_processing();
 
                 // Do we want to deactivate the plugin?
                 if self.deactivate_requested.load(Ordering::Relaxed) {
@@ -405,6 +386,7 @@ pub enum ActivatePluginError {
     NotLoaded,
     AlreadyActive,
     RestartScheduled,
+    PluginFailedToGetAudioPortsExt(Box<dyn Error>),
     PluginSpecific(Box<dyn Error>),
 }
 
@@ -418,7 +400,12 @@ impl std::fmt::Display for ActivatePluginError {
             ActivatePluginError::RestartScheduled => {
                 write!(f, "a restart is scheduled for this plugin")
             }
-            ActivatePluginError::PluginSpecific(e) => write!(f, "plugin returned error: {:?}", e),
+            ActivatePluginError::PluginFailedToGetAudioPortsExt(e) => {
+                write!(f, "plugin returned error while getting audio ports extension: {:?}", e)
+            }
+            ActivatePluginError::PluginSpecific(e) => {
+                write!(f, "plugin returned error while activating: {:?}", e)
+            }
         }
     }
 }
