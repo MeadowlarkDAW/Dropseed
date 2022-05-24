@@ -22,6 +22,7 @@ pub(crate) fn compile_graph(
     graph_out_node_id: &PluginInstanceID,
     verifier: &mut Verifier,
 ) -> Result<Schedule, GraphCompilerError> {
+    /*
     let mut tasks: Vec<Task> = Vec::with_capacity(plugin_pool.num_plugins() * 2);
 
     let mut graph_audio_in: SmallVec<[SharedBuffer<f32>; 4]> = SmallVec::new();
@@ -378,6 +379,9 @@ pub(crate) fn compile_graph(
         plugin_pool.delay_comp_nodes.drain().filter(|(_, node)| node.active).collect();
 
     Ok(new_schedule)
+    */
+
+    todo!()
 }
 
 #[derive(Debug)]

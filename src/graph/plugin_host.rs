@@ -8,7 +8,7 @@ use rusty_daw_core::SampleRate;
 
 use crate::plugin::ext::audio_ports::AudioPortsExtension;
 use crate::plugin::process_info::ProcBuffers;
-use crate::plugin::{PluginAudioThread, PluginMainThread};
+use crate::plugin::{PluginAudioThread, PluginMainThread, PluginSaveState};
 use crate::{HostRequest, ProcInfo, ProcessStatus};
 
 use super::shared_pool::PluginInstanceID;
@@ -20,18 +20,21 @@ pub(crate) struct PluginInstanceHost {
 
     state: Arc<SharedPluginState>,
 
+    save_state: Option<PluginSaveState>,
+
     restart_requested: Arc<AtomicBool>,
     process_requested: Arc<AtomicBool>,
     callback_requested: Arc<AtomicBool>,
     deactivate_requested: Arc<AtomicBool>,
+    remove_requested: bool,
 }
 
 impl PluginInstanceHost {
     pub fn new(
         id: PluginInstanceID,
-        mut main_thread: Option<Box<dyn PluginMainThread>>,
+        save_state: Option<PluginSaveState>,
+        main_thread: Option<Box<dyn PluginMainThread>>,
         host_request: HostRequest,
-        coll_handle: &basedrop::Handle,
     ) -> Self {
         let state = Arc::new(SharedPluginState::new());
 
@@ -49,11 +52,17 @@ impl PluginInstanceHost {
             id,
             main_thread,
             state: Arc::new(SharedPluginState::new()),
+            save_state,
             restart_requested,
             process_requested,
             callback_requested,
             deactivate_requested,
+            remove_requested: false,
         }
+    }
+
+    pub fn collect_save_state(&mut self) -> Option<PluginSaveState> {
+        self.save_state.as_ref().map(|s| s.clone())
     }
 
     pub fn can_activate(&self) -> Result<(), ActivatePluginError> {
@@ -80,6 +89,10 @@ impl PluginInstanceHost {
 
         let plugin_main_thread = self.main_thread.as_mut().unwrap();
 
+        if let Some(save_state) = &mut self.save_state {
+            save_state.activation_requested = true;
+        }
+
         match plugin_main_thread.activate(sample_rate, min_frames, max_frames, coll_handle) {
             Ok(plugin_audio_thread) => {
                 self.process_requested.store(true, Ordering::Relaxed);
@@ -102,7 +115,11 @@ impl PluginInstanceHost {
         }
     }
 
-    pub fn deactivate(&mut self) {
+    pub fn schedule_deactivate(&mut self) {
+        if let Some(save_state) = &mut self.save_state {
+            save_state.activation_requested = false;
+        }
+
         if !self.state.get().is_active() {
             return;
         }
@@ -112,9 +129,27 @@ impl PluginInstanceHost {
         self.deactivate_requested.store(true, Ordering::Relaxed);
     }
 
-    pub fn audio_ports_ext(&self) -> Result<AudioPortsExtension, Box<dyn Error>> {
-        if let Some(main_thread) = &self.main_thread {
-            main_thread.audio_ports_extension()
+    pub fn schedule_remove(&mut self) {
+        self.remove_requested = true;
+
+        self.schedule_deactivate();
+    }
+
+    pub fn audio_ports_ext(&mut self) -> Result<AudioPortsExtension, Box<dyn Error>> {
+        if let Some(main_thread) = &mut self.main_thread {
+            match main_thread.audio_ports_extension() {
+                Ok(audio_ports_ext) => {
+                    if let Some(save_state) = &mut self.save_state {
+                        save_state.audio_in_out_channels = (
+                            audio_ports_ext.total_in_channels() as u16,
+                            audio_ports_ext.total_out_channels() as u16,
+                        );
+                    }
+
+                    Ok(audio_ports_ext)
+                }
+                Err(e) => Err(e),
+            }
         } else {
             Err("plugin is not loaded".into())
         }
@@ -127,10 +162,12 @@ impl PluginInstanceHost {
         max_frames: u32,
         coll_handle: &basedrop::Handle,
     ) -> OnIdleResult {
-        let res = OnIdleResult::Ok;
-
         if self.main_thread.is_none() {
-            return res;
+            if self.remove_requested {
+                return OnIdleResult::PluginReadyToRemove;
+            } else {
+                return OnIdleResult::Ok;
+            }
         }
 
         let plugin_main_thread = self.main_thread.as_mut().unwrap();
@@ -141,8 +178,19 @@ impl PluginInstanceHost {
             plugin_main_thread.on_main_thread();
         }
 
-        if self.restart_requested.load(Ordering::Relaxed) {
-            self.deactivate();
+        if self.restart_requested.load(Ordering::Relaxed) && !self.remove_requested {
+            if self.state.get().is_active() {
+                // Wait for the audio thread part to go to sleep before
+                // deactivating.
+                self.deactivate_requested.store(true, Ordering::Relaxed);
+            } else if self.restart_requested.load(Ordering::Relaxed) {
+                self.restart_requested.store(false, Ordering::Relaxed);
+
+                match self.activate(sample_rate, min_frames, max_frames, coll_handle) {
+                    Ok(_) => return OnIdleResult::PluginRestarted,
+                    Err(e) => return OnIdleResult::PluginFailedToRestart(e),
+                }
+            }
         }
 
         if self.deactivate_requested.load(Ordering::Relaxed) {
@@ -151,23 +199,33 @@ impl PluginInstanceHost {
 
                 plugin_main_thread.deactivate();
 
-                res = OnIdleResult::PluginDeactivated;
-
                 self.state.set(PluginState::Inactive);
                 self.deactivate_requested.store(false, Ordering::Relaxed);
 
-                if self.restart_requested.load(Ordering::Relaxed) {
-                    self.restart_requested.store(false, Ordering::Relaxed);
+                if !self.remove_requested {
+                    let mut res = OnIdleResult::PluginDeactivated;
 
-                    match self.activate(sample_rate, min_frames, max_frames, coll_handle) {
-                        Ok(_) => res = OnIdleResult::PluginRestarted,
-                        Err(e) => res = OnIdleResult::PluginFailedToRestart(e),
+                    if self.restart_requested.load(Ordering::Relaxed) {
+                        self.restart_requested.store(false, Ordering::Relaxed);
+
+                        match self.activate(sample_rate, min_frames, max_frames, coll_handle) {
+                            Ok(_) => res = OnIdleResult::PluginRestarted,
+                            Err(e) => res = OnIdleResult::PluginFailedToRestart(e),
+                        }
                     }
+
+                    return res;
                 }
             }
         }
 
-        res
+        if self.remove_requested {
+            if !self.state.get().is_active() {
+                return OnIdleResult::PluginReadyToRemove;
+            }
+        }
+
+        OnIdleResult::Ok
     }
 }
 
@@ -175,6 +233,7 @@ pub enum OnIdleResult {
     Ok,
     PluginDeactivated,
     PluginRestarted,
+    PluginReadyToRemove,
     PluginFailedToRestart(ActivatePluginError),
 }
 
@@ -191,11 +250,19 @@ pub(crate) struct PluginInstanceHostAudioThread {
 
 impl PluginInstanceHostAudioThread {
     pub fn process<'a>(&mut self, proc_info: &ProcInfo, buffers: &mut ProcBuffers) {
+        let clear_outputs = |proc_info: &ProcInfo, buffers: &mut ProcBuffers| {
+            // Safe because this `proc_info.frames` will always be less than or
+            // equal to the length of all audio buffers.
+            unsafe {
+                buffers.clear_all_outputs_unchecked(proc_info.frames);
+            }
+        };
+
         let state = self.state.get();
 
         if !state.is_active() {
             // Can't process a plugin that is not active.
-            buffers.clear_all_outputs(proc_info.frames);
+            clear_outputs(proc_info, buffers);
             return;
         }
 
@@ -206,13 +273,13 @@ impl PluginInstanceHostAudioThread {
             }
 
             self.state.set(PluginState::ActiveAndReadyToDeactivate);
-            buffers.clear_all_outputs(proc_info.frames);
+            clear_outputs(proc_info, buffers);
             return;
         }
 
         if state == PluginState::ActiveWithError {
             // We can't process a plugin which failed to start processing.
-            buffers.clear_all_outputs(proc_info.frames);
+            clear_outputs(proc_info, buffers);
             return;
         }
 
@@ -221,7 +288,7 @@ impl PluginInstanceHostAudioThread {
                 self.plugin.stop_processing();
 
                 self.state.set(PluginState::ActiveAndSleeping);
-                buffers.clear_all_outputs(proc_info.frames);
+                clear_outputs(proc_info, buffers);
                 return;
             }
         }
@@ -234,7 +301,7 @@ impl PluginInstanceHostAudioThread {
             if !self.process_requested.load(Ordering::Relaxed) && !has_in_events {
                 // The plugin is sleeping, there is no request to wake it up, and there
                 // are no events to process.
-                buffers.clear_all_outputs(proc_info.frames);
+                clear_outputs(proc_info, buffers);
                 return;
             }
 
@@ -243,7 +310,7 @@ impl PluginInstanceHostAudioThread {
             if let Err(_) = self.plugin.start_processing() {
                 // The plugin failed to start processing.
                 self.state.set(PluginState::ActiveWithError);
-                buffers.clear_all_outputs(proc_info.frames);
+                clear_outputs(proc_info, buffers);
                 return;
             }
 
@@ -284,7 +351,7 @@ impl PluginInstanceHostAudioThread {
             }
             ProcessStatus::Error => {
                 // Discard all output buffers.
-                buffers.clear_all_outputs(proc_info.frames);
+                clear_outputs(proc_info, buffers);
             }
         }
 

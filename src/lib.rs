@@ -2,7 +2,6 @@
 
 mod engine;
 mod event;
-mod garbage_collector;
 mod graph;
 mod host_request;
 mod plugin_scanner;

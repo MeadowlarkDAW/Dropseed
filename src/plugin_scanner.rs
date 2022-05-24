@@ -11,13 +11,7 @@ use crate::plugin::{PluginDescriptor, PluginFactory, PluginSaveState};
 use crate::HostInfo;
 
 #[cfg(feature = "clap-host")]
-use crate::clap::plugin::ClapPluginFactory;
-
-#[cfg(feature = "clap-host")]
 const DEFAULT_CLAP_SCAN_DIRECTORIES: [&'static str; 2] = ["/usr/lib/clap", "/usr/local/lib/clap"];
-
-#[cfg(feature = "clap-host")]
-const DEFAULT_LOCAL_CLAP_SCAN_DIRECTORY: &'static str = "/.clap";
 
 const MAX_SCAN_DEPTH: usize = 10;
 
@@ -45,12 +39,11 @@ impl std::fmt::Display for PluginFormat {
 pub struct ScannedPlugin {
     pub description: PluginDescriptor,
     pub format: PluginFormat,
-    pub format_version: Option<String>,
+    pub format_version: String,
     pub key: ScannedPluginKey,
 }
 
 struct ScannedPluginFactory {
-    pub description: PluginDescriptor,
     pub rdn: Shared<String>,
     pub format: PluginFormat,
 
@@ -229,14 +222,13 @@ impl PluginScanner {
                             scanned_plugins.push(ScannedPlugin {
                                 description: f.description().clone(),
                                 format: PluginFormat::Clap,
-                                format_version: Some(format_version),
+                                format_version,
                                 key: key.clone(),
                             });
 
                             if let Some(_) = self.scanned_external_plugins.insert(
                                 key,
                                 ScannedPluginFactory {
-                                    description: f.description().clone(),
                                     rdn: Shared::new(&self.coll_handle, id.clone()),
                                     format: PluginFormat::Clap,
                                     factory: Box::new(f),
@@ -278,7 +270,6 @@ impl PluginScanner {
 
         let scanned_plugin = ScannedPluginFactory {
             factory,
-            description,
             rdn: Shared::new(&self.coll_handle, key.rdn.clone()),
             format: PluginFormat::Internal,
         };
@@ -308,8 +299,6 @@ impl PluginScanner {
                 log::warn!("Plugin with ID {} attempted to call host_request.request_callback() during PluginFactory::new(). Request was ignored.", id);
             }
         };
-
-        let mut try_other_formats = false;
 
         let mut factory = None;
         let mut status = Ok(());
@@ -376,14 +365,14 @@ impl PluginScanner {
             }
 
             match factory.factory.new(host_request.clone(), &self.coll_handle) {
-                Ok(plugin_main_thread) => {
+                Ok(mut plugin_main_thread) => {
                     check_for_invalid_host_callbacks(&host_request, &factory.rdn);
 
                     if let Err(e) =
                         plugin_main_thread.init(save_state._preset.clone(), &self.coll_handle)
                     {
                         status = Err(NewPluginInstanceError::PluginFailedToInit(
-                            *factory.rdn.clone(),
+                            (*factory.rdn).clone(),
                             e,
                         ));
                     } else {
@@ -396,7 +385,7 @@ impl PluginScanner {
                     check_for_invalid_host_callbacks(&host_request, &factory.rdn);
 
                     status = Err(NewPluginInstanceError::FactoryFailedToCreateNewInstance(
-                        *factory.rdn.clone(),
+                        (*factory.rdn).clone(),
                         e,
                     ));
                 }
@@ -410,9 +399,8 @@ impl PluginScanner {
         }
 
         CreatePluginResult {
-            plugin_host: PluginInstanceHost::new(id, main_thread, host_request, &self.coll_handle),
+            plugin_host: PluginInstanceHost::new(id, Some(save_state), main_thread, host_request),
             status,
-            save_state,
         }
     }
 }
@@ -420,7 +408,6 @@ impl PluginScanner {
 pub(crate) struct CreatePluginResult {
     pub plugin_host: PluginInstanceHost,
     pub status: Result<(), NewPluginInstanceError>,
-    pub save_state: PluginSaveState,
 }
 
 #[derive(Debug)]

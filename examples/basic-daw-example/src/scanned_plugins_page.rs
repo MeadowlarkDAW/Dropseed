@@ -28,52 +28,16 @@ pub(crate) fn show(app: &mut BasicDawExampleGUI, ui: &mut egui::Ui) {
                 ui.end_row();
 
                 for plugin in app.plugin_list.iter() {
-                    ui.label(
-                        plugin.description.name.as_ref().map(|v| v.as_str()).unwrap_or("(none)"),
-                    );
-                    ui.label(
-                        plugin.description.version.as_ref().map(|v| v.as_str()).unwrap_or("(none)"),
-                    );
-                    ui.label(
-                        plugin
-                            .description
-                            .vendor
-                            .as_ref()
-                            .map(|v| v.as_str())
-                            .unwrap_or("(unkown)"),
-                    );
+                    ui.label(&plugin.description.name);
+                    ui.label(&plugin.description.version);
+                    ui.label(&plugin.description.vendor);
                     ui.label(format!("{}", plugin.format));
-                    ui.label(
-                        plugin.format_version.as_ref().map(|v| v.as_str()).unwrap_or("(unkown)"),
-                    );
-                    ui.label(
-                        plugin
-                            .description
-                            .description
-                            .as_ref()
-                            .map(|v| v.as_str())
-                            .unwrap_or("(none)"),
-                    );
+                    ui.label(&plugin.format_version);
+                    ui.label(&plugin.description.description);
                     ui.label(&plugin.description.id);
-                    ui.label(
-                        plugin.description.url.as_ref().map(|v| v.as_str()).unwrap_or("(none)"),
-                    );
-                    ui.label(
-                        plugin
-                            .description
-                            .manual_url
-                            .as_ref()
-                            .map(|v| v.as_str())
-                            .unwrap_or("(none)"),
-                    );
-                    ui.label(
-                        plugin
-                            .description
-                            .support_url
-                            .as_ref()
-                            .map(|v| v.as_str())
-                            .unwrap_or("(none)"),
-                    );
+                    ui.label(&plugin.description.url);
+                    ui.label(&plugin.description.manual_url);
+                    ui.label(&plugin.description.support_url);
                     ui.end_row();
                 }
             });

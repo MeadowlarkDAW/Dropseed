@@ -55,7 +55,7 @@ impl Drop for SharedClapLib {
     }
 }
 
-pub fn entry_init(
+pub(crate) fn entry_init(
     plugin_path: &PathBuf,
     coll_handle: &basedrop::Handle,
 ) -> Result<Vec<ClapPluginFactory>, Box<dyn Error>> {
@@ -219,7 +219,7 @@ impl PluginFactory for ClapPluginFactory {
                 raw_plugin,
                 activated: Arc::new(AtomicBool::new(false)),
                 id: Shared::clone(&self.id),
-                host_request: clap_host_request,
+                _host_request: clap_host_request,
                 _shared_lib: Shared::clone(&self.shared_lib),
             },
         );
@@ -236,7 +236,7 @@ pub(crate) struct SharedClapPluginInstance {
 
     // We hold on to these to make sure these stay alive for as long as a
     // reference to this struct exists.
-    host_request: ClapHostRequest,
+    _host_request: ClapHostRequest,
     _shared_lib: Shared<SharedClapLib>,
 }
 
@@ -407,7 +407,7 @@ impl ClapPluginMainThread {
                         Some(n.to_string())
                     }
                 }
-                Err(e) => {
+                Err(_) => {
                     log::warn!("Failed to get clap_audio_port_info.name from plugin instance {}", &*self.shared_plugin.id);
                     None
                 }
@@ -445,7 +445,7 @@ impl ClapPluginMainThread {
                         Some(n.to_string())
                     }
                 }
-                Err(e) => {
+                Err(_) => {
                     log::warn!("Failed to get clap_audio_port_info.name from plugin instance {}", &*self.shared_plugin.id);
                     None
                 }
@@ -498,7 +498,7 @@ impl PluginMainThread for ClapPluginMainThread {
         sample_rate: SampleRate,
         min_frames: u32,
         max_frames: u32,
-        coll_handle: &basedrop::Handle,
+        _coll_handle: &basedrop::Handle,
     ) -> Result<Box<dyn PluginAudioThread>, Box<dyn Error>> {
         if self.shared_plugin.activated.load(Ordering::Relaxed) {
             return Err("Plugin already activated".into());
@@ -568,7 +568,7 @@ impl PluginMainThread for ClapPluginMainThread {
     ///
     /// [main-thread & !active_state]
     fn audio_ports_extension(
-        &self,
+        &mut self,
     ) -> Result<ext::audio_ports::AudioPortsExtension, Box<dyn Error>> {
         let res = self.parse_audio_ports_extension();
 

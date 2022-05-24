@@ -35,6 +35,8 @@ impl Verifier {
         &mut self,
         schedule: &Schedule,
     ) -> Result<(), VerifyScheduleError> {
+        todo!();
+
         // TODO: verifying that there are not data races between parallel threads once we
         // have multithreaded scheduling.
 

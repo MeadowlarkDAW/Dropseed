@@ -32,7 +32,7 @@ impl RawAudioChannelBuffers {
     }
 
     unsafe fn f32_unchecked_mut(&mut self) -> &mut SmallVec<[SharedBuffer<f32>; 2]> {
-        if let RawAudioChannelBuffers::F32(b) = &mut self {
+        if let RawAudioChannelBuffers::F32(b) = self {
             b
         } else {
             #[cfg(debug_assertions)]
@@ -74,7 +74,7 @@ pub struct AudioPortBuffer {
 
 impl std::fmt::Debug for AudioPortBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.raw_channels {
+        match &self.raw_channels {
             RawAudioChannelBuffers::F32(buffers) => {
                 f.debug_list().entries(buffers.iter().map(|b| b.buffer.1)).finish()
             }
@@ -111,7 +111,7 @@ impl AudioPortBuffer {
     }
 
     #[inline]
-    pub fn mono<'a>(&self, index: usize) -> MonoBuffer<'a> {
+    pub fn mono<'a>(&self) -> MonoBuffer<'a> {
         // Safe because we are guaranteed to have at-least one channel.
         unsafe {
             match &self.raw_channels {
@@ -126,7 +126,7 @@ impl AudioPortBuffer {
     }
 
     #[inline]
-    pub fn stereo<'a>(&self, index: usize) -> Option<StereoBuffer<'a>> {
+    pub fn stereo<'a>(&self) -> Option<StereoBuffer<'a>> {
         unsafe {
             match &self.raw_channels {
                 RawAudioChannelBuffers::F32(b) => {
@@ -184,7 +184,7 @@ pub struct AudioPortBufferMut {
 
 impl std::fmt::Debug for AudioPortBufferMut {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.raw_channels {
+        match &self.raw_channels {
             RawAudioChannelBuffers::F32(buffers) => {
                 f.debug_list().entries(buffers.iter().map(|b| b.buffer.1)).finish()
             }
@@ -237,7 +237,7 @@ impl AudioPortBufferMut {
     }
 
     #[inline]
-    pub fn mono<'a>(&self, index: usize) -> MonoBuffer<'a> {
+    pub fn mono<'a>(&self) -> MonoBuffer<'a> {
         // Safe because we are guaranteed to have at-least one channel.
         unsafe {
             match &self.raw_channels {
@@ -252,7 +252,7 @@ impl AudioPortBufferMut {
     }
 
     #[inline]
-    pub fn mono_mut<'a>(&mut self, index: usize) -> MonoBufferMut<'a> {
+    pub fn mono_mut<'a>(&mut self) -> MonoBufferMut<'a> {
         // Safe because we are guaranteed to have at-least one channel.
         unsafe {
             match &mut self.raw_channels {
@@ -267,7 +267,7 @@ impl AudioPortBufferMut {
     }
 
     #[inline]
-    pub fn stereo<'a>(&self, index: usize) -> Option<StereoBuffer<'a>> {
+    pub fn stereo<'a>(&self) -> Option<StereoBuffer<'a>> {
         unsafe {
             match &self.raw_channels {
                 RawAudioChannelBuffers::F32(b) => {
@@ -295,7 +295,7 @@ impl AudioPortBufferMut {
     }
 
     #[inline]
-    pub fn stereo_mut<'a>(&mut self, index: usize) -> Option<StereoBufferMut<'a>> {
+    pub fn stereo_mut<'a>(&mut self) -> Option<StereoBufferMut<'a>> {
         unsafe {
             match &mut self.raw_channels {
                 RawAudioChannelBuffers::F32(b) => {
@@ -348,19 +348,19 @@ impl AudioPortBufferMut {
         )
     }
 
-    pub fn clear_all(&mut self, frames: usize) {
+    pub unsafe fn clear_all_unchecked(&mut self, frames: usize) {
         // TODO: set silence flags
 
-        match self.raw_channels {
+        match &self.raw_channels {
             RawAudioChannelBuffers::F32(buffers) => {
                 for rc_buf in buffers.iter() {
-                    let buf = unsafe { &mut *rc_buf.buffer.0.get() };
+                    let buf = rc_buf.slice_from_frames_unchecked_mut(frames);
                     buf.fill(0.0);
                 }
             }
             RawAudioChannelBuffers::F64(buffers) => {
                 for rc_buf in buffers.iter() {
-                    let buf = unsafe { &mut *rc_buf.buffer.0.get() };
+                    let buf = rc_buf.slice_from_frames_unchecked_mut(frames);
                     buf.fill(0.0);
                 }
             }

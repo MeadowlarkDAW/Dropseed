@@ -12,8 +12,8 @@ use std::time::Duration;
 mod effect_rack_page;
 mod scanned_plugins_page;
 
-const MIN_BLOCK_SIZE: usize = 1;
-const MAX_BLOCK_SIZE: usize = 512;
+const MIN_BLOCK_SIZE: u32 = 1;
+const MAX_BLOCK_SIZE: u32 = 512;
 const GRAPH_IN_CHANNELS: u16 = 2;
 const GRAPH_OUT_CHANNELS: u16 = 2;
 
@@ -346,7 +346,7 @@ impl eframe::App for BasicDawExampleGUI {
             Tab::ScannedPlugins => scanned_plugins_page::show(self, ui),
         });
 
-        self.engine.on_main_thread();
+        self.engine.on_idle();
     }
 
     fn on_exit(&mut self, _gl: &eframe::glow::Context) {

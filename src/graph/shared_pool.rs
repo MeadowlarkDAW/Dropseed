@@ -26,7 +26,7 @@ impl std::fmt::Debug for DebugBufferType {
 
 /// Used for debugging and verifying purposes.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct DebugBufferID {
+pub struct DebugBufferID {
     buffer_type: DebugBufferType,
     index: u32,
 }
@@ -237,7 +237,7 @@ impl SharedPool {
             }
         }
 
-        let slot = self.audio_buffers_f32.get_unchecked_mut(index);
+        let slot = &mut self.audio_buffers_f32[index];
 
         if let Some(b) = slot {
             b.clone()
@@ -255,7 +255,7 @@ impl SharedPool {
                 ),
             });
 
-            slot.unwrap().clone()
+            slot.as_ref().unwrap().clone()
         }
     }
 
@@ -267,7 +267,7 @@ impl SharedPool {
             }
         }
 
-        let slot = self.audio_buffers_f64.get_unchecked_mut(index);
+        let slot = &mut self.audio_buffers_f64[index];
 
         if let Some(b) = slot {
             b.clone()
@@ -285,7 +285,7 @@ impl SharedPool {
                 ),
             });
 
-            slot.unwrap().clone()
+            slot.as_ref().unwrap().clone()
         }
     }
 

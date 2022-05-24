@@ -203,10 +203,10 @@ impl ClapProcess {
         &self.raw
     }
 
-    pub fn sync_output_constant_masks(&mut self, buffers: &ProcBuffers) {
+    pub fn sync_output_constant_masks(&mut self, buffers: &mut ProcBuffers) {
         debug_assert_eq!(buffers.audio_out.len(), self.audio_out_port_list.len());
         for (audio_out_port, host_audio_out_port) in
-            self.audio_out_port_list.iter().zip(buffers.audio_out.iter())
+            self.audio_out_port_list.iter().zip(buffers.audio_out.iter_mut())
         {
             host_audio_out_port.set_constant_mask(audio_out_port.constant_mask);
         }

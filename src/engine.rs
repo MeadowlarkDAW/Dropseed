@@ -19,18 +19,15 @@ use crate::graph::{
 };
 use crate::plugin::{PluginFactory, PluginSaveState};
 use crate::plugin_scanner::PluginScanner;
-use crate::{
-    garbage_collector::run_garbage_collector_thread, host_request::HostInfo,
-    plugin_scanner::ScannedPluginKey,
-};
+use crate::{host_request::HostInfo, plugin_scanner::ScannedPluginKey};
 
 pub struct RustyDAWEngine {
     audio_graph: Option<AudioGraph>,
     plugin_scanner: PluginScanner,
-    garbage_coll_handle: Option<std::thread::JoinHandle<()>>,
-    garbage_coll_run: Arc<AtomicBool>,
+    //garbage_coll_handle: Option<std::thread::JoinHandle<()>>,
+    //garbage_coll_run: Arc<AtomicBool>,
     event_tx: Sender<DAWEngineEvent>,
-    coll_handle: basedrop::Handle,
+    collector: basedrop::Collector,
     host_info: Shared<HostInfo>,
 }
 
@@ -43,6 +40,8 @@ impl RustyDAWEngine {
         // Set up and run garbage collector wich collects and safely drops garbage from
         // the audio thread.
         let collector = Collector::new();
+
+        /*
         let coll_handle = collector.handle();
         let garbage_coll_run = Arc::new(AtomicBool::new(true));
         let garbage_coll_handle = run_garbage_collector_thread(
@@ -50,10 +49,11 @@ impl RustyDAWEngine {
             garbage_collect_interval,
             Arc::clone(&garbage_coll_run),
         );
+        */
 
-        let host_info = Shared::new(&coll_handle, host_info);
+        let host_info = Shared::new(&collector.handle(), host_info);
 
-        let mut plugin_scanner = PluginScanner::new(coll_handle.clone(), Shared::clone(&host_info));
+        let mut plugin_scanner = PluginScanner::new(collector.handle(), Shared::clone(&host_info));
 
         let (event_tx, event_rx) = channel::unbounded::<DAWEngineEvent>();
 
@@ -65,10 +65,11 @@ impl RustyDAWEngine {
             Self {
                 audio_graph: None,
                 plugin_scanner,
-                garbage_coll_handle: Some(garbage_coll_handle),
-                garbage_coll_run,
+                //garbage_coll_handle: Some(garbage_coll_handle),
+                //garbage_coll_run,
                 event_tx,
-                coll_handle,
+                collector,
+                //coll_handle,
                 host_info,
             },
             event_rx,
@@ -115,7 +116,7 @@ impl RustyDAWEngine {
         log::info!("Activating RustyDAW engine...");
 
         let (mut audio_graph, shared_schedule) = AudioGraph::new(
-            self.coll_handle.clone(),
+            self.collector.handle(),
             Shared::clone(&self.host_info),
             num_audio_in_channels,
             num_audio_out_channels,
@@ -196,16 +197,21 @@ impl RustyDAWEngine {
                         };
 
                         audio_graph.add_new_plugin_instance(
-                            &key,
-                            Some(save_state),
+                            save_state,
                             &mut self.plugin_scanner,
                             true,
                             true,
                         )
                     } else {
+                        let save_state = PluginSaveState {
+                            key: key.clone(),
+                            _preset: (), // TODO: Get default preset.
+                            activation_requested: true,
+                            audio_in_out_channels: (0, 0),
+                        };
+
                         audio_graph.add_new_plugin_instance(
-                            &key,
-                            None,
+                            save_state,
                             &mut self.plugin_scanner,
                             true,
                             true,
@@ -299,7 +305,7 @@ impl RustyDAWEngine {
 
         log::info!("Deactivating RustyDAW engine");
 
-        let save_state = self.audio_graph.as_ref().unwrap().collect_save_state();
+        let save_state = self.audio_graph.as_mut().unwrap().collect_save_state();
 
         self.audio_graph = None;
 
@@ -363,13 +369,15 @@ impl RustyDAWEngine {
 
     /// Call this method periodically (every other frame or so). This is needed to properly
     /// handle the state of plugins.
-    pub fn on_main_thread(&mut self) {
+    pub fn on_idle(&mut self) {
         if let Some(audio_graph) = &mut self.audio_graph {
             let mut recompile = false;
 
-            let mut changed_plugins = audio_graph.on_main_thread();
+            let mut changed_plugins = audio_graph.on_idle();
 
             for (plugin_id, res) in changed_plugins.drain(..) {
+                todo!()
+
                 /*
                 match res {
                     OnIdleResult::Activated(status) => match status {
@@ -429,6 +437,8 @@ impl RustyDAWEngine {
                 self.compile_audio_graph();
             }
         }
+
+        self.collector.collect();
     }
 
     fn compile_audio_graph(&mut self) {
@@ -456,12 +466,16 @@ impl Drop for RustyDAWEngine {
         // Make sure all of the stuff in the audio thread gets dropped properly.
         let _ = self.audio_graph;
 
+        self.collector.collect();
+
+        /*
         self.garbage_coll_run.store(false, Ordering::Relaxed);
         if let Some(handle) = self.garbage_coll_handle.take() {
             if let Err(e) = handle.join() {
                 log::error!("Error while stopping garbage collector thread: {:?}", e);
             }
         }
+        */
     }
 }
 
