@@ -18,6 +18,7 @@ use schedule::Schedule;
 use shared_pool::{PluginInstanceHostEntry, SharedBufferPool, SharedPluginPool};
 use verifier::Verifier;
 
+use crate::event::DAWEngineEvent;
 use crate::graph::plugin_host::PluginInstanceHost;
 use crate::graph::shared_pool::SharedPluginHostAudioThread;
 use crate::host_request::HostRequest;
@@ -70,6 +71,10 @@ pub(crate) struct AudioGraph {
     graph_in_channels: u16,
     graph_out_channels: u16,
 
+    graph_in_rdn: Shared<String>,
+    graph_out_rdn: Shared<String>,
+    temp_rdn: Shared<String>,
+
     sample_rate: SampleRate,
     min_frames: u32,
     max_frames: u32,
@@ -98,16 +103,20 @@ impl AudioGraph {
             &coll_handle,
         );
 
+        let graph_in_rdn = Shared::new(&coll_handle, String::from("org.rustydaw.graph_in_node"));
+        let graph_out_rdn = Shared::new(&coll_handle, String::from("org.rustydaw.graph_out_node"));
+        let temp_rdn = Shared::new(&coll_handle, String::from("org.rustydaw.temporary_plugin_rdn"));
+
         // These will get overwritten in the `reset()` method.
         let graph_in_node_id = PluginInstanceID {
             node_ref: audio_graph::NodeRef::new(0),
             format: shared_pool::PluginInstanceType::GraphInput,
-            name: None,
+            rdn: Shared::clone(&graph_in_rdn),
         };
         let graph_out_node_id = PluginInstanceID {
             node_ref: audio_graph::NodeRef::new(1),
             format: shared_pool::PluginInstanceType::GraphOutput,
-            name: None,
+            rdn: Shared::clone(&graph_out_rdn),
         };
 
         let mut new_self = Self {
@@ -122,6 +131,9 @@ impl AudioGraph {
             graph_out_node_id,
             graph_in_channels,
             graph_out_channels,
+            graph_in_rdn,
+            graph_out_rdn,
+            temp_rdn,
             sample_rate,
             min_frames,
             max_frames,
@@ -150,7 +162,7 @@ impl AudioGraph {
         let temp_id = PluginInstanceID {
             node_ref: audio_graph::NodeRef::new(0),
             format: shared_pool::PluginInstanceType::Unloaded,
-            name: None,
+            rdn: Shared::clone(&self.temp_rdn),
         };
 
         let node_ref = self.abstract_graph.node(temp_id);
@@ -235,30 +247,17 @@ impl AudioGraph {
             return Ok(PluginActivationStatus::ActivationError(e));
         }
 
-        let (plugin_audio_thread, activation_status) = match entry.plugin_host.audio_ports_ext() {
-            Ok(audio_ports_ext) => {
-                match entry.plugin_host.activate(
-                    self.sample_rate,
-                    self.min_frames as u32,
-                    self.max_frames as u32,
-                    &self.coll_handle,
-                ) {
-                    Ok(plugin_audio_thread) => (
-                        Some(SharedPluginHostAudioThread::new(
-                            plugin_audio_thread,
-                            &self.coll_handle,
-                        )),
-                        PluginActivationStatus::Activated { audio_ports: audio_ports_ext },
-                    ),
-                    Err(e) => (None, PluginActivationStatus::ActivationError(e)),
-                }
-            }
-            Err(e) => (
-                None,
-                PluginActivationStatus::ActivationError(
-                    ActivatePluginError::PluginFailedToGetAudioPortsExt(e),
-                ),
+        let (plugin_audio_thread, activation_status) = match entry.plugin_host.activate(
+            self.sample_rate,
+            self.min_frames as u32,
+            self.max_frames as u32,
+            &self.coll_handle,
+        ) {
+            Ok((plugin_audio_thread, audio_ports)) => (
+                Some(SharedPluginHostAudioThread::new(plugin_audio_thread, &self.coll_handle)),
+                PluginActivationStatus::Activated { audio_ports },
             ),
+            Err(e) => (None, PluginActivationStatus::ActivationError(e)),
         };
 
         entry.audio_thread = plugin_audio_thread;
@@ -266,52 +265,7 @@ impl AudioGraph {
         if let PluginActivationStatus::Activated { audio_ports } = &activation_status {
             // Update the number of channels (ports) in our abstract graph.
 
-            let num_in_channels = audio_ports.total_in_channels();
-            let num_out_channels = audio_ports.total_out_channels();
-
-            if entry.audio_in_channel_refs.len() < num_in_channels {
-                let old_len = entry.audio_in_channel_refs.len();
-                for i in old_len as u16..num_in_channels as u16 {
-                    let port_ref = self
-                        .abstract_graph
-                        .port(
-                            entry.plugin_host.id.node_ref,
-                            DefaultPortType::Audio,
-                            PortID::AudioIn(i),
-                        )
-                        .unwrap();
-
-                    entry.audio_in_channel_refs.push(port_ref);
-                }
-            } else if entry.audio_in_channel_refs.len() > num_in_channels {
-                let num_to_remove = entry.audio_in_channel_refs.len() - num_in_channels;
-                for _ in 0..num_to_remove {
-                    let port_ref = entry.audio_in_channel_refs.pop().unwrap();
-                    self.abstract_graph.delete_port(port_ref).unwrap();
-                }
-            }
-
-            if entry.audio_out_channel_refs.len() < num_out_channels {
-                let old_len = entry.audio_out_channel_refs.len();
-                for i in old_len as u16..num_out_channels as u16 {
-                    let port_ref = self
-                        .abstract_graph
-                        .port(
-                            entry.plugin_host.id.node_ref,
-                            DefaultPortType::Audio,
-                            PortID::AudioOut(i),
-                        )
-                        .unwrap();
-
-                    entry.audio_out_channel_refs.push(port_ref);
-                }
-            } else if entry.audio_out_channel_refs.len() > num_out_channels {
-                let num_to_remove = entry.audio_out_channel_refs.len() - num_out_channels;
-                for _ in 0..num_to_remove {
-                    let port_ref = entry.audio_out_channel_refs.pop().unwrap();
-                    self.abstract_graph.delete_port(port_ref).unwrap();
-                }
-            }
+            update_plugin_ports(&mut self.abstract_graph, entry, audio_ports);
         }
 
         Ok(activation_status)
@@ -625,12 +579,12 @@ impl AudioGraph {
         let mut graph_in_node_id = PluginInstanceID {
             node_ref: audio_graph::NodeRef::new(0),
             format: shared_pool::PluginInstanceType::GraphInput,
-            name: None,
+            rdn: Shared::clone(&self.graph_in_rdn),
         };
         let mut graph_out_node_id = PluginInstanceID {
             node_ref: audio_graph::NodeRef::new(1),
             format: shared_pool::PluginInstanceType::GraphOutput,
-            name: None,
+            rdn: Shared::clone(&self.graph_out_rdn),
         };
 
         graph_in_node_id.node_ref = self.abstract_graph.node(graph_in_node_id.clone());
@@ -798,10 +752,12 @@ impl AudioGraph {
         }
     }
 
-    pub(crate) fn on_idle(&mut self) -> SmallVec<[(PluginInstanceID, OnIdleResult); 4]> {
-        let mut changed_plugins: SmallVec<[(PluginInstanceID, OnIdleResult); 4]> = SmallVec::new();
+    pub(crate) fn on_idle(&mut self) -> (SmallVec<[DAWEngineEvent; 4]>, bool) {
+        let mut changed_plugins: SmallVec<[DAWEngineEvent; 4]> = SmallVec::new();
 
         let mut plugins_to_remove: SmallVec<[PluginInstanceID; 4]> = SmallVec::new();
+
+        let mut recompile_graph = false;
 
         for plugin in self.shared_plugin_pool.plugins.values_mut() {
             match plugin.plugin_host.on_idle(
@@ -811,12 +767,43 @@ impl AudioGraph {
                 &self.coll_handle,
             ) {
                 OnIdleResult::Ok => {}
+                OnIdleResult::PluginDeactivated => {
+                    recompile_graph = true;
+
+                    changed_plugins.push(DAWEngineEvent::PluginDeactivated {
+                        plugin_id: plugin.plugin_host.id.clone(),
+                        status: Ok(()),
+                    });
+                }
+                OnIdleResult::PluginActivated(plugin_audio_thread, audio_ports) => {
+                    plugin.audio_thread = Some(SharedPluginHostAudioThread::new(
+                        plugin_audio_thread,
+                        &self.coll_handle,
+                    ));
+
+                    update_plugin_ports(&mut self.abstract_graph, plugin, &audio_ports);
+
+                    recompile_graph = true;
+
+                    changed_plugins.push(DAWEngineEvent::PluginActivated {
+                        plugin_id: plugin.plugin_host.id.clone(),
+                        new_audio_ports: audio_ports,
+                    });
+                }
                 OnIdleResult::PluginReadyToRemove => {
                     plugins_to_remove.push(plugin.plugin_host.id.clone());
-                    changed_plugins
-                        .push((plugin.plugin_host.id.clone(), OnIdleResult::PluginReadyToRemove));
+
+                    // The user should have already been alerted of the plugin being removed
+                    // in a previous `DAWEngineEvent::AudioGraphModified` event.
                 }
-                res => changed_plugins.push((plugin.plugin_host.id.clone(), res)),
+                OnIdleResult::PluginFailedToActivate(e) => {
+                    recompile_graph = true;
+
+                    changed_plugins.push(DAWEngineEvent::PluginDeactivated {
+                        plugin_id: plugin.plugin_host.id.clone(),
+                        status: Err(e),
+                    });
+                }
             }
         }
 
@@ -824,7 +811,50 @@ impl AudioGraph {
             let _ = self.shared_plugin_pool.plugins.remove(plugin);
         }
 
-        changed_plugins
+        (changed_plugins, recompile_graph)
+    }
+}
+
+fn update_plugin_ports(
+    abstract_graph: &mut Graph<PluginInstanceID, PortID, DefaultPortType>,
+    entry: &mut PluginInstanceHostEntry,
+    audio_ports: &AudioPortsExtension,
+) {
+    let num_in_channels = audio_ports.total_in_channels();
+    let num_out_channels = audio_ports.total_out_channels();
+
+    if entry.audio_in_channel_refs.len() < num_in_channels {
+        let old_len = entry.audio_in_channel_refs.len();
+        for i in old_len as u16..num_in_channels as u16 {
+            let port_ref = abstract_graph
+                .port(entry.plugin_host.id.node_ref, DefaultPortType::Audio, PortID::AudioIn(i))
+                .unwrap();
+
+            entry.audio_in_channel_refs.push(port_ref);
+        }
+    } else if entry.audio_in_channel_refs.len() > num_in_channels {
+        let num_to_remove = entry.audio_in_channel_refs.len() - num_in_channels;
+        for _ in 0..num_to_remove {
+            let port_ref = entry.audio_in_channel_refs.pop().unwrap();
+            abstract_graph.delete_port(port_ref).unwrap();
+        }
+    }
+
+    if entry.audio_out_channel_refs.len() < num_out_channels {
+        let old_len = entry.audio_out_channel_refs.len();
+        for i in old_len as u16..num_out_channels as u16 {
+            let port_ref = abstract_graph
+                .port(entry.plugin_host.id.node_ref, DefaultPortType::Audio, PortID::AudioOut(i))
+                .unwrap();
+
+            entry.audio_out_channel_refs.push(port_ref);
+        }
+    } else if entry.audio_out_channel_refs.len() > num_out_channels {
+        let num_to_remove = entry.audio_out_channel_refs.len() - num_out_channels;
+        for _ in 0..num_to_remove {
+            let port_ref = entry.audio_out_channel_refs.pop().unwrap();
+            abstract_graph.delete_port(port_ref).unwrap();
+        }
     }
 }
 
@@ -868,6 +898,12 @@ pub struct NewPluginRes {
 pub struct PluginEdges {
     pub incoming: SmallVec<[Edge; 8]>,
     pub outgoing: SmallVec<[Edge; 8]>,
+}
+
+impl PluginEdges {
+    pub fn emtpy() -> Self {
+        Self { incoming: SmallVec::new(), outgoing: SmallVec::new() }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

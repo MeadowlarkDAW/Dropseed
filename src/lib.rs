@@ -14,7 +14,7 @@ pub mod plugin;
 pub use engine::{EdgeReq, ModifyGraphRequest, ModifyGraphRes, PluginIDReq, RustyDAWEngine};
 pub use event::{DAWEngineEvent, PluginScannerEvent};
 pub use graph::shared_pool::PluginInstanceID;
-pub use graph::SharedSchedule;
+pub use graph::{Edge, PluginActivationStatus, PluginEdges, SharedSchedule};
 pub use host_request::{HostInfo, HostRequest};
 pub use plugin::audio_buffer::{AudioPortBuffer, AudioPortBufferMut};
 pub use plugin::ext::audio_ports::{AudioPortInfo, AudioPortsExtension, MainPortsLayout};

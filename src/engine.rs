@@ -272,6 +272,10 @@ impl RustyDAWEngine {
                 }
             }
 
+            // Don't include the graph in/out "plugins" in the result.
+            let _ = affected_plugins.remove(audio_graph.graph_in_node_id());
+            let _ = affected_plugins.remove(audio_graph.graph_out_node_id());
+
             let updated_plugin_edges: Vec<(PluginInstanceID, PluginEdges)> = affected_plugins
                 .iter()
                 .filter(|plugin_id| !removed_plugins.contains(plugin_id))
@@ -371,66 +375,10 @@ impl RustyDAWEngine {
     /// handle the state of plugins.
     pub fn on_idle(&mut self) {
         if let Some(audio_graph) = &mut self.audio_graph {
-            let mut recompile = false;
+            let (mut changed_plugins, recompile) = audio_graph.on_idle();
 
-            let mut changed_plugins = audio_graph.on_idle();
-
-            for (plugin_id, res) in changed_plugins.drain(..) {
-                todo!()
-
-                /*
-                match res {
-                    OnIdleResult::Activated(status) => match status {
-                        PluginActivationStatus::Activated => {
-                            self.event_tx
-                                .send(DAWEngineEvent::PluginActivated {
-                                    plugin_id: plugin_id.clone(),
-                                    new_audio_ports: None,
-                                })
-                                .unwrap();
-                        }
-                        PluginActivationStatus::ActivatedWithNewPortConfig { audio_ports } => {
-                            recompile = true;
-
-                            self.event_tx
-                                .send(DAWEngineEvent::PluginActivated {
-                                    plugin_id: plugin_id.clone(),
-                                    new_audio_ports: Some(audio_ports),
-                                })
-                                .unwrap();
-                        }
-                        PluginActivationStatus::Inactive => {
-                            self.event_tx
-                                .send(DAWEngineEvent::PluginDeactivated {
-                                    plugin_id: plugin_id.clone(),
-                                    status: Ok(()),
-                                })
-                                .unwrap();
-                        }
-                        PluginActivationStatus::Error(e) => {
-                            self.event_tx
-                                .send(DAWEngineEvent::PluginDeactivated {
-                                    plugin_id: plugin_id.clone(),
-                                    status: Err(e),
-                                })
-                                .unwrap();
-                        }
-                    },
-                    OnIdleResult::Deactivated => {
-                        self.event_tx
-                            .send(DAWEngineEvent::PluginDeactivated {
-                                plugin_id: plugin_id.clone(),
-                                status: Ok(()),
-                            })
-                            .unwrap();
-                    }
-                    OnIdleResult::Removed => {
-                        // We don't really need to alert the user because they would have already
-                        // seen that the plugin was being removed in a `DAWEngineEvent::AudioGraphModified`
-                        // event.
-                    }
-                }
-                */
+            for msg in changed_plugins.drain(..) {
+                self.event_tx.send(msg).unwrap();
             }
 
             if recompile {

@@ -73,6 +73,8 @@ pub(crate) struct PluginScanner {
 
     host_info: Shared<HostInfo>,
 
+    unkown_rdn: Shared<String>,
+
     coll_handle: basedrop::Handle,
 }
 
@@ -86,6 +88,8 @@ impl PluginScanner {
             clap_scan_directories: Vec::new(),
 
             host_info,
+
+            unkown_rdn: Shared::new(&coll_handle, String::from("org.rustydaw.unkown")),
 
             coll_handle,
         }
@@ -356,14 +360,17 @@ impl PluginScanner {
             }
         }
 
-        let mut id =
-            PluginInstanceID { node_ref, format: PluginInstanceType::Unloaded, name: None };
+        let mut id = PluginInstanceID {
+            node_ref,
+            format: PluginInstanceType::Unloaded,
+            rdn: Shared::clone(&self.unkown_rdn),
+        };
         let host_request = HostRequest::new(Shared::clone(&self.host_info));
         let mut main_thread = None;
 
         if let Some(factory) = factory {
             id.format = factory.format.into();
-            id.name = Some(factory.rdn.clone());
+            id.rdn = factory.rdn.clone();
 
             if save_state.key.format != factory.format {
                 save_state.key =
@@ -397,7 +404,7 @@ impl PluginScanner {
                 }
             };
         } else {
-            id.name = Some(Shared::new(&self.coll_handle, save_state.key.rdn.clone()));
+            id.rdn = Shared::new(&self.coll_handle, save_state.key.rdn.clone());
 
             if status.is_ok() {
                 status = Err(NewPluginInstanceError::NotFound(save_state.key.rdn.clone()));

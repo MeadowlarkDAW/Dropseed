@@ -87,7 +87,7 @@ impl PluginInstanceHost {
         min_frames: u32,
         max_frames: u32,
         coll_handle: &basedrop::Handle,
-    ) -> Result<PluginInstanceHostAudioThread, ActivatePluginError> {
+    ) -> Result<(PluginInstanceHostAudioThread, AudioPortsExtension), ActivatePluginError> {
         self.can_activate()?;
 
         let plugin_main_thread = self.main_thread.as_mut().unwrap();
@@ -96,19 +96,37 @@ impl PluginInstanceHost {
             save_state.activation_requested = true;
         }
 
+        let audio_ports = match plugin_main_thread.audio_ports_extension() {
+            Ok(audio_ports) => audio_ports,
+            Err(e) => {
+                self.state.set(PluginState::InactiveWithError);
+
+                return Err(ActivatePluginError::PluginFailedToGetAudioPortsExt(e));
+            }
+        };
+
+        self.audio_ports_ext = Some(audio_ports.clone());
+        if let Some(save_state) = &mut self.save_state {
+            save_state.audio_in_out_channels =
+                (audio_ports.total_in_channels() as u16, audio_ports.total_out_channels() as u16);
+        }
+
         match plugin_main_thread.activate(sample_rate, min_frames, max_frames, coll_handle) {
             Ok(plugin_audio_thread) => {
                 self.process_requested.store(true, Ordering::Relaxed);
                 self.deactivate_requested.store(false, Ordering::Relaxed);
                 self.state.set(PluginState::ActiveAndSleeping);
 
-                Ok(PluginInstanceHostAudioThread {
-                    id: self.id.clone(),
-                    plugin: plugin_audio_thread,
-                    state: Arc::clone(&self.state),
-                    process_requested: Arc::clone(&self.process_requested),
-                    deactivate_requested: Arc::clone(&self.deactivate_requested),
-                })
+                Ok((
+                    PluginInstanceHostAudioThread {
+                        id: self.id.clone(),
+                        plugin: plugin_audio_thread,
+                        state: Arc::clone(&self.state),
+                        process_requested: Arc::clone(&self.process_requested),
+                        deactivate_requested: Arc::clone(&self.deactivate_requested),
+                    },
+                    audio_ports,
+                ))
             }
             Err(e) => {
                 self.state.set(PluginState::InactiveWithError);
@@ -136,28 +154,6 @@ impl PluginInstanceHost {
         self.remove_requested = true;
 
         self.schedule_deactivate();
-    }
-
-    pub fn audio_ports_ext(&mut self) -> Result<AudioPortsExtension, Box<dyn Error>> {
-        if let Some(main_thread) = &mut self.main_thread {
-            match main_thread.audio_ports_extension() {
-                Ok(audio_ports_ext) => {
-                    if let Some(save_state) = &mut self.save_state {
-                        save_state.audio_in_out_channels = (
-                            audio_ports_ext.total_in_channels() as u16,
-                            audio_ports_ext.total_out_channels() as u16,
-                        );
-                    }
-
-                    self.audio_ports_ext = Some(audio_ports_ext.clone());
-
-                    Ok(audio_ports_ext)
-                }
-                Err(e) => Err(e),
-            }
-        } else {
-            Err("plugin is not loaded".into())
-        }
     }
 
     pub fn on_idle(
@@ -192,8 +188,10 @@ impl PluginInstanceHost {
                 self.restart_requested.store(false, Ordering::Relaxed);
 
                 match self.activate(sample_rate, min_frames, max_frames, coll_handle) {
-                    Ok(_) => return OnIdleResult::PluginRestarted,
-                    Err(e) => return OnIdleResult::PluginFailedToRestart(e),
+                    Ok((audio_thread, audio_ports)) => {
+                        return OnIdleResult::PluginActivated(audio_thread, audio_ports)
+                    }
+                    Err(e) => return OnIdleResult::PluginFailedToActivate(e),
                 }
             }
         }
@@ -214,8 +212,10 @@ impl PluginInstanceHost {
                         self.restart_requested.store(false, Ordering::Relaxed);
 
                         match self.activate(sample_rate, min_frames, max_frames, coll_handle) {
-                            Ok(_) => res = OnIdleResult::PluginRestarted,
-                            Err(e) => res = OnIdleResult::PluginFailedToRestart(e),
+                            Ok((audio_thread, audio_ports)) => {
+                                res = OnIdleResult::PluginActivated(audio_thread, audio_ports)
+                            }
+                            Err(e) => res = OnIdleResult::PluginFailedToActivate(e),
                         }
                     }
 
@@ -234,12 +234,12 @@ impl PluginInstanceHost {
     }
 }
 
-pub enum OnIdleResult {
+pub(crate) enum OnIdleResult {
     Ok,
     PluginDeactivated,
-    PluginRestarted,
+    PluginActivated(PluginInstanceHostAudioThread, AudioPortsExtension),
     PluginReadyToRemove,
-    PluginFailedToRestart(ActivatePluginError),
+    PluginFailedToActivate(ActivatePluginError),
 }
 
 pub(crate) struct PluginInstanceHostAudioThread {

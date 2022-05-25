@@ -4,13 +4,16 @@ use crossbeam::channel::Receiver;
 use eframe::egui;
 use rusty_daw_core::SampleRate;
 use rusty_daw_engine::{
-    DAWEngineEvent, EdgeReq, HostInfo, ModifyGraphRequest, PluginIDReq, PluginInstanceID,
-    PluginScannerEvent, PortType, RustyDAWEngine, ScannedPlugin, SharedSchedule,
+    DAWEngineEvent, Edge, EdgeReq, HostInfo, ModifyGraphRequest, PluginActivationStatus,
+    PluginEdges, PluginIDReq, PluginInstanceID, PluginScannerEvent, PortType, RustyDAWEngine,
+    ScannedPlugin, SharedSchedule,
 };
 use std::time::Duration;
 
 mod effect_rack_page;
 mod scanned_plugins_page;
+
+use effect_rack_page::{EffectRackPluginState, EffectRackState};
 
 const MIN_BLOCK_SIZE: u32 = 1;
 const MAX_BLOCK_SIZE: u32 = 512;
@@ -108,6 +111,8 @@ enum UIToAudioThreadMsg {
 pub struct EngineState {
     pub graph_in_node_id: PluginInstanceID,
     pub graph_out_node_id: PluginInstanceID,
+
+    pub effect_rack_state: EffectRackState,
 }
 
 struct BasicDawExampleGUI {
@@ -168,6 +173,10 @@ impl BasicDawExampleGUI {
                 // from an existing save state if you wish using
                 // `RustyDAWEngine::restore_audio_graph_from_save_state()`.
                 DAWEngineEvent::EngineDeactivated(res) => {
+                    if let Err(e) = res {
+                        println!("Engine crashed: {}", e);
+                    }
+
                     self.to_audio_thread_tx.push(UIToAudioThreadMsg::DropSharedSchedule).unwrap();
 
                     self.engine_state = None;
@@ -178,6 +187,7 @@ impl BasicDawExampleGUI {
                     self.engine_state = Some(EngineState {
                         graph_in_node_id: info.graph_in_node_id,
                         graph_out_node_id: info.graph_out_node_id,
+                        effect_rack_state: EffectRackState::new(),
                     });
 
                     self.to_audio_thread_tx
@@ -194,12 +204,83 @@ impl BasicDawExampleGUI {
                 // If the audio graph is in an invalid state as a result of restoring from
                 // the save state, then the `EngineDeactivated(Err(e))` event
                 // will be sent instead.
-                DAWEngineEvent::AudioGraphCleared => {}
+                DAWEngineEvent::AudioGraphCleared => {
+                    if let Some(engine_state) = &mut self.engine_state {
+                        engine_state.effect_rack_state.plugins.clear();
+                    }
+                }
 
                 // This message is sent whenever the audio graph has been modified.
                 //
                 // Be sure to update your UI from this new state.
-                DAWEngineEvent::AudioGraphModified(res) => {}
+                DAWEngineEvent::AudioGraphModified(mut res) => {
+                    if let Some(engine_state) = &mut self.engine_state {
+                        for plugin_id in res.removed_plugins.drain(..) {
+                            engine_state.effect_rack_state.remove_plugin(&plugin_id);
+                        }
+
+                        for new_plugin_res in res.new_plugins.drain(..) {
+                            let mut found = None;
+                            for p in self.plugin_list.iter() {
+                                if p.rdn() == new_plugin_res.plugin_id.rdn() {
+                                    found = Some(p.description.name.clone());
+                                    break;
+                                }
+                            }
+                            let plugin_name = found.unwrap();
+
+                            let effect_rack_plugin = match new_plugin_res.status {
+                                PluginActivationStatus::Activated { audio_ports } => {
+                                    EffectRackPluginState {
+                                        plugin_name,
+                                        plugin_id: new_plugin_res.plugin_id,
+                                        audio_ports: Some(audio_ports),
+                                        edges: PluginEdges::emtpy(),
+                                        active: true,
+                                    }
+                                }
+                                PluginActivationStatus::Inactive => EffectRackPluginState {
+                                    plugin_name,
+                                    plugin_id: new_plugin_res.plugin_id,
+                                    audio_ports: None,
+                                    edges: PluginEdges::emtpy(),
+                                    active: false,
+                                },
+                                PluginActivationStatus::LoadError(e) => {
+                                    println!("Plugin failed to load: {}", e);
+
+                                    EffectRackPluginState {
+                                        plugin_name,
+                                        plugin_id: new_plugin_res.plugin_id,
+                                        audio_ports: None,
+                                        edges: PluginEdges::emtpy(),
+                                        active: false,
+                                    }
+                                }
+                                PluginActivationStatus::ActivationError(e) => {
+                                    println!("Plugin failed to activate: {}", e);
+
+                                    EffectRackPluginState {
+                                        plugin_name,
+                                        plugin_id: new_plugin_res.plugin_id,
+                                        audio_ports: None,
+                                        edges: PluginEdges::emtpy(),
+                                        active: false,
+                                    }
+                                }
+                            };
+
+                            engine_state.effect_rack_state.plugins.push(effect_rack_plugin);
+                        }
+
+                        for (plugin_id, plugin_edges) in res.updated_plugin_edges.drain(..) {
+                            let effect_rack_plugin =
+                                engine_state.effect_rack_state.plugin_mut(&plugin_id).unwrap();
+
+                            effect_rack_plugin.edges = plugin_edges;
+                        }
+                    }
+                }
 
                 // Sent whenever a plugin becomes deactivated. When a plugin is deactivated
                 // you cannot access any of its methods until it is reactivated.
@@ -211,7 +292,18 @@ impl BasicDawExampleGUI {
                     // If this is `Err(e)`, then it means the plugin became deactivated
                     // because it failed to restart.
                     status,
-                } => {}
+                } => {
+                    if let Some(engine_state) = &mut self.engine_state {
+                        let effect_rack_plugin =
+                            engine_state.effect_rack_state.plugin_mut(&plugin_id).unwrap();
+
+                        effect_rack_plugin.active = false;
+
+                        if let Err(e) = status {
+                            println!("Plugin failed to activate: {}", e);
+                        }
+                    }
+                }
 
                 // Sent whenever a plugin becomes activated after being deactivated or
                 // when the plugin restarts.
@@ -225,13 +317,25 @@ impl BasicDawExampleGUI {
                     // If this is `None`, then it means that the plugin has not changed
                     // its audio port configuration since the last time it was activated.
                     new_audio_ports,
-                } => {}
+                } => {
+                    if let Some(engine_state) = &mut self.engine_state {
+                        let effect_rack_plugin =
+                            engine_state.effect_rack_state.plugin_mut(&plugin_id).unwrap();
+
+                        effect_rack_plugin.active = true;
+                        effect_rack_plugin.audio_ports = Some(new_audio_ports);
+                    }
+                }
 
                 DAWEngineEvent::PluginScanner(event) => match event {
                     // A new CLAP plugin scan path was added.
-                    PluginScannerEvent::ClapScanPathAdded(path) => {}
+                    PluginScannerEvent::ClapScanPathAdded(path) => {
+                        println!("Added clap scan path: {:?}", path);
+                    }
                     // A CLAP plugin scan path was removed.
-                    PluginScannerEvent::ClapScanPathRemoved(path) => {}
+                    PluginScannerEvent::ClapScanPathRemoved(path) => {
+                        println!("Removed clap scan path: {:?}", path);
+                    }
                     // A request to rescan all plugin directories has finished. Update
                     // the list of available plugins in your UI.
                     PluginScannerEvent::RescanFinished(mut info) => {
@@ -303,6 +407,24 @@ impl BasicDawExampleGUI {
                                     },
                                 ],
                                 disconnect_edges: vec![],
+                                /*
+                                disconnect_edges: vec![
+                                    Edge {
+                                        edge_type: PortType::Audio,
+                                        src_plugin_id: engine_state.graph_in_node_id.clone(),
+                                        dst_plugin_id: engine_state.graph_out_node_id.clone(),
+                                        src_channel: 0,
+                                        dst_channel: 0,
+                                    },
+                                    Edge {
+                                        edge_type: PortType::Audio,
+                                        src_plugin_id: engine_state.graph_in_node_id.clone(),
+                                        dst_plugin_id: engine_state.graph_out_node_id.clone(),
+                                        src_channel: 1,
+                                        dst_channel: 1,
+                                    },
+                                ],
+                                */
                             };
 
                             self.engine.modify_graph(req);

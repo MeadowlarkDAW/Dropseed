@@ -114,14 +114,23 @@ impl From<PluginFormat> for PluginInstanceType {
 pub struct PluginInstanceID {
     pub(crate) node_ref: audio_graph::NodeRef,
     pub(crate) format: PluginInstanceType,
-    pub(crate) name: Option<Shared<String>>,
+    pub(crate) rdn: Shared<String>,
+}
+
+impl PluginInstanceID {
+    pub fn rdn(&self) -> &str {
+        self.rdn.as_str()
+    }
 }
 
 impl std::fmt::Debug for PluginInstanceID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.format {
             PluginInstanceType::Internal => {
-                write!(f, "Int({})_{}", &**self.name.as_ref().unwrap(), self.node_ref.as_usize())
+                write!(f, "Int({})_{}", &**self.rdn, self.node_ref.as_usize())
+            }
+            PluginInstanceType::Clap => {
+                write!(f, "Clap({})_{}", &**self.rdn, self.node_ref.as_usize())
             }
             _ => {
                 write!(f, "{:?}_{}", self.format, self.node_ref.as_usize())
@@ -132,11 +141,7 @@ impl std::fmt::Debug for PluginInstanceID {
 
 impl Clone for PluginInstanceID {
     fn clone(&self) -> Self {
-        Self {
-            node_ref: self.node_ref,
-            format: self.format,
-            name: self.name.as_ref().map(|n| Shared::clone(n)),
-        }
+        Self { node_ref: self.node_ref, format: self.format, rdn: Shared::clone(&self.rdn) }
     }
 }
 

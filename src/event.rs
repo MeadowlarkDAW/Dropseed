@@ -70,12 +70,7 @@ pub enum DAWEngineEvent {
     /// Make sure your UI updates the port configuration on this plugin.
     PluginActivated {
         plugin_id: PluginInstanceID,
-        /// If this is `Some(audio_ports)`, then it means that the plugin has
-        /// updated its audio port configuration.
-        ///
-        /// If this is `None`, then it means that the plugin has not changed
-        /// its audio port configuration since the last time it was activated.
-        new_audio_ports: Option<AudioPortsExtension>,
+        new_audio_ports: AudioPortsExtension,
     },
 
     PluginScanner(PluginScannerEvent),
