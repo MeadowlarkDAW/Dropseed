@@ -20,9 +20,9 @@ enum DebugBufferType {
 impl std::fmt::Debug for DebugBufferType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DebugBufferType::Audio32 => write!(f, "A32"),
-            DebugBufferType::Audio64 => write!(f, "A64"),
-            DebugBufferType::IntermediaryAudio32 => write!(f, "IA32"),
+            DebugBufferType::Audio32 => write!(f, "f"),
+            DebugBufferType::Audio64 => write!(f, "d"),
+            DebugBufferType::IntermediaryAudio32 => write!(f, "if"),
         }
     }
 }
@@ -36,7 +36,7 @@ pub struct DebugBufferID {
 
 impl std::fmt::Debug for DebugBufferID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}-{}", self.buffer_type, self.index)
+        write!(f, "{:?}({})", self.buffer_type, self.index)
     }
 }
 

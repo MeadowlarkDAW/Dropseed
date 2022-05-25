@@ -21,9 +21,6 @@ pub struct Schedule {
     pub(crate) graph_audio_out: SmallVec<[SharedBuffer<f32>; 4]>,
 
     pub(crate) max_block_size: usize,
-
-    /// Used to get info and request actions from the host.
-    pub(crate) host_info: Shared<HostInfo>,
 }
 
 impl Schedule {
@@ -33,7 +30,6 @@ impl Schedule {
             graph_audio_in: SmallVec::new(),
             graph_audio_out: SmallVec::new(),
             max_block_size,
-            host_info,
         }
     }
 }
@@ -60,8 +56,7 @@ impl std::fmt::Debug for Schedule {
         }
         s.push_str(format!("    graph_audio_out: {:?},\n", &g_s).as_str());
 
-        s.push_str(format!("    max_block_size: {},\n", &self.max_block_size).as_str());
-        s.push_str(format!("    host_info: {:?},\n}}", &*self.host_info).as_str());
+        s.push_str(format!("    max_block_size: {},\n}}", &self.max_block_size).as_str());
 
         write!(f, "{}", s)
     }

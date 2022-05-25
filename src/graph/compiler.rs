@@ -291,7 +291,6 @@ pub(crate) fn compile_graph(
         graph_audio_in,
         graph_audio_out,
         max_block_size: shared_buffer_pool.buffer_size,
-        host_info: Shared::clone(&host_info),
     };
 
     // This is probably expensive, but I would like to keep this check here until we are very
