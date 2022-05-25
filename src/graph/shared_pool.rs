@@ -1,3 +1,4 @@
+use audio_graph::NodeRef;
 use basedrop::Shared;
 use fnv::FnvHashMap;
 use std::cell::UnsafeCell;
@@ -14,12 +15,14 @@ use super::schedule::delay_comp_node::DelayCompNode;
 enum DebugBufferType {
     Audio32,
     Audio64,
+    IntermediaryAudio32,
 }
 impl std::fmt::Debug for DebugBufferType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DebugBufferType::Audio32 => write!(f, "A32"),
             DebugBufferType::Audio64 => write!(f, "A64"),
+            DebugBufferType::IntermediaryAudio32 => write!(f, "IA32"),
         }
     }
 }
@@ -157,11 +160,12 @@ impl Hash for PluginInstanceID {
 
 pub(crate) struct SharedPluginHostAudioThread {
     pub plugin: Shared<UnsafeCell<PluginInstanceHostAudioThread>>,
+    pub task_version: u64,
 }
 
 impl SharedPluginHostAudioThread {
     pub fn new(plugin: PluginInstanceHostAudioThread, coll_handle: &basedrop::Handle) -> Self {
-        Self { plugin: Shared::new(coll_handle, UnsafeCell::new(plugin)) }
+        Self { plugin: Shared::new(coll_handle, UnsafeCell::new(plugin)), task_version: 0 }
     }
 }
 
@@ -174,7 +178,7 @@ impl SharedPluginHostAudioThread {
 
 impl Clone for SharedPluginHostAudioThread {
     fn clone(&self) -> Self {
-        Self { plugin: Shared::clone(&self.plugin) }
+        Self { plugin: Shared::clone(&self.plugin), task_version: self.task_version + 1 }
     }
 }
 
@@ -188,12 +192,29 @@ pub(crate) struct PluginInstanceHostEntry {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct DelayCompKey {
-    pub src_port_id: audio_graph::PortRef,
+    pub src_node_ref: NodeRef,
+    pub port_i: u16,
     pub delay: u32,
 }
 
 pub(crate) struct SharedDelayCompNode {
     pub node: Shared<UnsafeCell<DelayCompNode>>,
+    pub active: bool,
+}
+
+impl SharedDelayCompNode {
+    pub fn new(delay: u32, coll_handle: &basedrop::Handle) -> Self {
+        Self {
+            node: Shared::new(coll_handle, UnsafeCell::new(DelayCompNode::new(delay))),
+            active: true,
+        }
+    }
+}
+
+impl Clone for SharedDelayCompNode {
+    fn clone(&self) -> Self {
+        Self { node: Shared::clone(&self.node), active: self.active }
+    }
 }
 
 impl SharedDelayCompNode {
@@ -207,10 +228,12 @@ pub(crate) struct SharedPool {
     pub plugins: FnvHashMap<PluginInstanceID, PluginInstanceHostEntry>,
     pub delay_comp_nodes: FnvHashMap<DelayCompKey, SharedDelayCompNode>,
 
+    pub buffer_size: usize,
+
     audio_buffers_f32: Vec<Option<SharedBuffer<f32>>>,
     audio_buffers_f64: Vec<Option<SharedBuffer<f64>>>,
 
-    buffer_size: usize,
+    intermediary_audio_f32: Vec<Option<SharedBuffer<f32>>>,
 
     coll_handle: basedrop::Handle,
 }
@@ -224,6 +247,7 @@ impl SharedPool {
             delay_comp_nodes: FnvHashMap::default(),
             audio_buffers_f32: Vec::new(),
             audio_buffers_f64: Vec::new(),
+            intermediary_audio_f32: Vec::new(),
             buffer_size,
             coll_handle,
         }
@@ -289,7 +313,41 @@ impl SharedPool {
         }
     }
 
-    pub fn remove_excess_audio_buffers(&mut self, max_buffer_index: usize) {
+    pub fn intermediary_audio_f32(&mut self, index: usize) -> SharedBuffer<f32> {
+        if self.intermediary_audio_f32.len() <= index {
+            let n_new_slots = (index + 1) - self.intermediary_audio_f32.len();
+            for _ in 0..n_new_slots {
+                self.intermediary_audio_f32.push(None);
+            }
+        }
+
+        let slot = &mut self.intermediary_audio_f32[index];
+
+        if let Some(b) = slot {
+            b.clone()
+        } else {
+            *slot = Some(SharedBuffer {
+                buffer: Shared::new(
+                    &self.coll_handle,
+                    (
+                        UnsafeCell::new(vec![0.0; self.buffer_size]),
+                        DebugBufferID {
+                            buffer_type: DebugBufferType::Audio32,
+                            index: index as u32,
+                        },
+                    ),
+                ),
+            });
+
+            slot.as_ref().unwrap().clone()
+        }
+    }
+
+    pub fn remove_excess_audio_buffers(
+        &mut self,
+        max_buffer_index: usize,
+        total_intermediary_buffers: usize,
+    ) {
         if self.audio_buffers_f32.len() > max_buffer_index + 1 {
             let n_slots_to_remove = self.audio_buffers_f32.len() - (max_buffer_index + 1);
             for _ in 0..n_slots_to_remove {
@@ -300,6 +358,12 @@ impl SharedPool {
             let n_slots_to_remove = self.audio_buffers_f64.len() - (max_buffer_index + 1);
             for _ in 0..n_slots_to_remove {
                 let _ = self.audio_buffers_f64.pop();
+            }
+        }
+        if self.intermediary_audio_f32.len() > total_intermediary_buffers {
+            let n_slots_to_remove = self.intermediary_audio_f32.len() - total_intermediary_buffers;
+            for _ in 0..n_slots_to_remove {
+                let _ = self.intermediary_audio_f32.pop();
             }
         }
     }

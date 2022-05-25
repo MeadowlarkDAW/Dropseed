@@ -16,6 +16,8 @@ use super::shared_pool::PluginInstanceID;
 pub(crate) struct PluginInstanceHost {
     pub id: PluginInstanceID,
 
+    pub audio_ports_ext: Option<AudioPortsExtension>,
+
     main_thread: Option<Box<dyn PluginMainThread>>,
 
     state: Arc<SharedPluginState>,
@@ -51,6 +53,7 @@ impl PluginInstanceHost {
         Self {
             id,
             main_thread,
+            audio_ports_ext: None,
             state: Arc::new(SharedPluginState::new()),
             save_state,
             restart_requested,
@@ -145,6 +148,8 @@ impl PluginInstanceHost {
                             audio_ports_ext.total_out_channels() as u16,
                         );
                     }
+
+                    self.audio_ports_ext = Some(audio_ports_ext.clone());
 
                     Ok(audio_ports_ext)
                 }

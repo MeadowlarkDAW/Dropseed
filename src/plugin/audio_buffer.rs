@@ -86,6 +86,14 @@ impl std::fmt::Debug for AudioPortBuffer {
 }
 
 impl AudioPortBuffer {
+    pub(crate) fn new(buffers: SmallVec<[SharedBuffer<f32>; 2]>, latency: u32) -> Self {
+        Self {
+            raw_channels: RawAudioChannelBuffers::F32(buffers),
+            latency,
+            constant_mask: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
     pub fn num_channels(&self) -> usize {
         self.raw_channels.num_channels()
     }
@@ -196,6 +204,14 @@ impl std::fmt::Debug for AudioPortBufferMut {
 }
 
 impl AudioPortBufferMut {
+    pub(crate) fn new(buffers: SmallVec<[SharedBuffer<f32>; 2]>, latency: u32) -> Self {
+        Self {
+            raw_channels: RawAudioChannelBuffers::F32(buffers),
+            latency,
+            constant_mask: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
     pub fn num_channels(&self) -> usize {
         self.raw_channels.num_channels()
     }

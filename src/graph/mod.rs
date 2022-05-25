@@ -604,7 +604,7 @@ impl AudioGraph {
         );
 
         self.shared_pool.plugins.clear();
-        self.shared_pool.remove_excess_audio_buffers(0);
+        self.shared_pool.remove_excess_audio_buffers(0, 0);
 
         self.abstract_graph = Graph::default();
 
@@ -764,6 +764,8 @@ impl AudioGraph {
             &self.graph_in_node_id,
             &self.graph_out_node_id,
             &mut self.verifier,
+            &self.host_info,
+            &self.coll_handle,
         ) {
             Ok(schedule) => {
                 log::debug!("Successfully compiled new schedule:\n{:?}", &schedule);
