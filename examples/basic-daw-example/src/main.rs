@@ -151,7 +151,7 @@ impl BasicDawExampleGUI {
 
     fn poll_updates(&mut self) {
         for msg in self.engine_rx.try_iter() {
-            dbg!(&msg);
+            //dbg!(&msg);
 
             match msg {
                 // Sent whenever the engine is deactivated.

@@ -85,6 +85,15 @@ pub(crate) fn entry_init(
     // Safe because we checked that this was not null.
     let clap_version = unsafe { (*raw_entry).clap_version };
 
+    if !clap_sys::version::clap_version_is_compatible(clap_version) {
+        return Err(format!(
+            "Plugin from path {:?} has an incompatible clap version {}.{}.{}. Host version is {}.{}.{}",
+            plugin_path, clap_version.major, clap_version.minor, clap_version.revision,
+            clap_sys::version::CLAP_VERSION_MAJOR, clap_sys::version::CLAP_VERSION_MINOR, clap_sys::version::CLAP_VERSION_REVISION,
+        )
+        .into());
+    }
+
     let plugin_path_parent_folder = plugin_path
         .parent()
         .map(|p| p.to_path_buf())
