@@ -43,6 +43,12 @@ pub struct ScannedPlugin {
     pub key: ScannedPluginKey,
 }
 
+impl ScannedPlugin {
+    pub fn rdn(&self) -> &str {
+        &*self.key.rdn.as_str()
+    }
+}
+
 struct ScannedPluginFactory {
     pub rdn: Shared<String>,
     pub format: PluginFormat,

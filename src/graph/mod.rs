@@ -15,7 +15,7 @@ mod schedule;
 mod verifier;
 
 use schedule::Schedule;
-use shared_pool::{PluginInstanceHostEntry, SharedPool};
+use shared_pool::{PluginInstanceHostEntry, SharedBufferPool, SharedPluginPool};
 use verifier::Verifier;
 
 use crate::graph::plugin_host::PluginInstanceHost;
@@ -54,7 +54,8 @@ use crate::{
 use self::plugin_host::OnIdleResult;
 
 pub(crate) struct AudioGraph {
-    shared_pool: SharedPool,
+    shared_plugin_pool: SharedPluginPool,
+    shared_buffer_pool: SharedBufferPool,
     host_info: Shared<HostInfo>,
     verifier: Verifier,
 
@@ -62,8 +63,6 @@ pub(crate) struct AudioGraph {
     coll_handle: basedrop::Handle,
 
     shared_schedule: SharedSchedule,
-
-    failed_plugin_debug_name: Shared<String>,
 
     graph_in_node_id: PluginInstanceID,
     graph_out_node_id: PluginInstanceID,
@@ -89,11 +88,10 @@ impl AudioGraph {
         assert!(graph_in_channels > 0);
         assert!(graph_out_channels > 0);
 
-        let failed_plugin_debug_name = Shared::new(&coll_handle, String::from("failed_plugin"));
-
         let abstract_graph = Graph::default();
 
-        let shared_pool = SharedPool::new(max_frames as usize, coll_handle.clone());
+        let shared_plugin_pool = SharedPluginPool::new();
+        let shared_buffer_pool = SharedBufferPool::new(max_frames as usize, coll_handle.clone());
 
         let (shared_schedule, shared_schedule_clone) = SharedSchedule::new(
             Schedule::empty(max_frames as usize, Shared::clone(&host_info)),
@@ -113,13 +111,13 @@ impl AudioGraph {
         };
 
         let mut new_self = Self {
-            shared_pool,
+            shared_plugin_pool,
+            shared_buffer_pool,
             host_info,
             verifier: Verifier::new(),
             abstract_graph,
             coll_handle,
             shared_schedule,
-            failed_plugin_debug_name,
             graph_in_node_id,
             graph_out_node_id,
             graph_in_channels,
@@ -163,6 +161,8 @@ impl AudioGraph {
 
         let plugin_id = res.plugin_host.id.clone();
 
+        self.abstract_graph.set_node_ident(node_ref, plugin_id.clone()).unwrap();
+
         match res.status {
             Ok(()) => {
                 log::debug!("Loaded plugin {:?} successfully", &res.plugin_host.id);
@@ -183,7 +183,7 @@ impl AudioGraph {
             audio_out_channel_refs: Vec::new(),
         };
 
-        if self.shared_pool.plugins.insert(plugin_id.clone(), entry).is_some() {
+        if self.shared_plugin_pool.plugins.insert(plugin_id.clone(), entry).is_some() {
             panic!("Something went wrong when allocating a new slot for a plugin");
         }
 
@@ -199,7 +199,7 @@ impl AudioGraph {
                 // Try to retrieve the number of channels from a previously working
                 // save state.
 
-                let entry = self.shared_pool.plugins.get_mut(&plugin_id).unwrap();
+                let entry = self.shared_plugin_pool.plugins.get_mut(&plugin_id).unwrap();
 
                 entry.audio_in_channel_refs = (0..backup_in_channels)
                     .map(|i| {
@@ -225,7 +225,7 @@ impl AudioGraph {
         &mut self,
         id: &PluginInstanceID,
     ) -> Result<PluginActivationStatus, ()> {
-        let entry = if let Some(entry) = self.shared_pool.plugins.get_mut(id) {
+        let entry = if let Some(entry) = self.shared_plugin_pool.plugins.get_mut(id) {
             entry
         } else {
             return Err(());
@@ -272,13 +272,16 @@ impl AudioGraph {
             if entry.audio_in_channel_refs.len() < num_in_channels {
                 let old_len = entry.audio_in_channel_refs.len();
                 for i in old_len as u16..num_in_channels as u16 {
-                    self.abstract_graph
+                    let port_ref = self
+                        .abstract_graph
                         .port(
                             entry.plugin_host.id.node_ref,
                             DefaultPortType::Audio,
                             PortID::AudioIn(i),
                         )
                         .unwrap();
+
+                    entry.audio_in_channel_refs.push(port_ref);
                 }
             } else if entry.audio_in_channel_refs.len() > num_in_channels {
                 let num_to_remove = entry.audio_in_channel_refs.len() - num_in_channels;
@@ -291,13 +294,16 @@ impl AudioGraph {
             if entry.audio_out_channel_refs.len() < num_out_channels {
                 let old_len = entry.audio_out_channel_refs.len();
                 for i in old_len as u16..num_out_channels as u16 {
-                    self.abstract_graph
+                    let port_ref = self
+                        .abstract_graph
                         .port(
                             entry.plugin_host.id.node_ref,
                             DefaultPortType::Audio,
                             PortID::AudioOut(i),
                         )
                         .unwrap();
+
+                    entry.audio_out_channel_refs.push(port_ref);
                 }
             } else if entry.audio_out_channel_refs.len() > num_out_channels {
                 let num_to_remove = entry.audio_out_channel_refs.len() - num_out_channels;
@@ -344,11 +350,13 @@ impl AudioGraph {
                         let _ = affected_plugins.insert(e.dst_plugin_id.clone());
                     }
 
-                    if let Some(plugin) = self.shared_pool.plugins.get_mut(&id) {
+                    if let Some(plugin) = self.shared_plugin_pool.plugins.get_mut(&id) {
                         plugin.plugin_host.schedule_remove();
                     }
 
-                    self.abstract_graph.delete_node(id.node_ref);
+                    if let Err(e) = self.abstract_graph.delete_node(id.node_ref) {
+                        log::error!("Abstract node failed to delete node: {}", e);
+                    }
                 } else {
                     let _ = removed_plugins.remove(&id);
                     log::warn!("Ignored request to remove plugin instance {:?}: Plugin is already removed.", id);
@@ -360,16 +368,18 @@ impl AudioGraph {
     }
 
     pub fn connect_edge(&mut self, edge: &Edge) -> Result<(), ConnectEdgeError> {
-        let src_entry = if let Some(entry) = self.shared_pool.plugins.get(&edge.src_plugin_id) {
-            entry
-        } else {
-            return Err(ConnectEdgeError::SrcPluginDoesNotExist);
-        };
-        let dst_entry = if let Some(entry) = self.shared_pool.plugins.get(&edge.dst_plugin_id) {
-            entry
-        } else {
-            return Err(ConnectEdgeError::DstPluginDoesNotExist);
-        };
+        let src_entry =
+            if let Some(entry) = self.shared_plugin_pool.plugins.get(&edge.src_plugin_id) {
+                entry
+            } else {
+                return Err(ConnectEdgeError::SrcPluginDoesNotExist);
+            };
+        let dst_entry =
+            if let Some(entry) = self.shared_plugin_pool.plugins.get(&edge.dst_plugin_id) {
+                entry
+            } else {
+                return Err(ConnectEdgeError::DstPluginDoesNotExist);
+            };
 
         match edge.edge_type {
             DefaultPortType::Audio => {
@@ -512,8 +522,8 @@ impl AudioGraph {
         }
     }
 
-    pub fn get_plugin_save_state(&mut self, id: &PluginInstanceID) -> Option<PluginSaveState> {
-        if let Some(plugin) = self.shared_pool.plugins.get_mut(id) {
+    pub fn collect_plugin_save_state(&mut self, id: &PluginInstanceID) -> Option<PluginSaveState> {
+        if let Some(plugin) = self.shared_plugin_pool.plugins.get_mut(id) {
             plugin.plugin_host.collect_save_state()
         } else {
             None
@@ -523,7 +533,7 @@ impl AudioGraph {
     pub fn collect_save_state(&mut self) -> AudioGraphSaveState {
         log::trace!("Collecting audio graph save state...");
 
-        let num_plugins = self.shared_pool.plugins.len();
+        let num_plugins = self.shared_plugin_pool.plugins.len();
 
         let mut plugin_save_states: Vec<PluginSaveState> = Vec::with_capacity(num_plugins);
         let mut edge_save_states: Vec<EdgeSaveState> = Vec::with_capacity(num_plugins * 3);
@@ -531,7 +541,9 @@ impl AudioGraph {
         let mut node_ref_to_index: FnvHashMap<NodeRef, usize> = FnvHashMap::default();
         node_ref_to_index.reserve(num_plugins);
 
-        for (index, (plugin_id, plugin_entry)) in self.shared_pool.plugins.iter_mut().enumerate() {
+        for (index, (plugin_id, plugin_entry)) in
+            self.shared_plugin_pool.plugins.iter_mut().enumerate()
+        {
             if let Some(_) = node_ref_to_index.insert(plugin_id.node_ref, index) {
                 // In theory this should never happen.
                 panic!("More than one plugin with node ref: {:?}", plugin_id.node_ref);
@@ -548,7 +560,7 @@ impl AudioGraph {
         }
 
         // Iterate again to get all the edges.
-        for plugin_id in self.shared_pool.plugins.keys() {
+        for plugin_id in self.shared_plugin_pool.plugins.keys() {
             for edge in self.abstract_graph.node_edges(plugin_id.node_ref).unwrap() {
                 edge_save_states.push(EdgeSaveState {
                     edge_type: DefaultPortType::Audio,
@@ -567,7 +579,7 @@ impl AudioGraph {
 
     pub fn reset(&mut self) {
         // Try to gracefully remove all existing plugins.
-        for plugin_entry in self.shared_pool.plugins.values_mut() {
+        for plugin_entry in self.shared_plugin_pool.plugins.values_mut() {
             // Don't remove the graph in/out "plugins".
             if plugin_entry.plugin_host.id == self.graph_in_node_id
                 || plugin_entry.plugin_host.id == self.graph_out_node_id
@@ -587,13 +599,13 @@ impl AudioGraph {
             const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
             // Wait for all plugins to be removed.
-            while self.shared_pool.plugins.len() > 2 && start_time.elapsed() < TIMEOUT {
+            while self.shared_plugin_pool.plugins.len() > 2 && start_time.elapsed() < TIMEOUT {
                 std::thread::sleep(std::time::Duration::from_millis(10));
 
                 let _ = self.on_idle();
             }
 
-            if self.shared_pool.plugins.len() > 2 {
+            if self.shared_plugin_pool.plugins.len() > 2 {
                 log::error!("Timed out while removing all plugins");
             }
         }
@@ -603,8 +615,8 @@ impl AudioGraph {
             &self.coll_handle,
         );
 
-        self.shared_pool.plugins.clear();
-        self.shared_pool.remove_excess_audio_buffers(0, 0);
+        self.shared_plugin_pool.plugins.clear();
+        self.shared_buffer_pool.remove_excess_audio_buffers(0, 0);
 
         self.abstract_graph = Graph::default();
 
@@ -646,7 +658,7 @@ impl AudioGraph {
             })
             .collect();
 
-        let _ = self.shared_pool.plugins.insert(
+        let _ = self.shared_plugin_pool.plugins.insert(
             graph_in_node_id.clone(),
             PluginInstanceHostEntry {
                 plugin_host: PluginInstanceHost::new(
@@ -660,7 +672,7 @@ impl AudioGraph {
                 audio_out_channel_refs: graph_in_out_channel_refs,
             },
         );
-        let _ = self.shared_pool.plugins.insert(
+        let _ = self.shared_plugin_pool.plugins.insert(
             graph_out_node_id.clone(),
             PluginInstanceHostEntry {
                 plugin_host: PluginInstanceHost::new(
@@ -759,7 +771,8 @@ impl AudioGraph {
     /// working save state.
     pub(crate) fn compile(&mut self) -> Result<(), GraphCompilerError> {
         match compiler::compile_graph(
-            &mut self.shared_pool,
+            &mut self.shared_plugin_pool,
+            &mut self.shared_buffer_pool,
             &mut self.abstract_graph,
             &self.graph_in_node_id,
             &self.graph_out_node_id,
@@ -790,7 +803,7 @@ impl AudioGraph {
 
         let mut plugins_to_remove: SmallVec<[PluginInstanceID; 4]> = SmallVec::new();
 
-        for plugin in self.shared_pool.plugins.values_mut() {
+        for plugin in self.shared_plugin_pool.plugins.values_mut() {
             match plugin.plugin_host.on_idle(
                 self.sample_rate,
                 self.min_frames,
@@ -808,7 +821,7 @@ impl AudioGraph {
         }
 
         for plugin in plugins_to_remove.iter() {
-            let _ = self.shared_pool.plugins.remove(plugin);
+            let _ = self.shared_plugin_pool.plugins.remove(plugin);
         }
 
         changed_plugins
@@ -902,56 +915,6 @@ impl std::fmt::Display for ConnectEdgeError {
             }
             ConnectEdgeError::Unkown => {
                 write!(f, "Could not add edge to graph: Unkown error")
-            }
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum InsertPluginBetweenError {
-    SrcPluginNotFound(PluginInstanceID),
-    DstPluginNotFound(PluginInstanceID),
-}
-
-impl Error for InsertPluginBetweenError {}
-
-impl std::fmt::Display for InsertPluginBetweenError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self {
-            InsertPluginBetweenError::SrcPluginNotFound(id) => {
-                write!(f, "Could not insert new plugin instance: The source plugin with ID {:?} was not found", &id)
-            }
-            InsertPluginBetweenError::DstPluginNotFound(id) => {
-                write!(f, "Could not insert new plugin instance: The destination plugin with ID {:?} was not found", &id)
-            }
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum RemovePluginBetweenError {
-    PluginNotFound(PluginInstanceID),
-    SrcPluginNotFound(PluginInstanceID),
-    DstPluginNotFound(PluginInstanceID),
-}
-
-impl Error for RemovePluginBetweenError {}
-
-impl std::fmt::Display for RemovePluginBetweenError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self {
-            RemovePluginBetweenError::PluginNotFound(id) => {
-                write!(
-                    f,
-                    "Could not remove plugin instance: The plugin with ID {:?} was not found",
-                    &id
-                )
-            }
-            RemovePluginBetweenError::SrcPluginNotFound(id) => {
-                write!(f, "Could not remove plugin instance: The source plugin with ID {:?} was not found", &id)
-            }
-            RemovePluginBetweenError::DstPluginNotFound(id) => {
-                write!(f, "Could not remove plugin instance: The destination plugin with ID {:?} was not found", &id)
             }
         }
     }

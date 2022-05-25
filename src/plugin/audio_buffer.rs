@@ -4,7 +4,7 @@ use std::sync::{
     Arc,
 };
 
-use crate::graph::shared_pool::SharedBuffer;
+use crate::graph::shared_pool::{DebugBufferID, SharedBuffer};
 
 pub(crate) enum RawAudioChannelBuffers {
     F32(SmallVec<[SharedBuffer<f32>; 2]>),

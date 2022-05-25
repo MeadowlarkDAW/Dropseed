@@ -2,6 +2,8 @@ use audio_graph::NodeRef;
 use fnv::FnvHashSet;
 use std::error::Error;
 
+use crate::plugin::audio_buffer::RawAudioChannelBuffers;
+
 use super::shared_pool::DebugBufferID;
 use super::PluginInstanceID;
 use super::{schedule::task::Task, Schedule};
@@ -35,8 +37,6 @@ impl Verifier {
         &mut self,
         schedule: &Schedule,
     ) -> Result<(), VerifyScheduleError> {
-        todo!();
-
         // TODO: verifying that there are not data races between parallel threads once we
         // have multithreaded scheduling.
 
@@ -45,33 +45,76 @@ impl Verifier {
         for task in schedule.tasks.iter() {
             self.buffer_instances.clear();
 
-            /*
             match task {
-                Task::InternalPlugin(t) => {
-                    if !self.plugin_instances.insert(t.plugin.id().node_id) {
+                Task::Plugin(t) => {
+                    if !self.plugin_instances.insert(t.plugin.id().node_ref) {
                         return Err(VerifyScheduleError::PluginInstanceAppearsTwiceInSchedule {
                             plugin_id: t.plugin.id().clone(),
                         });
                     }
 
-                    for port_buffer in t.audio_in.iter().chain(t.audio_out.iter()) {
-                        for b in port_buffer.rc_buffers().iter() {
-                            if !self.buffer_instances.insert(b.unique_id()) {
-                                return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                                    buffer_id: b.unique_id().clone(),
-                                    task_info: format!("{:?}", &task),
-                                });
+                    for port_buffer in t.buffers.audio_in.iter() {
+                        match &port_buffer.raw_channels {
+                            RawAudioChannelBuffers::F32(buffers) => {
+                                for b in buffers.iter() {
+                                    if !self.buffer_instances.insert(b.buffer.1) {
+                                        return Err(
+                                            VerifyScheduleError::BufferAppearsTwiceInSameTask {
+                                                buffer_id: b.buffer.1.clone(),
+                                                task_info: format!("{:?}", &task),
+                                            },
+                                        );
+                                    }
+                                }
+                            }
+                            RawAudioChannelBuffers::F64(buffers) => {
+                                for b in buffers.iter() {
+                                    if !self.buffer_instances.insert(b.buffer.1) {
+                                        return Err(
+                                            VerifyScheduleError::BufferAppearsTwiceInSameTask {
+                                                buffer_id: b.buffer.1.clone(),
+                                                task_info: format!("{:?}", &task),
+                                            },
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    for port_buffer in t.buffers.audio_out.iter() {
+                        match &port_buffer.raw_channels {
+                            RawAudioChannelBuffers::F32(buffers) => {
+                                for b in buffers.iter() {
+                                    if !self.buffer_instances.insert(b.buffer.1) {
+                                        return Err(
+                                            VerifyScheduleError::BufferAppearsTwiceInSameTask {
+                                                buffer_id: b.buffer.1.clone(),
+                                                task_info: format!("{:?}", &task),
+                                            },
+                                        );
+                                    }
+                                }
+                            }
+                            RawAudioChannelBuffers::F64(buffers) => {
+                                for b in buffers.iter() {
+                                    if !self.buffer_instances.insert(b.buffer.1) {
+                                        return Err(
+                                            VerifyScheduleError::BufferAppearsTwiceInSameTask {
+                                                buffer_id: b.buffer.1.clone(),
+                                                task_info: format!("{:?}", &task),
+                                            },
+                                        );
+                                    }
+                                }
                             }
                         }
                     }
                 }
-                Task::ClapPlugin(t) => {
-                    // TODO
-                }
                 Task::DelayComp(t) => {
-                    if t.audio_in.unique_id() == t.audio_out.unique_id() {
+                    if t.audio_in.buffer.1 == t.audio_out.buffer.1 {
                         return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                            buffer_id: t.audio_in.unique_id().clone(),
+                            buffer_id: t.audio_in.buffer.1.clone(),
                             task_info: format!("{:?}", &task),
                         });
                     }
@@ -91,47 +134,46 @@ impl Verifier {
                     // Unless the compiler tries to copy some of those buffers and expects those
                     // buffers to not alias or something.
                     for b in t.audio_in.iter() {
-                        if !self.buffer_instances.insert(b.unique_id()) {
+                        if !self.buffer_instances.insert(b.buffer.1) {
                             return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                                buffer_id: b.unique_id().clone(),
+                                buffer_id: b.buffer.1.clone(),
                                 task_info: format!("{:?}", &task),
                             });
                         }
                     }
-                    if !self.buffer_instances.insert(t.audio_out.unique_id()) {
+                    if !self.buffer_instances.insert(t.audio_out.buffer.1) {
                         return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                            buffer_id: t.audio_out.unique_id().clone(),
+                            buffer_id: t.audio_out.buffer.1.clone(),
                             task_info: format!("{:?}", &task),
                         });
                     }
                 }
                 Task::DeactivatedPlugin(t) => {
                     for (b_in, b_out) in t.audio_through.iter() {
-                        if !self.buffer_instances.insert(b_in.unique_id()) {
+                        if !self.buffer_instances.insert(b_in.buffer.1) {
                             return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                                buffer_id: b_in.unique_id().clone(),
+                                buffer_id: b_in.buffer.1.clone(),
                                 task_info: format!("{:?}", &task),
                             });
                         }
-                        if !self.buffer_instances.insert(b_out.unique_id()) {
+                        if !self.buffer_instances.insert(b_out.buffer.1) {
                             return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                                buffer_id: b_out.unique_id().clone(),
+                                buffer_id: b_out.buffer.1.clone(),
                                 task_info: format!("{:?}", &task),
                             });
                         }
                     }
 
                     for b in t.extra_audio_out.iter() {
-                        if !self.buffer_instances.insert(b.unique_id()) {
+                        if !self.buffer_instances.insert(b.buffer.1) {
                             return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                                buffer_id: b.unique_id().clone(),
+                                buffer_id: b.buffer.1.clone(),
                                 task_info: format!("{:?}", &task),
                             });
                         }
                     }
                 }
             }
-            */
         }
 
         Ok(())

@@ -246,8 +246,23 @@ impl BasicDawExampleGUI {
                             .collect();
 
                         if let Some(engine_state) = &mut self.engine_state {
+                            let mut index = None;
+                            for (i, p) in self.plugin_list.iter().enumerate() {
+                                if p.rdn() == "com.moist-plugins-gmbh-egui.gain-gui" {
+                                    index = Some(i);
+                                    break;
+                                }
+                            }
+
+                            if index.is_none() {
+                                continue;
+                            }
+
                             let req = ModifyGraphRequest {
-                                add_plugin_instances: vec![(self.plugin_list[1].key.clone(), None)],
+                                add_plugin_instances: vec![(
+                                    self.plugin_list[index.unwrap()].key.clone(),
+                                    None,
+                                )],
                                 remove_plugin_instances: vec![],
                                 connect_new_edges: vec![
                                     EdgeReq {

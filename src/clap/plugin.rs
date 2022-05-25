@@ -47,6 +47,7 @@ unsafe impl Sync for SharedClapLib {}
 impl Drop for SharedClapLib {
     fn drop(&mut self) {
         if !self.raw_entry.is_null() {
+            log::trace!("dropping clap library");
             // Safe because the constructor made sure that this is a valid pointer.
             unsafe {
                 ((&*self.raw_entry).deinit);
@@ -59,6 +60,8 @@ pub(crate) fn entry_init(
     plugin_path: &PathBuf,
     coll_handle: &basedrop::Handle,
 ) -> Result<Vec<ClapPluginFactory>, Box<dyn Error>> {
+    log::trace!("clap entry init at path {:?}", plugin_path);
+
     // "Safe" because we acknowledge the risk of running foreign code in external
     // plugin libraries.
     //
@@ -135,6 +138,8 @@ pub(crate) fn entry_init(
         // CLAP spec.
         let raw_descriptor = unsafe { ((&*raw_factory).get_plugin_descriptor)(raw_factory, i) };
 
+        log::trace!("clap plugin instance parse descriptor {:?}", plugin_path);
+
         let descriptor = parse_clap_plugin_descriptor(raw_descriptor, plugin_path, i)?;
 
         let id = Shared::new(coll_handle, descriptor.id.clone());
@@ -179,6 +184,8 @@ impl PluginFactory for ClapPluginFactory {
         host_request: HostRequest,
         main_thread_coll_handle: &basedrop::Handle,
     ) -> Result<Box<dyn PluginMainThread>, Box<dyn Error>> {
+        log::trace!("clap plugin factory new {}", &*self.id);
+
         let mut clap_host_request =
             ClapHostRequest::new(host_request.clone(), main_thread_coll_handle);
 
@@ -246,10 +253,12 @@ impl Drop for SharedClapPluginInstance {
             // Safe because the constructor ensures that this is a valid pointer.
             unsafe {
                 if self.activated.load(Ordering::Relaxed) {
+                    log::trace!("clap plugin instance deactivate {}", &*self.id);
                     self.activated.store(false, Ordering::Relaxed);
                     ((&*self.raw_plugin).deactivate)(self.raw_plugin);
                 }
                 if !self.raw_plugin.is_null() {
+                    log::trace!("clap plugin instance drop {}", &*self.id);
                     ((&*self.raw_plugin).destroy)(self.raw_plugin);
                 }
             }
@@ -273,6 +282,8 @@ impl ClapPluginMainThread {
     fn parse_audio_ports_extension(
         &self,
     ) -> Result<ext::audio_ports::AudioPortsExtension, Box<dyn Error>> {
+        log::trace!("clap plugin instance parse audio ports extension {}", &*self.shared_plugin.id);
+
         if self.shared_plugin.activated.load(Ordering::Relaxed) {
             return Err("Cannot get audio ports extension while plugin is active".into());
         }
@@ -470,6 +481,8 @@ impl PluginMainThread for ClapPluginMainThread {
     /// `[main-thread & !active_state]`
     #[allow(unused)]
     fn init(&mut self, _preset: (), coll_handle: &basedrop::Handle) -> Result<(), Box<dyn Error>> {
+        log::trace!("clap plugin instance init {}", &*self.shared_plugin.id);
+
         let res =
             unsafe { ((&*self.shared_plugin.raw_plugin).init)(self.shared_plugin.raw_plugin) };
 
@@ -503,6 +516,8 @@ impl PluginMainThread for ClapPluginMainThread {
         if self.shared_plugin.activated.load(Ordering::Relaxed) {
             return Err("Plugin already activated".into());
         }
+
+        log::trace!("clap plugin instance activate {}", &*self.shared_plugin.id);
 
         let res = unsafe {
             ((&*self.shared_plugin.raw_plugin).activate)(
@@ -539,6 +554,8 @@ impl PluginMainThread for ClapPluginMainThread {
     /// `[main-thread & active_state]`
     fn deactivate(&mut self) {
         if self.shared_plugin.activated.load(Ordering::Relaxed) {
+            log::trace!("clap plugin instance deactivate {}", &*self.shared_plugin.id);
+
             self.shared_plugin.activated.store(false, Ordering::Relaxed);
             unsafe {
                 ((&*self.shared_plugin.raw_plugin).deactivate)(self.shared_plugin.raw_plugin)
@@ -555,6 +572,8 @@ impl PluginMainThread for ClapPluginMainThread {
     /// [main-thread]
     #[allow(unused)]
     fn on_main_thread(&mut self) {
+        log::trace!("clap plugin instance on_main_thread {}", &*self.shared_plugin.id);
+
         unsafe {
             ((&*self.shared_plugin.raw_plugin).on_main_thread)(self.shared_plugin.raw_plugin)
         };
@@ -599,6 +618,8 @@ impl PluginAudioThread for ClapPluginAudioThread {
     ///
     /// `[audio-thread & active_state & !processing_state]`
     fn start_processing(&mut self) -> Result<(), ()> {
+        log::trace!("clap plugin instance start_processing {}", &*self.shared_plugin.id);
+
         let res = unsafe {
             ((&*self.shared_plugin.raw_plugin).start_processing)(self.shared_plugin.raw_plugin)
         };
@@ -615,6 +636,8 @@ impl PluginAudioThread for ClapPluginAudioThread {
     ///
     /// `[audio-thread & active_state & processing_state]`
     fn stop_processing(&mut self) {
+        log::trace!("clap plugin instance stop_processing {}", &*self.shared_plugin.id);
+
         unsafe {
             ((&*self.shared_plugin.raw_plugin).stop_processing)(self.shared_plugin.raw_plugin)
         };

@@ -81,8 +81,6 @@ pub(crate) enum PluginInstanceType {
     Internal,
     Clap,
     Unloaded,
-    Sum,
-    DelayComp,
     GraphInput,
     GraphOutput,
 }
@@ -96,8 +94,6 @@ impl std::fmt::Debug for PluginInstanceType {
                 PluginInstanceType::Internal => "Int",
                 PluginInstanceType::Clap => "CLAP",
                 &PluginInstanceType::Unloaded => "Unloaded",
-                PluginInstanceType::Sum => "Sum",
-                PluginInstanceType::DelayComp => "Dly",
                 PluginInstanceType::GraphInput => "GraphIn",
                 PluginInstanceType::GraphOutput => "GraphOut",
             }
@@ -224,10 +220,18 @@ impl SharedDelayCompNode {
     }
 }
 
-pub(crate) struct SharedPool {
+pub(crate) struct SharedPluginPool {
     pub plugins: FnvHashMap<PluginInstanceID, PluginInstanceHostEntry>,
     pub delay_comp_nodes: FnvHashMap<DelayCompKey, SharedDelayCompNode>,
+}
 
+impl SharedPluginPool {
+    pub fn new() -> Self {
+        Self { plugins: FnvHashMap::default(), delay_comp_nodes: FnvHashMap::default() }
+    }
+}
+
+pub(crate) struct SharedBufferPool {
     pub buffer_size: usize,
 
     audio_buffers_f32: Vec<Option<SharedBuffer<f32>>>,
@@ -238,13 +242,11 @@ pub(crate) struct SharedPool {
     coll_handle: basedrop::Handle,
 }
 
-impl SharedPool {
+impl SharedBufferPool {
     pub fn new(buffer_size: usize, coll_handle: basedrop::Handle) -> Self {
         assert_ne!(buffer_size, 0);
 
         Self {
-            plugins: FnvHashMap::default(),
-            delay_comp_nodes: FnvHashMap::default(),
             audio_buffers_f32: Vec::new(),
             audio_buffers_f64: Vec::new(),
             intermediary_audio_f32: Vec::new(),
@@ -332,7 +334,7 @@ impl SharedPool {
                     (
                         UnsafeCell::new(vec![0.0; self.buffer_size]),
                         DebugBufferID {
-                            buffer_type: DebugBufferType::Audio32,
+                            buffer_type: DebugBufferType::IntermediaryAudio32,
                             index: index as u32,
                         },
                     ),

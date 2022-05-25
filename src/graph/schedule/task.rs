@@ -98,7 +98,7 @@ impl Task {
 pub(crate) struct PluginTask {
     pub plugin: SharedPluginHostAudioThread,
 
-    buffers: ProcBuffers,
+    pub buffers: ProcBuffers,
 }
 
 impl PluginTask {
