@@ -13,7 +13,7 @@ use std::time::Duration;
 mod effect_rack_page;
 mod scanned_plugins_page;
 
-use effect_rack_page::{EffectRackPluginState, EffectRackState};
+use effect_rack_page::{AudioPortState, EffectRackPluginState, EffectRackState};
 
 const MIN_BLOCK_SIZE: u32 = 1;
 const MAX_BLOCK_SIZE: u32 = 512;
@@ -234,16 +234,16 @@ impl BasicDawExampleGUI {
                                     EffectRackPluginState {
                                         plugin_name,
                                         plugin_id: new_plugin_res.plugin_id,
-                                        audio_ports: Some(audio_ports),
-                                        edges: PluginEdges::emtpy(),
+                                        audio_ports_state: Some(AudioPortState::new(audio_ports)),
+                                        selected_port: Default::default(),
                                         active: true,
                                     }
                                 }
                                 PluginActivationStatus::Inactive => EffectRackPluginState {
                                     plugin_name,
                                     plugin_id: new_plugin_res.plugin_id,
-                                    audio_ports: None,
-                                    edges: PluginEdges::emtpy(),
+                                    audio_ports_state: None,
+                                    selected_port: Default::default(),
                                     active: false,
                                 },
                                 PluginActivationStatus::LoadError(e) => {
@@ -252,8 +252,8 @@ impl BasicDawExampleGUI {
                                     EffectRackPluginState {
                                         plugin_name,
                                         plugin_id: new_plugin_res.plugin_id,
-                                        audio_ports: None,
-                                        edges: PluginEdges::emtpy(),
+                                        audio_ports_state: None,
+                                        selected_port: Default::default(),
                                         active: false,
                                     }
                                 }
@@ -263,8 +263,8 @@ impl BasicDawExampleGUI {
                                     EffectRackPluginState {
                                         plugin_name,
                                         plugin_id: new_plugin_res.plugin_id,
-                                        audio_ports: None,
-                                        edges: PluginEdges::emtpy(),
+                                        audio_ports_state: None,
+                                        selected_port: Default::default(),
                                         active: false,
                                     }
                                 }
@@ -277,7 +277,11 @@ impl BasicDawExampleGUI {
                             let effect_rack_plugin =
                                 engine_state.effect_rack_state.plugin_mut(&plugin_id).unwrap();
 
-                            effect_rack_plugin.edges = plugin_edges;
+                            if let Some(audio_ports_state) =
+                                &mut effect_rack_plugin.audio_ports_state
+                            {
+                                audio_ports_state.sync_with_new_edges(&plugin_edges);
+                            }
                         }
                     }
                 }
@@ -323,7 +327,8 @@ impl BasicDawExampleGUI {
                             engine_state.effect_rack_state.plugin_mut(&plugin_id).unwrap();
 
                         effect_rack_plugin.active = true;
-                        effect_rack_plugin.audio_ports = Some(new_audio_ports);
+                        effect_rack_plugin.audio_ports_state =
+                            Some(AudioPortState::new(new_audio_ports));
                     }
                 }
 
