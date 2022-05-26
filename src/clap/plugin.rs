@@ -25,9 +25,9 @@ use crate::host_request::HostRequest;
 use crate::plugin::process_info::{ProcBuffers, ProcInfo, ProcessStatus};
 use crate::plugin::{ext, PluginAudioThread, PluginDescriptor, PluginFactory, PluginMainThread};
 use crate::thread_id::SharedThreadIDs;
-use crate::AudioPortInfo;
 use crate::MainPortsLayout;
 use crate::PluginAudioPortsExt;
+use crate::{AudioPortInfo, PluginInstanceID};
 
 struct SharedClapLib {
     // We hold on to this to make sure the host callback stays alive for as long as a
@@ -196,6 +196,7 @@ impl PluginFactory for ClapPluginFactory {
     fn new(
         &mut self,
         host_request: HostRequest,
+        plugin_id: PluginInstanceID,
         main_thread_coll_handle: &basedrop::Handle,
     ) -> Result<Box<dyn PluginMainThread>, Box<dyn Error>> {
         log::trace!("clap plugin factory new {}", &*self.id);
@@ -203,6 +204,7 @@ impl PluginFactory for ClapPluginFactory {
         let mut clap_host_request = ClapHostRequest::new(
             host_request.clone(),
             self.thread_ids.clone(),
+            plugin_id,
             main_thread_coll_handle,
         );
 

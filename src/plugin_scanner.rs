@@ -390,7 +390,7 @@ impl PluginScanner {
                     ScannedPluginKey { rdn: save_state.key.rdn.clone(), format: factory.format };
             }
 
-            match factory.factory.new(host_request.clone(), &self.coll_handle) {
+            match factory.factory.new(host_request.clone(), id.clone(), &self.coll_handle) {
                 Ok(mut plugin_main_thread) => {
                     check_for_invalid_host_callbacks(&host_request, &factory.rdn);
 

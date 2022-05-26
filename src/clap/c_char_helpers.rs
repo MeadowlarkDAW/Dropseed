@@ -30,7 +30,7 @@ pub(crate) fn str_to_c_char_buf<const BUF_SIZE: usize>(s: &str) -> Option<[c_cha
 
 pub(crate) fn c_char_buf_to_str<'a, const BUF_SIZE: usize>(
     buf: &'a [c_char; BUF_SIZE],
-) -> Result<Cow<'a, str>, ()> {
+) -> Result<&'a str, ()> {
     /*
     // Safe because c_char and u8 have the same size.
     let c_buf_u8 = unsafe { &*((*buf).as_ptr() as *const [u8; BUF_SIZE]) };
@@ -44,7 +44,7 @@ pub(crate) fn c_char_buf_to_str<'a, const BUF_SIZE: usize>(
 pub(crate) fn c_char_ptr_to_maybe_str<'a>(
     c_str: *const c_char,
     max_size: usize,
-) -> Option<Result<Cow<'a, str>, ()>> {
+) -> Option<Result<&'a str, ()>> {
     // Oh boy, C-style null-terminated strings
 
     if c_str.is_null() {
@@ -80,7 +80,11 @@ pub(crate) fn c_char_ptr_to_maybe_str<'a>(
         // Safe because we already checked that the last byte is a null-byte.
         let s = unsafe { CStr::from_bytes_with_nul_unchecked(c_buf) };
 
-        Some(Ok(s.to_string_lossy()))
+        if let Ok(s) = s.to_str() {
+            Some(Ok(s))
+        } else {
+            Some(Err(()))
+        }
     } else {
         Some(Err(()))
     }

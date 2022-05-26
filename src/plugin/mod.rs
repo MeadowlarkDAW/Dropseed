@@ -1,7 +1,7 @@
 use rusty_daw_core::SampleRate;
 use std::error::Error;
 
-use crate::host_request::HostRequest;
+use crate::{host_request::HostRequest, PluginInstanceID};
 
 pub mod audio_buffer;
 pub mod ext;
@@ -89,6 +89,7 @@ pub trait PluginFactory {
     fn new(
         &mut self,
         host: HostRequest,
+        plugin_id: PluginInstanceID,
         coll_handle: &basedrop::Handle,
     ) -> Result<Box<dyn PluginMainThread>, Box<dyn Error>>;
 }

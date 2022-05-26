@@ -1,5 +1,6 @@
 use basedrop::Shared;
 use clap_sys::ext::audio_ports::clap_host_audio_ports as RawClapHostAudioPorts;
+use clap_sys::ext::log::clap_host_log as RawClapHostLog;
 use clap_sys::ext::thread_check::clap_host_thread_check as RawClapHostThreadCheck;
 use clap_sys::host::clap_host as RawClapHost;
 use clap_sys::version::CLAP_VERSION;
@@ -12,6 +13,10 @@ use super::c_char_helpers::c_char_ptr_to_maybe_str;
 
 use crate::host_request::HostRequest;
 use crate::thread_id::SharedThreadIDs;
+use crate::PluginInstanceID;
+
+// TODO: Make sure that the log and print methods don't allocate on the current thread.
+// If they do, then we need to come up with a realtime-safe way to print to the terminal.
 
 pub(crate) struct ClapHostRequest {
     // We are storing this as a slice so we can get a raw pointer
@@ -26,15 +31,21 @@ impl ClapHostRequest {
     pub(crate) fn new(
         host_request: HostRequest,
         thread_ids: SharedThreadIDs,
+        plugin_id: PluginInstanceID,
         coll_handle: &basedrop::Handle,
     ) -> Self {
+        let plugin_log_name = Shared::new(coll_handle, format!("{:?}", &plugin_id));
+
         let host_data = Shared::new(
             coll_handle,
             [HostData {
                 plug_did_create: Arc::new(AtomicBool::new(false)),
+                plugin_id,
                 host_request,
                 host_audio_ports: [RawClapHostAudioPorts { is_rescan_flag_supported, rescan }],
                 host_thread_check: [RawClapHostThreadCheck { is_main_thread, is_audio_thread }],
+                host_log: [RawClapHostLog { log }],
+                plugin_log_name,
                 thread_ids,
             }],
         );
@@ -91,36 +102,41 @@ impl Clone for ClapHostRequest {
 
 struct HostData {
     plug_did_create: Arc<AtomicBool>,
+    plugin_id: PluginInstanceID,
     host_request: HostRequest,
     host_audio_ports: [RawClapHostAudioPorts; 1],
     host_thread_check: [RawClapHostThreadCheck; 1],
+    host_log: [RawClapHostLog; 1],
+    plugin_log_name: Shared<String>,
 
     thread_ids: SharedThreadIDs,
 }
 
-unsafe extern "C" fn get_extension(
-    clap_host: *const RawClapHost,
-    extension_id: *const i8,
-) -> *const c_void {
-    log::trace!("clap plugin host request get_extension");
-
+unsafe fn parse_clap_host<'a>(clap_host: *const RawClapHost) -> Result<&'a HostData, ()> {
     if clap_host.is_null() {
-        log::warn!(
-            "Call to `get_extension(host: *const clap_host, extension_id: *const i8) received a null pointer from plugin`"
-        );
-        return ptr::null();
+        log::warn!("Received a null clap_host_t pointer from plugin");
+        return Err(());
     }
 
     let host = &*(clap_host as *const RawClapHost);
 
     if host.host_data.is_null() {
-        log::warn!(
-            "Call to `get_extension(host: *const clap_host, extension_id: *const i8) received a null pointer in host_data from plugin`"
-        );
-        return ptr::null();
+        log::warn!("Received a null clap_host_t->host_data pointer from plugin");
+        return Err(());
     }
 
-    let host_data = &*(host.host_data as *const HostData);
+    Ok(&*(host.host_data as *const HostData))
+}
+
+/// [thread-safe]
+unsafe extern "C" fn get_extension(
+    clap_host: *const RawClapHost,
+    extension_id: *const i8,
+) -> *const c_void {
+    let host_data = match parse_clap_host(clap_host) {
+        Ok(host_data) => host_data,
+        Err(()) => return ptr::null(),
+    };
 
     if extension_id.is_null() {
         log::warn!(
@@ -141,37 +157,47 @@ unsafe extern "C" fn get_extension(
     {
         extension_id
     } else {
-        log::error!("Failed to parse extension id from clap plugin's call to clap_host_audio_ports->get_extension()");
+        log::error!(
+            "Failed to parse extension id from call to clap_host_audio_ports->get_extension()"
+        );
         return ptr::null();
     };
 
-    if &extension_id == "clap.audio-ports" {
-        log::trace!("Got supported extension from clap plugin's call to clap_host_audio_ports->get_extension(): {}", &extension_id);
-
+    if extension_id == "clap.audio-ports" {
         // Safe because host_data is pinned in place via the `Shared` pointer.
         return (host_data.host_audio_ports).as_ptr() as *const c_void;
     }
 
-    if &extension_id == "clap.thread-check" {
-        log::trace!("Got supported extension from clap plugin's call to clap_host_audio_ports->get_extension(): {}", &extension_id);
-
+    if extension_id == "clap.thread-check" {
         // Safe because host_data is pinned in place via the `Shared` pointer.
         return (host_data.host_thread_check).as_ptr() as *const c_void;
     }
 
-    log::trace!("Got unkown extension id from clap plugin's call to clap_host_audio_ports->get_extension(): {}", &extension_id);
+    if extension_id == "clap.log" {
+        // Safe because host_data is pinned in place via the `Shared` pointer.
+        return (host_data.host_log).as_ptr() as *const c_void;
+    }
 
-    // TODO: extensions
     ptr::null()
 }
 
-unsafe extern "C" fn is_rescan_flag_supported(_clap_host: *const RawClapHost, flag: u32) -> bool {
+/// [main-thread]
+unsafe extern "C" fn is_rescan_flag_supported(clap_host: *const RawClapHost, flag: u32) -> bool {
     use clap_sys::ext::audio_ports::{
         CLAP_AUDIO_PORTS_RESCAN_CHANNEL_COUNT, CLAP_AUDIO_PORTS_RESCAN_FLAGS,
         CLAP_AUDIO_PORTS_RESCAN_IN_PLACE_PAIR, CLAP_AUDIO_PORTS_RESCAN_LIST,
         CLAP_AUDIO_PORTS_RESCAN_NAMES, CLAP_AUDIO_PORTS_RESCAN_PORT_TYPE,
     };
-    log::trace!("clap plugin is_rescan_flag_supported: flag {}", flag);
+
+    let host_data = match parse_clap_host(clap_host) {
+        Ok(host_data) => host_data,
+        Err(()) => return false,
+    };
+
+    if !host_data.thread_ids.is_external_main_thread() {
+        log::warn!("Plugin called clap_host_audio_ports->is_rescan_flag_supported() not in the main thread");
+        return false;
+    }
 
     if flag & CLAP_AUDIO_PORTS_RESCAN_NAMES == 1 {
         return false; // TODO: support this
@@ -200,32 +226,23 @@ unsafe extern "C" fn is_rescan_flag_supported(_clap_host: *const RawClapHost, fl
     false
 }
 
+/// [main-thread]
 unsafe extern "C" fn rescan(clap_host: *const RawClapHost, mut flags: u32) {
     use clap_sys::ext::audio_ports::CLAP_AUDIO_PORTS_RESCAN_NAMES;
 
-    log::trace!("clap plugin rescan audio ports: flag {}", flags);
+    let host_data = match parse_clap_host(clap_host) {
+        Ok(host_data) => host_data,
+        Err(()) => return,
+    };
 
-    if clap_host.is_null() {
-        log::warn!(
-            "Call to `request_restart(host: *const clap_host) received a null pointer from plugin`"
-        );
+    if !host_data.thread_ids.is_external_main_thread() {
+        log::warn!("Plugin called clap_host_audio_ports->rescan() not in the main thread");
         return;
     }
-
-    let host = &*(clap_host as *const RawClapHost);
-
-    if host.host_data.is_null() {
-        log::warn!(
-            "Call to `request_restart(host: *const clap_host) received a null pointer in host_data from plugin`"
-        );
-        return;
-    }
-
-    let host_data = &*(host.host_data as *const HostData);
 
     if flags & CLAP_AUDIO_PORTS_RESCAN_NAMES == 1 {
         // TODO: support this
-        log::warn!("clap plugin set CLAP_AUDIO_PORTS_RESCAN_NAMES flag in call to clap_host_audio_ports->rescan()");
+        log::warn!("clap plugin {:?} set CLAP_AUDIO_PORTS_RESCAN_NAMES flag in call to clap_host_audio_ports->rescan()", &host_data.plugin_id);
 
         flags = flags & (!CLAP_AUDIO_PORTS_RESCAN_NAMES);
     }
@@ -235,98 +252,42 @@ unsafe extern "C" fn rescan(clap_host: *const RawClapHost, mut flags: u32) {
     }
 }
 
+/// [thread-safe]
 unsafe extern "C" fn request_restart(clap_host: *const RawClapHost) {
-    log::trace!("clap plugin host request restart");
-
-    if clap_host.is_null() {
-        log::warn!(
-            "Call to `request_restart(host: *const clap_host) received a null pointer from plugin`"
-        );
-        return;
-    }
-
-    let host = &*(clap_host as *const RawClapHost);
-
-    if host.host_data.is_null() {
-        log::warn!(
-            "Call to `request_restart(host: *const clap_host) received a null pointer in host_data from plugin`"
-        );
-        return;
-    }
-
-    let host_data = &*(host.host_data as *const HostData);
+    let host_data = match parse_clap_host(clap_host) {
+        Ok(host_data) => host_data,
+        Err(()) => return,
+    };
 
     host_data.host_request.restart_requested.store(true, Ordering::Relaxed);
 }
 
+/// [thread-safe]
 unsafe extern "C" fn request_process(clap_host: *const RawClapHost) {
-    log::trace!("clap plugin host request process");
-
-    if clap_host.is_null() {
-        log::warn!(
-            "Call to `request_process(host: *const clap_host) received a null pointer from plugin`"
-        );
-        return;
-    }
-
-    let host = &*(clap_host as *const RawClapHost);
-
-    if host.host_data.is_null() {
-        log::warn!(
-            "Call to `request_process(host: *const clap_host) received a null pointer in host_data from plugin`"
-        );
-        return;
-    }
-
-    let host_data = &*(host.host_data as *const HostData);
+    let host_data = match parse_clap_host(clap_host) {
+        Ok(host_data) => host_data,
+        Err(()) => return,
+    };
 
     host_data.host_request.process_requested.store(true, Ordering::Relaxed);
 }
 
+/// [thread-safe]
 unsafe extern "C" fn request_callback(clap_host: *const RawClapHost) {
-    log::trace!("clap plugin host request callback");
-
-    if clap_host.is_null() {
-        log::warn!(
-            "Call to `request_callback(host: *const clap_host) received a null pointer from plugin`"
-        );
-        return;
-    }
-
-    let host = &*(clap_host as *const RawClapHost);
-
-    if host.host_data.is_null() {
-        log::warn!(
-            "Call to `request_callback(host: *const clap_host) received a null pointer in host_data from plugin`"
-        );
-        return;
-    }
-
-    let host_data = &*(host.host_data as *const HostData);
+    let host_data = match parse_clap_host(clap_host) {
+        Ok(host_data) => host_data,
+        Err(()) => return,
+    };
 
     host_data.host_request.callback_requested.store(true, Ordering::Relaxed);
 }
 
+/// [thread-safe]
 unsafe extern "C" fn is_main_thread(clap_host: *const RawClapHost) -> bool {
-    log::trace!("clap plugin host is_main_thread");
-
-    if clap_host.is_null() {
-        log::warn!(
-            "Call to `request_callback(host: *const clap_host) received a null pointer from plugin`"
-        );
-        return false;
-    }
-
-    let host = &*(clap_host as *const RawClapHost);
-
-    if host.host_data.is_null() {
-        log::warn!(
-            "Call to `request_callback(host: *const clap_host) received a null pointer in host_data from plugin`"
-        );
-        return false;
-    }
-
-    let host_data = &*(host.host_data as *const HostData);
+    let host_data = match parse_clap_host(clap_host) {
+        Ok(host_data) => host_data,
+        Err(()) => return false,
+    };
 
     if let Some(thread_id) = host_data.thread_ids.external_main_thread_id() {
         std::thread::current().id() == thread_id
@@ -336,26 +297,12 @@ unsafe extern "C" fn is_main_thread(clap_host: *const RawClapHost) -> bool {
     }
 }
 
+/// [thread-safe]
 unsafe extern "C" fn is_audio_thread(clap_host: *const RawClapHost) -> bool {
-    log::trace!("clap plugin host is_audio_thread");
-
-    if clap_host.is_null() {
-        log::warn!(
-            "Call to `request_callback(host: *const clap_host) received a null pointer from plugin`"
-        );
-        return false;
-    }
-
-    let host = &*(clap_host as *const RawClapHost);
-
-    if host.host_data.is_null() {
-        log::warn!(
-            "Call to `request_callback(host: *const clap_host) received a null pointer in host_data from plugin`"
-        );
-        return false;
-    }
-
-    let host_data = &*(host.host_data as *const HostData);
+    let host_data = match parse_clap_host(clap_host) {
+        Ok(host_data) => host_data,
+        Err(()) => return false,
+    };
 
     if let Some(thread_id) = host_data.thread_ids.external_audio_thread_id() {
         log::error!("external_main_thread_id is None");
@@ -363,4 +310,59 @@ unsafe extern "C" fn is_audio_thread(clap_host: *const RawClapHost) -> bool {
     } else {
         false
     }
+}
+
+/// [thread-safe]
+unsafe extern "C" fn log(clap_host: *const RawClapHost, severity: i32, msg: *const i8) {
+    use clap_sys::ext::log::{
+        CLAP_LOG_DEBUG, CLAP_LOG_ERROR, CLAP_LOG_FATAL, CLAP_LOG_HOST_MISBEHAVING, CLAP_LOG_INFO,
+        CLAP_LOG_PLUGIN_MISBEHAVING, CLAP_LOG_WARNING,
+    };
+
+    // TODO: Flags so the user can choose which plugins to log.
+
+    // TODO: Send messages to the engine thread once we have plugin sandboxing.
+
+    let host_data = match parse_clap_host(clap_host) {
+        Ok(host_data) => host_data,
+        Err(()) => return,
+    };
+
+    if msg.is_null() {
+        log::warn!(
+            "Call to `log(host: *const clap_host, severity: i32, msg: *const char) received a null pointer for msg from plugin`"
+        );
+        return;
+    }
+
+    // Assume that the user has passed in a null-terminated string.
+    //
+    // TODO: Safegaurd against non-null-terminated strings?
+    let msg = std::ffi::CStr::from_ptr(msg);
+
+    let msg = if let Ok(msg) = msg.to_str() {
+        msg
+    } else {
+        log::warn!(
+            "Failed to parse msg in plugin's call to `log(host: *const clap_host, severity: i32, msg: *const char)`"
+        );
+        return;
+    };
+
+    // TODO: Colored printing for different log levels.
+
+    print!("{}", &*host_data.plugin_log_name);
+
+    match severity {
+        CLAP_LOG_DEBUG => print!(" [DEBUG] "),
+        CLAP_LOG_INFO => print!(" [INFO] "),
+        CLAP_LOG_WARNING => print!(" [WARNING] "),
+        CLAP_LOG_ERROR => println!(" [ERROR] "),
+        CLAP_LOG_FATAL => print!(" [FATAL] "),
+        CLAP_LOG_HOST_MISBEHAVING => print!(" [HOST MISBEHAVING] "),
+        CLAP_LOG_PLUGIN_MISBEHAVING => print!(" [PLUGIN MISBEHAVING] "),
+        _ => print!(" [] "),
+    }
+
+    println!("{}", msg);
 }
