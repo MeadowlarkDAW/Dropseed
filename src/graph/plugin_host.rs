@@ -6,7 +6,7 @@ use std::sync::{
 
 use rusty_daw_core::SampleRate;
 
-use crate::plugin::ext::audio_ports::AudioPortsExtension;
+use crate::plugin::ext::audio_ports::PluginAudioPortsExt;
 use crate::plugin::process_info::ProcBuffers;
 use crate::plugin::{PluginAudioThread, PluginMainThread, PluginSaveState};
 use crate::{HostRequest, ProcInfo, ProcessStatus};
@@ -16,7 +16,7 @@ use super::shared_pool::PluginInstanceID;
 pub(crate) struct PluginInstanceHost {
     pub id: PluginInstanceID,
 
-    pub audio_ports_ext: Option<AudioPortsExtension>,
+    pub audio_ports_ext: Option<PluginAudioPortsExt>,
 
     main_thread: Option<Box<dyn PluginMainThread>>,
 
@@ -87,7 +87,7 @@ impl PluginInstanceHost {
         min_frames: u32,
         max_frames: u32,
         coll_handle: &basedrop::Handle,
-    ) -> Result<(PluginInstanceHostAudioThread, AudioPortsExtension), ActivatePluginError> {
+    ) -> Result<(PluginInstanceHostAudioThread, PluginAudioPortsExt), ActivatePluginError> {
         self.can_activate()?;
 
         let plugin_main_thread = self.main_thread.as_mut().unwrap();
@@ -237,7 +237,7 @@ impl PluginInstanceHost {
 pub(crate) enum OnIdleResult {
     Ok,
     PluginDeactivated,
-    PluginActivated(PluginInstanceHostAudioThread, AudioPortsExtension),
+    PluginActivated(PluginInstanceHostAudioThread, PluginAudioPortsExt),
     PluginReadyToRemove,
     PluginFailedToActivate(ActivatePluginError),
 }

@@ -22,7 +22,8 @@ use crate::event::DAWEngineEvent;
 use crate::graph::plugin_host::PluginInstanceHost;
 use crate::graph::shared_pool::SharedPluginHostAudioThread;
 use crate::host_request::HostRequest;
-use crate::plugin::ext::audio_ports::AudioPortsExtension;
+use crate::plugin::ext::audio_ports::PluginAudioPortsExt;
+use crate::thread_id::SharedThreadIDs;
 
 pub use compiler::GraphCompilerError;
 pub use plugin_host::ActivatePluginError;
@@ -89,6 +90,7 @@ impl AudioGraph {
         sample_rate: SampleRate,
         min_frames: u32,
         max_frames: u32,
+        thread_ids: SharedThreadIDs,
     ) -> (Self, SharedSchedule) {
         assert!(graph_in_channels > 0);
         assert!(graph_out_channels > 0);
@@ -100,6 +102,7 @@ impl AudioGraph {
 
         let (shared_schedule, shared_schedule_clone) = SharedSchedule::new(
             Schedule::empty(max_frames as usize, Shared::clone(&host_info)),
+            thread_ids,
             &coll_handle,
         );
 
@@ -818,7 +821,7 @@ impl AudioGraph {
 fn update_plugin_ports(
     abstract_graph: &mut Graph<PluginInstanceID, PortID, DefaultPortType>,
     entry: &mut PluginInstanceHostEntry,
-    audio_ports: &AudioPortsExtension,
+    audio_ports: &PluginAudioPortsExt,
 ) {
     let num_in_channels = audio_ports.total_in_channels();
     let num_out_channels = audio_ports.total_out_channels();
@@ -873,7 +876,7 @@ impl Drop for AudioGraph {
 pub enum PluginActivationStatus {
     /// This means the plugin successfully activated and returned
     /// its new audio/event port configuration.
-    Activated { audio_ports: AudioPortsExtension },
+    Activated { audio_ports: PluginAudioPortsExt },
 
     /// This means that the plugin loaded but did not activate yet. This
     /// can happen when the user loads a project with a deactivated

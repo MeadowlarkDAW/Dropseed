@@ -1,6 +1,6 @@
 use eframe::egui;
 use rusty_daw_engine::{
-    plugin::ext::audio_ports::AudioPortsExtension, Edge, PluginEdges, PluginInstanceID, PortType,
+    plugin::ext::audio_ports::PluginAudioPortsExt, Edge, PluginEdges, PluginInstanceID, PortType,
 };
 
 use super::BasicDawExampleGUI;
@@ -18,14 +18,14 @@ impl Default for PortChannel {
 }
 
 pub struct AudioPortState {
-    audio_ports_state_ext: AudioPortsExtension,
+    audio_ports_state_ext: PluginAudioPortsExt,
 
     audio_in_edges: Vec<Vec<Edge>>,
     audio_out_edges: Vec<Vec<Edge>>,
 }
 
 impl AudioPortState {
-    pub fn new(audio_ports_state_ext: AudioPortsExtension) -> Self {
+    pub fn new(audio_ports_state_ext: PluginAudioPortsExt) -> Self {
         let audio_in_edges: Vec<Vec<Edge>> =
             (0..audio_ports_state_ext.total_in_channels()).map(|_| Vec::new()).collect();
         let audio_out_edges: Vec<Vec<Edge>> =

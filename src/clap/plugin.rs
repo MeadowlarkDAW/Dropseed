@@ -24,9 +24,10 @@ use crate::clap::c_char_helpers::c_char_buf_to_str;
 use crate::host_request::HostRequest;
 use crate::plugin::process_info::{ProcBuffers, ProcInfo, ProcessStatus};
 use crate::plugin::{ext, PluginAudioThread, PluginDescriptor, PluginFactory, PluginMainThread};
+use crate::thread_id::SharedThreadIDs;
 use crate::AudioPortInfo;
-use crate::AudioPortsExtension;
 use crate::MainPortsLayout;
+use crate::PluginAudioPortsExt;
 
 struct SharedClapLib {
     // We hold on to this to make sure the host callback stays alive for as long as a
@@ -58,6 +59,7 @@ impl Drop for SharedClapLib {
 
 pub(crate) fn entry_init(
     plugin_path: &PathBuf,
+    thread_ids: SharedThreadIDs,
     coll_handle: &basedrop::Handle,
 ) -> Result<Vec<ClapPluginFactory>, Box<dyn Error>> {
     log::trace!("clap entry init at path {:?}", plugin_path);
@@ -161,6 +163,7 @@ pub(crate) fn entry_init(
             id,
             c_id,
             clap_version,
+            thread_ids: thread_ids.clone(),
         });
     }
 
@@ -174,6 +177,8 @@ pub(crate) struct ClapPluginFactory {
     descriptor: PluginDescriptor,
     id: Shared<String>,
     c_id: CString,
+
+    thread_ids: SharedThreadIDs,
 }
 
 impl PluginFactory for ClapPluginFactory {
@@ -195,8 +200,11 @@ impl PluginFactory for ClapPluginFactory {
     ) -> Result<Box<dyn PluginMainThread>, Box<dyn Error>> {
         log::trace!("clap plugin factory new {}", &*self.id);
 
-        let mut clap_host_request =
-            ClapHostRequest::new(host_request.clone(), main_thread_coll_handle);
+        let mut clap_host_request = ClapHostRequest::new(
+            host_request.clone(),
+            self.thread_ids.clone(),
+            main_thread_coll_handle,
+        );
 
         let raw_plugin = unsafe {
             ((&*self.shared_lib.raw_factory).create_plugin)(
@@ -284,13 +292,13 @@ unsafe impl Sync for SharedClapPluginInstance {}
 
 pub(crate) struct ClapPluginMainThread {
     shared_plugin: Shared<SharedClapPluginInstance>,
-    audio_ports_ext: Option<AudioPortsExtension>,
+    audio_ports_ext: Option<PluginAudioPortsExt>,
 }
 
 impl ClapPluginMainThread {
     fn parse_audio_ports_extension(
         &self,
-    ) -> Result<ext::audio_ports::AudioPortsExtension, Box<dyn Error>> {
+    ) -> Result<ext::audio_ports::PluginAudioPortsExt, Box<dyn Error>> {
         log::trace!("clap plugin instance parse audio ports extension {}", &*self.shared_plugin.id);
 
         if self.shared_plugin.activated.load(Ordering::Relaxed) {
@@ -309,7 +317,7 @@ impl ClapPluginMainThread {
         };
 
         if raw_ext.is_null() {
-            return Ok(ext::audio_ports::AudioPortsExtension::empty());
+            return Ok(ext::audio_ports::PluginAudioPortsExt::empty());
         }
 
         let raw_audio_ports = raw_ext as *const RawAudioPorts;
@@ -479,7 +487,7 @@ impl ClapPluginMainThread {
             }
         }).collect();
 
-        Ok(AudioPortsExtension { inputs, outputs, main_ports_layout })
+        Ok(PluginAudioPortsExt { inputs, outputs, main_ports_layout })
     }
 }
 
@@ -597,7 +605,7 @@ impl PluginMainThread for ClapPluginMainThread {
     /// [main-thread & !active_state]
     fn audio_ports_extension(
         &mut self,
-    ) -> Result<ext::audio_ports::AudioPortsExtension, Box<dyn Error>> {
+    ) -> Result<ext::audio_ports::PluginAudioPortsExt, Box<dyn Error>> {
         let res = self.parse_audio_ports_extension();
 
         if let Ok(audio_ports_ext) = &res {

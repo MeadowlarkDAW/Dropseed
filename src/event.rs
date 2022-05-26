@@ -4,7 +4,7 @@ use crate::{
     engine::{EngineActivatedInfo, ModifyGraphRes},
     graph::{ActivatePluginError, AudioGraphSaveState, GraphCompilerError, PluginInstanceID},
     plugin_scanner::RescanPluginDirectoriesRes,
-    AudioPortsExtension,
+    PluginAudioPortsExt,
 };
 
 #[derive(Debug)]
@@ -70,7 +70,7 @@ pub enum DAWEngineEvent {
     /// Make sure your UI updates the port configuration on this plugin.
     PluginActivated {
         plugin_id: PluginInstanceID,
-        new_audio_ports: AudioPortsExtension,
+        new_audio_ports: PluginAudioPortsExt,
     },
 
     PluginScanner(PluginScannerEvent),

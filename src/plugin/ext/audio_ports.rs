@@ -8,7 +8,7 @@ pub const PORT_NAME_SIDECHAIN: &'static str = "sidechain";
 ///
 /// By default this returns a configuration with a main stereo
 /// input port and a main stereo output port.
-pub struct AudioPortsExtension {
+pub struct PluginAudioPortsExt {
     /// The list of input audio ports, in order.
     pub inputs: Vec<AudioPortInfo>,
 
@@ -19,13 +19,13 @@ pub struct AudioPortsExtension {
     pub main_ports_layout: MainPortsLayout,
 }
 
-impl Default for AudioPortsExtension {
+impl Default for PluginAudioPortsExt {
     fn default() -> Self {
-        AudioPortsExtension::stereo_in_out()
+        PluginAudioPortsExt::stereo_in_out()
     }
 }
 
-impl AudioPortsExtension {
+impl PluginAudioPortsExt {
     pub fn total_in_channels(&self) -> usize {
         let mut num_inputs = 0;
         for input in self.inputs.iter() {
@@ -57,7 +57,7 @@ impl AudioPortsExtension {
     }
 
     pub fn empty() -> Self {
-        AudioPortsExtension {
+        PluginAudioPortsExt {
             inputs: vec![],
             outputs: vec![],
             main_ports_layout: MainPortsLayout::NoMainPorts,
@@ -66,7 +66,7 @@ impl AudioPortsExtension {
 
     /// A main stereo input port and a main stereo output port.
     pub fn stereo_in_out() -> Self {
-        AudioPortsExtension {
+        PluginAudioPortsExt {
             inputs: vec![AudioPortInfo {
                 stable_id: 0,
                 channels: 2,
@@ -85,7 +85,7 @@ impl AudioPortsExtension {
 
     /// A main mono input port and a main mono output port.
     pub fn mono_in_out() -> Self {
-        AudioPortsExtension {
+        PluginAudioPortsExt {
             inputs: vec![AudioPortInfo {
                 stable_id: 0,
                 channels: 1,
@@ -104,7 +104,7 @@ impl AudioPortsExtension {
 
     /// A main stereo output port only.
     pub fn stereo_out() -> Self {
-        AudioPortsExtension {
+        PluginAudioPortsExt {
             inputs: vec![],
             outputs: vec![AudioPortInfo {
                 stable_id: 0,
@@ -118,7 +118,7 @@ impl AudioPortsExtension {
 
     /// A main mono output port only.
     pub fn mono_out() -> Self {
-        AudioPortsExtension {
+        PluginAudioPortsExt {
             inputs: vec![],
             outputs: vec![AudioPortInfo {
                 stable_id: 0,
@@ -133,7 +133,7 @@ impl AudioPortsExtension {
     /// A main stereo input port and a main stereo output port, with an
     /// additional stereo sidechain input.
     pub fn stereo_in_out_w_sidechain() -> Self {
-        AudioPortsExtension {
+        PluginAudioPortsExt {
             inputs: vec![
                 AudioPortInfo {
                     stable_id: 0,
@@ -161,7 +161,7 @@ impl AudioPortsExtension {
     /// A main mono input port and a main mono output port, with an
     /// additional mono sidechain input.
     pub fn mono_in_out_w_sidechain() -> Self {
-        AudioPortsExtension {
+        PluginAudioPortsExt {
             inputs: vec![
                 AudioPortInfo {
                     stable_id: 0,
@@ -189,7 +189,7 @@ impl AudioPortsExtension {
     /// A main stereo output port with an additional stereo sidechain
     /// input.
     pub fn stereo_out_w_sidechain() -> Self {
-        AudioPortsExtension {
+        PluginAudioPortsExt {
             inputs: vec![AudioPortInfo {
                 stable_id: 0,
                 channels: 2,
@@ -209,7 +209,7 @@ impl AudioPortsExtension {
     /// A main mono output port with an additional mono sidechain
     /// input.
     pub fn mono_out_w_sidechain() -> Self {
-        AudioPortsExtension {
+        PluginAudioPortsExt {
             inputs: vec![AudioPortInfo {
                 stable_id: 0,
                 channels: 1,
@@ -228,7 +228,7 @@ impl AudioPortsExtension {
 
     /// A main mono input port and a main stereo output port.
     pub fn mono_in_stereo_out() -> Self {
-        AudioPortsExtension {
+        PluginAudioPortsExt {
             inputs: vec![AudioPortInfo {
                 stable_id: 0,
                 channels: 1,
@@ -247,7 +247,7 @@ impl AudioPortsExtension {
 
     /// A main stereo input port and a main mono output port.
     pub fn stereo_in_mono_out() -> Self {
-        AudioPortsExtension {
+        PluginAudioPortsExt {
             inputs: vec![AudioPortInfo {
                 stable_id: 0,
                 channels: 2,
@@ -268,7 +268,7 @@ impl AudioPortsExtension {
 #[derive(Debug, Clone, PartialEq)]
 /// Information about a custom audio port.
 pub struct AudioPortInfo {
-    /// Stable identifier
+    /// Stable identifier, it must never change.
     pub stable_id: u32,
 
     /// The number of channels in this port.

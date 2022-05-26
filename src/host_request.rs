@@ -7,6 +7,8 @@ use std::sync::{
 
 use basedrop::Shared;
 
+use crate::plugin::ext::params::{HostParamsExtAudioThread, HostParamsExtMainThread};
+
 #[derive(Debug, Clone)]
 pub struct HostInfo {
     /// The name of this host (mandatory).
@@ -84,6 +86,8 @@ impl HostRequest {
     }
 
     /// Retrieve info about this host.
+    ///
+    /// `[thread-safe]`
     pub fn info(&self) -> Shared<HostInfo> {
         Shared::clone(&self.info)
     }

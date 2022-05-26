@@ -8,6 +8,7 @@ use crate::graph::plugin_host::PluginInstanceHost;
 use crate::graph::shared_pool::{PluginInstanceID, PluginInstanceType};
 use crate::host_request::HostRequest;
 use crate::plugin::{PluginDescriptor, PluginFactory, PluginSaveState};
+use crate::thread_id::SharedThreadIDs;
 use crate::HostInfo;
 
 #[cfg(feature = "clap-host")]
@@ -75,11 +76,17 @@ pub(crate) struct PluginScanner {
 
     unkown_rdn: Shared<String>,
 
+    thread_ids: SharedThreadIDs,
+
     coll_handle: basedrop::Handle,
 }
 
 impl PluginScanner {
-    pub fn new(coll_handle: basedrop::Handle, host_info: Shared<HostInfo>) -> Self {
+    pub fn new(
+        coll_handle: basedrop::Handle,
+        host_info: Shared<HostInfo>,
+        thread_ids: SharedThreadIDs,
+    ) -> Self {
         Self {
             scanned_internal_plugins: HashMap::default(),
             scanned_external_plugins: HashMap::default(),
@@ -90,6 +97,8 @@ impl PluginScanner {
             host_info,
 
             unkown_rdn: Shared::new(&coll_handle, String::from("org.rustydaw.unkown")),
+
+            thread_ids,
 
             coll_handle,
         }
@@ -211,7 +220,11 @@ impl PluginScanner {
             }
 
             for binary_path in found_binaries.iter() {
-                match crate::clap::plugin::entry_init(binary_path, &self.coll_handle) {
+                match crate::clap::plugin::entry_init(
+                    binary_path,
+                    self.thread_ids.clone(),
+                    &self.coll_handle,
+                ) {
                     Ok(mut factories) => {
                         for f in factories.drain(..) {
                             let id: String = f.description().id.clone();

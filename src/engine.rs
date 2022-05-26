@@ -19,6 +19,7 @@ use crate::graph::{
 };
 use crate::plugin::{PluginFactory, PluginSaveState};
 use crate::plugin_scanner::PluginScanner;
+use crate::thread_id::SharedThreadIDs;
 use crate::{host_request::HostInfo, plugin_scanner::ScannedPluginKey};
 
 pub struct RustyDAWEngine {
@@ -27,6 +28,7 @@ pub struct RustyDAWEngine {
     //garbage_coll_handle: Option<std::thread::JoinHandle<()>>,
     //garbage_coll_run: Arc<AtomicBool>,
     event_tx: Sender<DAWEngineEvent>,
+    thread_ids: SharedThreadIDs,
     collector: basedrop::Collector,
     host_info: Shared<HostInfo>,
 }
@@ -53,7 +55,12 @@ impl RustyDAWEngine {
 
         let host_info = Shared::new(&collector.handle(), host_info);
 
-        let mut plugin_scanner = PluginScanner::new(collector.handle(), Shared::clone(&host_info));
+        // TODO: Set this in the sandbox thread once we have plugin sandboxing implemented.
+        let thread_ids =
+            SharedThreadIDs::new(Some(std::thread::current().id()), None, &collector.handle());
+
+        let mut plugin_scanner =
+            PluginScanner::new(collector.handle(), Shared::clone(&host_info), thread_ids.clone());
 
         let (event_tx, event_rx) = channel::unbounded::<DAWEngineEvent>();
 
@@ -68,6 +75,7 @@ impl RustyDAWEngine {
                 //garbage_coll_handle: Some(garbage_coll_handle),
                 //garbage_coll_run,
                 event_tx,
+                thread_ids,
                 collector,
                 //coll_handle,
                 host_info,
@@ -123,6 +131,7 @@ impl RustyDAWEngine {
             sample_rate,
             min_frames,
             max_frames,
+            self.thread_ids.clone(),
         );
 
         // TODO: Remove this once compiler is fixed.

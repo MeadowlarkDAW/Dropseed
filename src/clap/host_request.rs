@@ -1,5 +1,6 @@
 use basedrop::Shared;
 use clap_sys::ext::audio_ports::clap_host_audio_ports as RawClapHostAudioPorts;
+use clap_sys::ext::thread_check::clap_host_thread_check as RawClapHostThreadCheck;
 use clap_sys::host::clap_host as RawClapHost;
 use clap_sys::version::CLAP_VERSION;
 use std::ffi::c_void;
@@ -10,6 +11,7 @@ use std::sync::Arc;
 use super::c_char_helpers::c_char_ptr_to_maybe_str;
 
 use crate::host_request::HostRequest;
+use crate::thread_id::SharedThreadIDs;
 
 pub(crate) struct ClapHostRequest {
     // We are storing this as a slice so we can get a raw pointer
@@ -21,13 +23,19 @@ pub(crate) struct ClapHostRequest {
 }
 
 impl ClapHostRequest {
-    pub(crate) fn new(host_request: HostRequest, coll_handle: &basedrop::Handle) -> Self {
+    pub(crate) fn new(
+        host_request: HostRequest,
+        thread_ids: SharedThreadIDs,
+        coll_handle: &basedrop::Handle,
+    ) -> Self {
         let host_data = Shared::new(
             coll_handle,
             [HostData {
                 plug_did_create: Arc::new(AtomicBool::new(false)),
                 host_request,
                 host_audio_ports: [RawClapHostAudioPorts { is_rescan_flag_supported, rescan }],
+                host_thread_check: [RawClapHostThreadCheck { is_main_thread, is_audio_thread }],
+                thread_ids,
             }],
         );
 
@@ -85,6 +93,9 @@ struct HostData {
     plug_did_create: Arc<AtomicBool>,
     host_request: HostRequest,
     host_audio_ports: [RawClapHostAudioPorts; 1],
+    host_thread_check: [RawClapHostThreadCheck; 1],
+
+    thread_ids: SharedThreadIDs,
 }
 
 unsafe extern "C" fn get_extension(
@@ -139,6 +150,13 @@ unsafe extern "C" fn get_extension(
 
         // Safe because host_data is pinned in place via the `Shared` pointer.
         return (host_data.host_audio_ports).as_ptr() as *const c_void;
+    }
+
+    if &extension_id == "clap.thread-check" {
+        log::trace!("Got supported extension from clap plugin's call to clap_host_audio_ports->get_extension(): {}", &extension_id);
+
+        // Safe because host_data is pinned in place via the `Shared` pointer.
+        return (host_data.host_thread_check).as_ptr() as *const c_void;
     }
 
     log::trace!("Got unkown extension id from clap plugin's call to clap_host_audio_ports->get_extension(): {}", &extension_id);
@@ -287,4 +305,62 @@ unsafe extern "C" fn request_callback(clap_host: *const RawClapHost) {
     let host_data = &*(host.host_data as *const HostData);
 
     host_data.host_request.callback_requested.store(true, Ordering::Relaxed);
+}
+
+unsafe extern "C" fn is_main_thread(clap_host: *const RawClapHost) -> bool {
+    log::trace!("clap plugin host is_main_thread");
+
+    if clap_host.is_null() {
+        log::warn!(
+            "Call to `request_callback(host: *const clap_host) received a null pointer from plugin`"
+        );
+        return false;
+    }
+
+    let host = &*(clap_host as *const RawClapHost);
+
+    if host.host_data.is_null() {
+        log::warn!(
+            "Call to `request_callback(host: *const clap_host) received a null pointer in host_data from plugin`"
+        );
+        return false;
+    }
+
+    let host_data = &*(host.host_data as *const HostData);
+
+    if let Some(thread_id) = host_data.thread_ids.external_main_thread_id() {
+        std::thread::current().id() == thread_id
+    } else {
+        log::error!("external_main_thread_id is None");
+        false
+    }
+}
+
+unsafe extern "C" fn is_audio_thread(clap_host: *const RawClapHost) -> bool {
+    log::trace!("clap plugin host is_audio_thread");
+
+    if clap_host.is_null() {
+        log::warn!(
+            "Call to `request_callback(host: *const clap_host) received a null pointer from plugin`"
+        );
+        return false;
+    }
+
+    let host = &*(clap_host as *const RawClapHost);
+
+    if host.host_data.is_null() {
+        log::warn!(
+            "Call to `request_callback(host: *const clap_host) received a null pointer in host_data from plugin`"
+        );
+        return false;
+    }
+
+    let host_data = &*(host.host_data as *const HostData);
+
+    if let Some(thread_id) = host_data.thread_ids.external_audio_thread_id() {
+        log::error!("external_main_thread_id is None");
+        std::thread::current().id() == thread_id
+    } else {
+        false
+    }
 }

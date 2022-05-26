@@ -1,9 +1,11 @@
 use std::cell::UnsafeCell;
+use std::thread::ThreadId;
 
 use basedrop::{Shared, SharedCell};
 use smallvec::SmallVec;
 
 use crate::host_request::HostInfo;
+use crate::thread_id::SharedThreadIDs;
 use crate::ProcInfo;
 
 use super::shared_pool::SharedBuffer;
@@ -157,6 +159,9 @@ unsafe impl Sync for ScheduleWrapper {}
 
 pub struct SharedSchedule {
     schedule: Shared<SharedCell<ScheduleWrapper>>,
+    thread_ids: SharedThreadIDs,
+    current_audio_thread_id: Option<ThreadId>,
+    coll_handle: basedrop::Handle,
 }
 
 // Implement Debug so we can send it in an event.
@@ -167,7 +172,11 @@ impl std::fmt::Debug for SharedSchedule {
 }
 
 impl SharedSchedule {
-    pub(crate) fn new(schedule: Schedule, coll_handle: &basedrop::Handle) -> (Self, Self) {
+    pub(crate) fn new(
+        schedule: Schedule,
+        thread_ids: SharedThreadIDs,
+        coll_handle: &basedrop::Handle,
+    ) -> (Self, Self) {
         let schedule = Shared::new(
             coll_handle,
             SharedCell::new(Shared::new(
@@ -176,7 +185,20 @@ impl SharedSchedule {
             )),
         );
 
-        (Self { schedule: schedule.clone() }, Self { schedule })
+        (
+            Self {
+                schedule: schedule.clone(),
+                thread_ids: thread_ids.clone(),
+                current_audio_thread_id: None,
+                coll_handle: coll_handle.clone(),
+            },
+            Self {
+                schedule,
+                thread_ids,
+                current_audio_thread_id: None,
+                coll_handle: coll_handle.clone(),
+            },
+        )
     }
 
     pub(crate) fn set_new_schedule(&mut self, schedule: Schedule, coll_handle: &basedrop::Handle) {
@@ -193,6 +215,18 @@ impl SharedSchedule {
         // This is safe because the schedule is only ever accessed by the
         // audio thread.
         let schedule = unsafe { &mut *(*self.schedule.get()).schedule.get() };
+
+        // TODO: Set this in the sandbox thread once we implement plugin sandboxing.
+        // Make sure the the audio thread ID is correct.
+        if let Some(audio_thread_id) = self.thread_ids.external_audio_thread_id() {
+            if std::thread::current().id() != audio_thread_id {
+                self.thread_ids
+                    .set_external_audio_thread_id(std::thread::current().id(), &self.coll_handle);
+            }
+        } else {
+            self.thread_ids
+                .set_external_audio_thread_id(std::thread::current().id(), &self.coll_handle);
+        }
 
         schedule.process_cpal_interleaved_output_only(num_out_channels, out);
     }

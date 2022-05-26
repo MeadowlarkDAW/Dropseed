@@ -6,7 +6,7 @@ use std::{pin::Pin, ptr};
 use crate::{
     plugin::process_info::ProcInfo,
     plugin::{audio_buffer::RawAudioChannelBuffers, process_info::ProcBuffers},
-    AudioPortsExtension,
+    PluginAudioPortsExt,
 };
 
 use super::events::{ClapInputEvents, ClapOutputEvents};
@@ -31,7 +31,7 @@ unsafe impl Send for ClapProcess {}
 unsafe impl Sync for ClapProcess {}
 
 impl ClapProcess {
-    pub fn new(audio_ports: &AudioPortsExtension) -> Self {
+    pub fn new(audio_ports: &PluginAudioPortsExt) -> Self {
         // Allocate enough slots for each buffer so we can update them in
         // the audio thread.
 
