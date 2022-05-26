@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 rusty-daw-engine = { path = "../../" }
-rusty-daw-core = { path = "../../../rusty-daw-core" }
+rusty-daw-core = "0.9"
 eframe = "0.18"
 cpal = "0.13"
 crossbeam = "0.8"

@@ -25,7 +25,7 @@ members = [
 ]
 
 [dependencies]
-rusty-daw-core = { path = "../rusty-daw-core" }
+rusty-daw-core = "0.9"
 audio-graph = { git = "https://github.com/MeadowlarkDAW/audio-graph", branch = "main" }
 #audio-graph = { path = "../audio-graph" }
 #clap-sys = { git = "https://github.com/glowcoil/clap-sys.git", rev = "b9603dca77250499acce8422e04a5741d6f9faba" }
