@@ -129,106 +129,116 @@ pub(crate) fn show(app: &mut BasicDawExampleGUI, ui: &mut egui::Ui) {
                 .fill(egui::Color32::from_gray(15))
                 .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(100)))
                 .show(ui, |ui| {
-                    egui::ScrollArea::vertical().id_source(&format!("plugin{}hscroll", plugin_i)).show(ui, |ui| {
-                        if plugin.active {
-                            ui.colored_label(egui::Color32::GREEN, "activated");
-                        } else {
-                            ui.colored_label(egui::Color32::RED, "deactivated");
-                        }
+                    egui::ScrollArea::vertical()
+                        .id_source(&format!("plugin{}hscroll", plugin_i))
+                        .show(ui, |ui| {
+                            // TODO: Let the user activate/deactive the plugin in this GUI.
 
-                        ui.label(&plugin.plugin_name);
-                        ui.label(&format!("id: {:?}", plugin.plugin_id));
-
-                        ui.separator();
-
-                        if let Some(audio_ports_state) = &plugin.audio_ports_state {
-                            ui.label("audio in");
-                            let mut channel_i = 0;
-                            for (port_i, port) in audio_ports_state
-                                .audio_ports_state_ext
-                                .inputs
-                                .iter()
-                                .enumerate()
-                            {
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        port.display_name
-                                            .as_ref()
-                                            .unwrap_or(&format!("{}", port_i)),
-                                    );
-
-                                    for _ in 0..port.channels {
-                                        ui.selectable_value(
-                                            &mut plugin.selected_port,
-                                            PortChannel::AudioIn(channel_i),
-                                            &format!("{}", channel_i),
-                                        );
-
-                                        channel_i += 1;
-                                    }
-                                });
+                            if plugin.active {
+                                ui.colored_label(egui::Color32::GREEN, "activated");
+                            } else {
+                                ui.colored_label(egui::Color32::RED, "deactivated");
                             }
+
+                            ui.label(&plugin.plugin_name);
+                            ui.label(&format!("id: {:?}", plugin.plugin_id));
 
                             ui.separator();
 
-                            ui.label("audio out");
-                            let mut channel_i = 0;
-                            for (port_i, port) in audio_ports_state
-                                .audio_ports_state_ext
-                                .outputs
-                                .iter()
-                                .enumerate()
-                            {
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        port.display_name
-                                            .as_ref()
-                                            .unwrap_or(&format!("{}", port_i)),
-                                    );
-
-                                    for _ in 0..port.channels {
-                                        ui.selectable_value(
-                                            &mut plugin.selected_port,
-                                            PortChannel::AudioOut(channel_i),
-                                            &format!("{}", channel_i),
+                            if let Some(audio_ports_state) = &plugin.audio_ports_state {
+                                ui.label("audio in");
+                                let mut channel_i = 0;
+                                for (port_i, port) in audio_ports_state
+                                    .audio_ports_state_ext
+                                    .inputs
+                                    .iter()
+                                    .enumerate()
+                                {
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            port.display_name
+                                                .as_ref()
+                                                .unwrap_or(&format!("{}", port_i)),
                                         );
 
-                                        channel_i += 1;
+                                        for _ in 0..port.channels {
+                                            ui.selectable_value(
+                                                &mut plugin.selected_port,
+                                                PortChannel::AudioIn(channel_i),
+                                                &format!("{}", channel_i),
+                                            );
+
+                                            channel_i += 1;
+                                        }
+                                    });
+                                }
+
+                                ui.separator();
+
+                                ui.label("audio out");
+                                let mut channel_i = 0;
+                                for (port_i, port) in audio_ports_state
+                                    .audio_ports_state_ext
+                                    .outputs
+                                    .iter()
+                                    .enumerate()
+                                {
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            port.display_name
+                                                .as_ref()
+                                                .unwrap_or(&format!("{}", port_i)),
+                                        );
+
+                                        for _ in 0..port.channels {
+                                            ui.selectable_value(
+                                                &mut plugin.selected_port,
+                                                PortChannel::AudioOut(channel_i),
+                                                &format!("{}", channel_i),
+                                            );
+
+                                            channel_i += 1;
+                                        }
+                                    });
+                                }
+
+                                ui.separator();
+
+                                // TODO: Let the user add/remove connections in this GUI.
+
+                                ui.label("connections on port");
+                                match plugin.selected_port {
+                                    PortChannel::AudioIn(channel_i) => {
+                                        if let Some(edges) =
+                                            audio_ports_state.audio_in_edges.get(channel_i)
+                                        {
+                                            for edge in edges.iter() {
+                                                ui.label(&format!(
+                                                    "{:?} port {}",
+                                                    edge.src_plugin_id, edge.src_channel
+                                                ));
+                                            }
+                                        }
                                     }
-                                });
-                            }
-
-                            ui.separator();
-
-                            // TODO: Let the user add/remove connections in this GUI.
-
-                            ui.label("connections on port");
-                            match plugin.selected_port {
-                                PortChannel::AudioIn(channel_i) => {
-                                    if let Some(edges) =
-                                        audio_ports_state.audio_in_edges.get(channel_i)
-                                    {
-                                        for edge in edges.iter() {
-                                            ui.label(&format!("{:?} port {}", edge.src_plugin_id, edge.src_channel));
+                                    PortChannel::AudioOut(channel_i) => {
+                                        if let Some(edges) =
+                                            audio_ports_state.audio_out_edges.get(channel_i)
+                                        {
+                                            for edge in edges.iter() {
+                                                ui.label(&format!(
+                                                    "{:?} port {}",
+                                                    edge.dst_plugin_id, edge.dst_channel
+                                                ));
+                                            }
                                         }
                                     }
                                 }
-                                PortChannel::AudioOut(channel_i) => {
-                                    if let Some(edges) =
-                                        audio_ports_state.audio_out_edges.get(channel_i)
-                                    {
-                                        for edge in edges.iter() {
-                                            ui.label(&format!("{:?} port {}", edge.dst_plugin_id, edge.dst_channel));
-                                        }
-                                    }
-                                }
+
+                                ui.separator();
                             }
 
-                            ui.separator();
-                        }
-
-                        // TODO: Parameters
-                    });
+                            // TODO: Parameters
+                        });
                 });
         }
     } else {

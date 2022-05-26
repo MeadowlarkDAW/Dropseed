@@ -93,7 +93,7 @@ impl std::fmt::Debug for PluginInstanceType {
             match self {
                 PluginInstanceType::Internal => "INT",
                 PluginInstanceType::Clap => "CLAP",
-                &PluginInstanceType::Unloaded => "UNLOADED",
+                PluginInstanceType::Unloaded => "UNLOADED",
                 PluginInstanceType::GraphInput => "GRAPH_IN",
                 PluginInstanceType::GraphOutput => "GRAPH_OUT",
             }
@@ -132,8 +132,14 @@ impl std::fmt::Debug for PluginInstanceID {
             PluginInstanceType::Clap => {
                 write!(f, "CLAP({})({})", &**self.rdn, self.node_ref.as_usize())
             }
-            _ => {
-                write!(f, "{:?}({})", self.format, self.node_ref.as_usize())
+            PluginInstanceType::Unloaded => {
+                write!(f, "UNLOADED({})", self.node_ref.as_usize())
+            }
+            PluginInstanceType::GraphInput => {
+                write!(f, "GRAPH_IN")
+            }
+            PluginInstanceType::GraphOutput => {
+                write!(f, "GRAPH_OUT")
             }
         }
     }
