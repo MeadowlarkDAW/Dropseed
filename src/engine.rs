@@ -35,7 +35,6 @@ pub struct RustyDAWEngine {
 
 impl RustyDAWEngine {
     pub fn new(
-        garbage_collect_interval: Duration,
         host_info: HostInfo,
         mut internal_plugins: Vec<Box<dyn PluginFactory>>,
     ) -> (Self, Receiver<DAWEngineEvent>, Vec<Result<ScannedPluginKey, Box<dyn Error>>>) {

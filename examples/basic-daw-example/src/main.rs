@@ -68,7 +68,6 @@ fn main() {
     // ---  Initialize RustyDAW Engine  -------------------------------------------
 
     let (mut engine, engine_rx, internal_scan_res) = RustyDAWEngine::new(
-        Duration::from_secs(3),
         HostInfo::new(String::from("RustyDAW integration test"), String::from("0.1.0"), None, None),
         Vec::new(),
     );
