@@ -40,25 +40,23 @@ impl std::fmt::Debug for Schedule {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut s = String::new();
 
-        s.push_str("Schedule {\n    tasks:\n");
-
-        for t in self.tasks.iter() {
-            s.push_str(format!("        {:?},\n", t).as_str());
-        }
+        s.push_str("Schedule {\n");
 
         let mut g_s = String::new();
         for b in self.graph_audio_in.iter() {
             g_s.push_str(&format!("{:?}, ", b.id()))
         }
-        s.push_str(format!("\n    graph_audio_in: {:?},\n", &g_s).as_str());
+        s.push_str(format!("    graph_audio_in: {:?},\n", &g_s).as_str());
+
+        for t in self.tasks.iter() {
+            s.push_str(format!("    {:?},\n", t).as_str());
+        }
 
         let mut g_s = String::new();
         for b in self.graph_audio_out.iter() {
             g_s.push_str(&format!("{:?}, ", b.id()))
         }
-        s.push_str(format!("    graph_audio_out: {:?},\n", &g_s).as_str());
-
-        s.push_str(format!("    max_block_size: {},\n}}", &self.max_block_size).as_str());
+        s.push_str(format!("    graph_audio_out: {:?},\n}}", &g_s).as_str());
 
         write!(f, "{}", s)
     }
