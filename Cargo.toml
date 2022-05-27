@@ -39,6 +39,7 @@ crossbeam = "0.8"
 fnv = "1.0"
 log = "0.4"
 derive_more = "0.99"
+bytemuck = "1.9"
 cpal = { version = "0.13", optional = true }
 libloading = { version = "0.7", optional = true }
 globwalk = { version = "0.8", optional = true }

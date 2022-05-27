@@ -4,6 +4,7 @@ use std::error::Error;
 use crate::{host_request::HostRequest, PluginInstanceID};
 
 pub mod audio_buffer;
+pub mod event_queue;
 pub mod events;
 pub mod ext;
 
