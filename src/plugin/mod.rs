@@ -4,6 +4,7 @@ use std::error::Error;
 use crate::{host_request::HostRequest, PluginInstanceID};
 
 pub mod audio_buffer;
+pub mod events;
 pub mod ext;
 
 pub(crate) mod process_info;
@@ -154,11 +155,89 @@ pub trait PluginMainThread {
     ///
     /// [main-thread & !active_state]
     #[allow(unused)]
-    fn audio_ports_extension(
+    fn audio_ports_ext(
         &mut self,
-    ) -> Result<ext::audio_ports::PluginAudioPortsExt, Box<dyn Error>> {
-        Ok(ext::audio_ports::PluginAudioPortsExt::empty())
+    ) -> Result<&ext::audio_ports::PluginAudioPortsExt, Box<dyn Error>> {
+        Ok(&ext::audio_ports::EMPTY_AUDIO_PORTS_CONFIG)
     }
+
+    // --- Parameters ---------------------------------------------------------------------------------
+
+    /// Get the total number of parameters in this plugin.
+    ///
+    /// You may return 0 if this plugins has no parameters.
+    ///
+    /// By default this returns 0.
+    ///
+    /// [main-thread]
+    #[allow(unused)]
+    fn num_params(&mut self) -> u32 {
+        0
+    }
+
+    /// Get the info of the given parameter.
+    ///
+    /// This will never be called if `PluginMainThread::num_params()` returned 0.
+    ///
+    /// By default this returns an Err(()).
+    ///
+    /// [main-thread]
+    #[allow(unused)]
+    fn param_info(&mut self) -> Result<&ext::params::ParamInfo, ()> {
+        Err(())
+    }
+
+    /// Get the plain value of the parameter.
+    ///
+    /// This will never be called if `PluginMainThread::num_params()` returned 0.
+    ///
+    /// By default this returns `Err(())`
+    ///
+    /// [main-thread]
+    #[allow(unused)]
+    fn param_value(&self, param_id: u32) -> Result<f64, ()> {
+        Err(())
+    }
+
+    /// Formats the display text for the given parameter value.
+    ///
+    /// This will never be called if `PluginMainThread::num_params()` returned 0.
+    ///
+    /// By default this returns `Err(())`
+    ///
+    /// [main-thread]
+    #[allow(unused)]
+    fn param_value_to_text(&self, param_id: u32, value: f64) -> Result<String, ()> {
+        Err(())
+    }
+
+    /// Converts the display text to a parameter value.
+    ///
+    /// This will never be called if `PluginMainThread::num_params()` returned 0.
+    ///
+    /// By default this returns `Err(())`
+    ///
+    /// [main-thread]
+    #[allow(unused)]
+    fn param_text_to_value(&self, param_id: u32, display: &str) -> Result<f64, ()> {
+        Err(())
+    }
+
+    /// Flushes a set of parameter changes.
+    ///
+    /// This will only be called while the plugin is inactive.
+    ///
+    /// This will never be called if `PluginMainThread::num_params()` returned 0.
+    ///
+    /// This method will not be called concurrently to clap_plugin->process().
+    ///
+    /// This method will not be used while the plugin is processing.
+    ///
+    /// By default this does nothing.
+    ///
+    /// [!active : main-thread]
+    #[allow(unused)]
+    fn param_flush(&mut self) {}
 }
 
 /// The methods of an audio plugin instance which run in the "audio" thread.
@@ -189,4 +268,20 @@ pub trait PluginAudioThread: Send + Sync + 'static {
     ///
     /// `[audio-thread & active_state & processing_state]`
     fn process(&mut self, proc_info: &ProcInfo, buffers: &mut ProcBuffers) -> ProcessStatus;
+
+    /// Flushes a set of parameter changes.
+    ///
+    /// This will only be called while the plugin is inactive.
+    ///
+    /// This will never be called if `PluginMainThread::num_params()` returned 0.
+    ///
+    /// This method will not be called concurrently to clap_plugin->process().
+    ///
+    /// This method will not be used while the plugin is processing.
+    ///
+    /// By default this does nothing.
+    ///
+    /// [active && !processing : audio-thread]
+    #[allow(unused)]
+    fn param_flush(&mut self) {}
 }

@@ -102,35 +102,6 @@ pub struct ParamInfo {
     pub default_value: f64,
 }
 
-pub trait PluginParamsExt {
-    /// Get the list of all the parameters.
-    ///
-    /// [main-thread]
-    fn params(&self) -> &[ParamInfo];
-
-    /// Get the plain value of the parameter.
-    ///
-    /// [main-thread]
-    fn value(&self, param_id: u32) -> Result<f64, ()>;
-
-    /// Formats the display text for the given parameter value.
-    ///
-    /// [main-thread]
-    fn value_to_text(&self, param_id: u32, value: f64) -> Result<String, ()>;
-
-    /// Converts the display text to a parameter value.
-    fn text_to_value(&self, param_id: u32, display: &str) -> Result<f64, ()>;
-
-    /// Flushes a set of parameter changes.
-    ///
-    /// This method will not be called concurrently to clap_plugin->process().
-    ///
-    /// This method will not be used while the plugin is processing.
-    ///
-    /// [!active : main-thread]
-    fn flush(&mut self);
-}
-
 bitflags! {
     pub struct ParamRescanFlags: u32 {
         /// The parameter values did change (eg. after loading a preset).

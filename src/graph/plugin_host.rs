@@ -96,8 +96,8 @@ impl PluginInstanceHost {
             save_state.activation_requested = true;
         }
 
-        let audio_ports = match plugin_main_thread.audio_ports_extension() {
-            Ok(audio_ports) => audio_ports,
+        let audio_ports = match plugin_main_thread.audio_ports_ext() {
+            Ok(audio_ports) => audio_ports.clone(),
             Err(e) => {
                 self.state.set(PluginState::InactiveWithError);
 

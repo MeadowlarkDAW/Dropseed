@@ -605,18 +605,21 @@ impl PluginMainThread for ClapPluginMainThread {
     /// The default configuration is a main stereo input port and a main stereo output port.
     ///
     /// [main-thread & !active_state]
-    fn audio_ports_extension(
+    fn audio_ports_ext(
         &mut self,
-    ) -> Result<ext::audio_ports::PluginAudioPortsExt, Box<dyn Error>> {
-        let res = self.parse_audio_ports_extension();
+    ) -> Result<&ext::audio_ports::PluginAudioPortsExt, Box<dyn Error>> {
+        match self.parse_audio_ports_extension() {
+            Ok(audio_ports_ext) => {
+                self.audio_ports_ext = Some(audio_ports_ext);
 
-        if let Ok(audio_ports_ext) = &res {
-            self.audio_ports_ext = Some(audio_ports_ext.clone());
-        } else {
-            self.audio_ports_ext = None;
+                Ok(self.audio_ports_ext.as_ref().unwrap())
+            }
+            Err(e) => {
+                self.audio_ports_ext = None;
+
+                Err(e)
+            }
         }
-
-        res
     }
 }
 

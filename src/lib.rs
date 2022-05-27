@@ -2,6 +2,7 @@
 
 mod engine;
 mod event;
+mod fixed_point;
 mod graph;
 mod host_request;
 mod plugin_scanner;
@@ -14,6 +15,7 @@ pub mod plugin;
 
 pub use engine::{EdgeReq, ModifyGraphRequest, ModifyGraphRes, PluginIDReq, RustyDAWEngine};
 pub use event::{DAWEngineEvent, PluginScannerEvent};
+pub use fixed_point::FixedPoint64;
 pub use graph::shared_pool::PluginInstanceID;
 pub use graph::{Edge, PluginActivationStatus, PluginEdges, SharedSchedule};
 pub use host_request::{HostInfo, HostRequest};

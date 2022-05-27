@@ -3,6 +3,8 @@ pub const PORT_TYPE_STEREO: &'static str = "stereo";
 
 pub const PORT_NAME_SIDECHAIN: &'static str = "sidechain";
 
+pub(crate) static EMPTY_AUDIO_PORTS_CONFIG: PluginAudioPortsExt = PluginAudioPortsExt::empty();
+
 #[derive(Debug, Clone, PartialEq)]
 /// The layout of the audio ports of a plugin.
 ///
@@ -56,7 +58,7 @@ impl PluginAudioPortsExt {
         }
     }
 
-    pub fn empty() -> Self {
+    pub const fn empty() -> Self {
         PluginAudioPortsExt {
             inputs: vec![],
             outputs: vec![],
