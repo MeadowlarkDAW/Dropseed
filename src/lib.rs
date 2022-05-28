@@ -12,6 +12,7 @@ mod thread_id;
 mod clap;
 
 pub mod plugin;
+pub mod reducing_queue;
 
 pub use engine::{EdgeReq, ModifyGraphRequest, ModifyGraphRes, PluginIDReq, RustyDAWEngine};
 pub use event::{DAWEngineEvent, PluginScannerEvent};

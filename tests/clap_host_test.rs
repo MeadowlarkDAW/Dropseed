@@ -6,6 +6,7 @@ use std::time::Duration;
 fn clap_host_test() {
     mowl::init().unwrap();
 
+    /*
     let (mut engine, mut engine_rx, internal_scan_res) = RustyDAWEngine::new(
         Duration::from_secs(3),
         HostInfo::new(String::from("RustyDAW integration test"), String::from("0.1.0"), None, None),
@@ -25,6 +26,7 @@ fn clap_host_test() {
     for msg in engine_rx.try_iter() {
         dbg!(msg);
     }
+    */
 
     //engine.insert_new_plugin_between_main_ports(save_state, src_plugin_id, dst_plugin_id)
 }

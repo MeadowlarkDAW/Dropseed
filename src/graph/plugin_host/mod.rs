@@ -9,9 +9,53 @@ use rusty_daw_core::SampleRate;
 use crate::plugin::ext::audio_ports::PluginAudioPortsExt;
 use crate::plugin::process_info::ProcBuffers;
 use crate::plugin::{PluginAudioThread, PluginMainThread, PluginSaveState};
+use crate::reducing_queue::{self, RQConsumer, RQProducer, ReducingQueueValue};
 use crate::{HostRequest, ProcInfo, ProcessStatus};
 
 use super::shared_pool::PluginInstanceID;
+
+#[derive(Clone, Copy)]
+struct MainToAudioParamQueueValue {
+    value: f64,
+}
+
+impl ReducingQueueValue for MainToAudioParamQueueValue {}
+
+#[derive(Clone, Copy)]
+struct AudioToMainParamQueueValue {
+    has_value: bool,
+    has_gesture: bool,
+    is_begin: bool,
+    value: f64,
+}
+
+impl ReducingQueueValue for AudioToMainParamQueueValue {
+    fn update(&mut self, new: &Self) {
+        if new.has_value {
+            self.has_value = true;
+            self.value = new.value;
+        }
+
+        if new.has_gesture {
+            self.has_gesture = true;
+            self.is_begin = new.is_begin;
+        }
+    }
+}
+
+struct ParamQueuesMainThread {
+    main_to_audio_param_value_tx: RQProducer<u32, MainToAudioParamQueueValue>,
+    main_to_audio_param_mod_tx: RQProducer<u32, MainToAudioParamQueueValue>,
+
+    audio_to_main_param_value_rx: RQConsumer<u32, AudioToMainParamQueueValue>,
+}
+
+struct ParamQueuesAudioThread {
+    audio_to_main_param_value_tx: RQProducer<u32, AudioToMainParamQueueValue>,
+
+    main_to_audio_param_value_rx: RQConsumer<u32, MainToAudioParamQueueValue>,
+    main_to_audio_param_mod_rx: RQConsumer<u32, MainToAudioParamQueueValue>,
+}
 
 pub(crate) struct PluginInstanceHost {
     pub id: PluginInstanceID,
@@ -23,6 +67,8 @@ pub(crate) struct PluginInstanceHost {
     state: Arc<SharedPluginState>,
 
     save_state: Option<PluginSaveState>,
+
+    param_queues: Option<ParamQueuesMainThread>,
 
     restart_requested: Arc<AtomicBool>,
     process_requested: Arc<AtomicBool>,
@@ -56,6 +102,7 @@ impl PluginInstanceHost {
             audio_ports_ext: None,
             state: Arc::new(SharedPluginState::new()),
             save_state,
+            param_queues: None,
             restart_requested,
             process_requested,
             callback_requested,
@@ -117,11 +164,40 @@ impl PluginInstanceHost {
                 self.deactivate_requested.store(false, Ordering::Relaxed);
                 self.state.set(PluginState::ActiveAndSleeping);
 
+                let num_params = 5; // TODO
+
+                let (param_queues_main_thread, param_queues_audio_thread) = if num_params > 0 {
+                    let (main_to_audio_param_value_tx, main_to_audio_param_value_rx) =
+                        reducing_queue::reducing_queue(num_params, coll_handle);
+                    let (main_to_audio_param_mod_tx, main_to_audio_param_mod_rx) =
+                        reducing_queue::reducing_queue(num_params, coll_handle);
+                    let (audio_to_main_param_value_tx, audio_to_main_param_value_rx) =
+                        reducing_queue::reducing_queue(num_params, coll_handle);
+
+                    (
+                        Some(ParamQueuesMainThread {
+                            main_to_audio_param_value_tx,
+                            main_to_audio_param_mod_tx,
+                            audio_to_main_param_value_rx,
+                        }),
+                        Some(ParamQueuesAudioThread {
+                            audio_to_main_param_value_tx,
+                            main_to_audio_param_value_rx,
+                            main_to_audio_param_mod_rx,
+                        }),
+                    )
+                } else {
+                    (None, None)
+                };
+
+                self.param_queues = param_queues_main_thread;
+
                 Ok((
                     PluginInstanceHostAudioThread {
                         id: self.id.clone(),
                         plugin: plugin_audio_thread,
                         state: Arc::clone(&self.state),
+                        param_queues: param_queues_audio_thread,
                         process_requested: Arc::clone(&self.process_requested),
                         deactivate_requested: Arc::clone(&self.deactivate_requested),
                     },
@@ -249,6 +325,8 @@ pub(crate) struct PluginInstanceHostAudioThread {
 
     state: Arc<SharedPluginState>,
 
+    param_queues: Option<ParamQueuesAudioThread>,
+
     process_requested: Arc<AtomicBool>,
     deactivate_requested: Arc<AtomicBool>,
 }
@@ -288,6 +366,18 @@ impl PluginInstanceHostAudioThread {
             return;
         }
 
+        if let Some(params_queue) = &mut self.param_queues {
+            // Handle input events.
+
+            params_queue
+                .main_to_audio_param_value_rx
+                .consume(|key: &u32, value: &MainToAudioParamQueueValue| {});
+
+            params_queue
+                .main_to_audio_param_mod_rx
+                .consume(|key: &u32, value: &MainToAudioParamQueueValue| {});
+        }
+
         if state == PluginState::ActiveAndWaitingForQuiet {
             if buffers.audio_inputs_silent(proc_info.frames) {
                 self.plugin.stop_processing();
@@ -297,8 +387,6 @@ impl PluginInstanceHostAudioThread {
                 return;
             }
         }
-
-        // TODO: Handle input events
 
         if state.is_sleeping() {
             let has_in_events = true; // TODO: Check if there are any input events.
@@ -328,7 +416,11 @@ impl PluginInstanceHostAudioThread {
             status = self.plugin.process(proc_info, buffers);
         }
 
-        // TODO: Handle output events
+        if let Some(params_queue) = &mut self.param_queues {
+            // Handle output events.
+
+            params_queue.audio_to_main_param_value_tx.producer_done();
+        }
 
         match status {
             ProcessStatus::Continue => {

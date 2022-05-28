@@ -1,5 +1,13 @@
 use bytemuck::{bytes_of, try_from_bytes};
-use crossbeam::channel::{Receiver, Sender};
+use crossbeam::channel;
+use fnv::FnvHashMap;
+use ringbuf::{Consumer, Producer};
+use rusty_daw_core::atomic::AtomicF64;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+
 use std::mem::MaybeUninit;
 
 use super::events::{
@@ -11,15 +19,9 @@ use super::events::{
 // save on memory. The majority of events will be about half the size or
 // less than the less common maximum-sized event `EventTransport`.
 
-pub struct EventQueueAudioThread {
-    to_main_thread_tx: Sender<AllocatedEvent>,
-    from_main_thread_rx: Receiver<AllocatedEvent>,
-}
+pub struct EventQueueAudioThread {}
 
-pub struct EventQueueMainThread {
-    to_audio_thread_tx: Sender<AllocatedEvent>,
-    from_audio_thread_rx: Receiver<AllocatedEvent>,
-}
+pub struct EventQueueMainThread {}
 
 pub struct AllocatedEvent {
     data: [u8; std::mem::size_of::<EventTransport>()],
