@@ -248,7 +248,7 @@ unsafe extern "C" fn rescan(clap_host: *const RawClapHost, mut flags: u32) {
     }
 
     if flags > 1 {
-        host_data.host_request.restart_requested.store(true, Ordering::Relaxed);
+        host_data.host_request.request_restart();
     }
 }
 
@@ -259,7 +259,7 @@ unsafe extern "C" fn request_restart(clap_host: *const RawClapHost) {
         Err(()) => return,
     };
 
-    host_data.host_request.restart_requested.store(true, Ordering::Relaxed);
+    host_data.host_request.request_restart();
 }
 
 /// [thread-safe]
@@ -269,7 +269,7 @@ unsafe extern "C" fn request_process(clap_host: *const RawClapHost) {
         Err(()) => return,
     };
 
-    host_data.host_request.process_requested.store(true, Ordering::Relaxed);
+    host_data.host_request.request_process();
 }
 
 /// [thread-safe]
@@ -279,7 +279,7 @@ unsafe extern "C" fn request_callback(clap_host: *const RawClapHost) {
         Err(()) => return,
     };
 
-    host_data.host_request.callback_requested.store(true, Ordering::Relaxed);
+    host_data.host_request.request_callback();
 }
 
 /// [thread-safe]

@@ -7,6 +7,7 @@ use std::{collections::HashMap, error::Error};
 use crate::graph::plugin_host::PluginInstanceHost;
 use crate::graph::shared_pool::{PluginInstanceID, PluginInstanceType};
 use crate::host_request::HostRequest;
+use crate::host_request::RequestFlags;
 use crate::plugin::{PluginDescriptor, PluginFactory, PluginSaveState};
 use crate::thread_id::SharedThreadIDs;
 use crate::HostInfo;
@@ -309,17 +310,10 @@ impl PluginScanner {
         fallback_to_other_formats: bool,
     ) -> CreatePluginResult {
         let check_for_invalid_host_callbacks = |host_request: &HostRequest, id: &String| {
-            if host_request.restart_requested.load(Ordering::Relaxed) {
-                host_request.restart_requested.store(false, Ordering::Relaxed);
-                log::warn!("Plugin with ID {} attempted to call host_request.request_restart() during PluginFactory::new(). Request was ignored.", id);
-            }
-            if host_request.process_requested.load(Ordering::Relaxed) {
-                host_request.process_requested.store(false, Ordering::Relaxed);
-                log::warn!("Plugin with ID {} attempted to call host_request.request_process() during PluginFactory::new(). Request was ignored.", id);
-            }
-            if host_request.callback_requested.load(Ordering::Relaxed) {
-                host_request.callback_requested.store(false, Ordering::Relaxed);
-                log::warn!("Plugin with ID {} attempted to call host_request.request_callback() during PluginFactory::new(). Request was ignored.", id);
+            let request_flags = host_request.load_requested_and_reset_all();
+
+            if !request_flags.is_empty() {
+                log::warn!("Plugin with ID {} attempted to call a host request during the PluginFactory::new() method. Requests were ignored.", id);
             }
         };
 

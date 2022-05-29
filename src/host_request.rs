@@ -1,13 +1,11 @@
+use basedrop::Shared;
+use bitflags::bitflags;
 use std::ffi::{CStr, CString};
 use std::pin::Pin;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicU32, Ordering},
     Arc,
 };
-
-use basedrop::Shared;
-
-use crate::plugin::ext::params::{HostParamsExtAudioThread, HostParamsExtMainThread};
 
 #[derive(Debug, Clone)]
 pub struct HostInfo {
@@ -67,22 +65,30 @@ impl HostInfo {
     }
 }
 
+bitflags! {
+    pub(crate) struct RequestFlags: u32 {
+        /// Clears all possible references to a parameter
+        const RESTART = 1 << 0;
+
+        /// Clears all automations to a parameter
+        const PROCESS = 1 << 1;
+
+        /// Clears all modulations to a parameter
+        const CALLBACK = 1 << 2;
+
+        const DEACTIVATE = 1 << 3;
+    }
+}
+
 /// Used to get info and request actions from the host.
 pub struct HostRequest {
     pub(crate) info: Shared<HostInfo>,
-    pub(crate) restart_requested: Arc<AtomicBool>,
-    pub(crate) process_requested: Arc<AtomicBool>,
-    pub(crate) callback_requested: Arc<AtomicBool>,
+    request_flags: Arc<AtomicU32>,
 }
 
 impl HostRequest {
     pub(crate) fn new(info: Shared<HostInfo>) -> Self {
-        Self {
-            info,
-            restart_requested: Arc::new(AtomicBool::new(false)),
-            process_requested: Arc::new(AtomicBool::new(false)),
-            callback_requested: Arc::new(AtomicBool::new(false)),
-        }
+        Self { info, request_flags: Arc::new(AtomicU32::new(0)) }
     }
 
     /// Retrieve info about this host.
@@ -97,7 +103,8 @@ impl HostRequest {
     ///
     /// `[thread-safe]`
     pub fn request_restart(&self) {
-        self.restart_requested.store(true, Ordering::Relaxed);
+        // TODO: Are we able to use relaxed ordering here?
+        let _ = self.request_flags.fetch_or(RequestFlags::RESTART.bits(), Ordering::SeqCst);
     }
 
     /// Request the host to activate and start processing the plugin.
@@ -105,24 +112,75 @@ impl HostRequest {
     ///
     /// `[thread-safe]`
     pub fn request_process(&self) {
-        self.process_requested.store(true, Ordering::Relaxed);
+        // TODO: Are we able to use relaxed ordering here?
+        let _ = self.request_flags.fetch_or(RequestFlags::PROCESS.bits(), Ordering::SeqCst);
     }
 
     /// Request the host to schedule a call to `PluginMainThread::on_main_thread()` on the main thread.
     ///
     /// `[thread-safe]`
     pub fn request_callback(&self) {
-        self.callback_requested.store(true, Ordering::Relaxed);
+        // TODO: Are we able to use relaxed ordering here?
+        let _ = self.request_flags.fetch_or(RequestFlags::CALLBACK.bits(), Ordering::SeqCst);
+    }
+
+    /// Request the host to schedule a call to `PluginMainThread::on_main_thread()` on the main thread.
+    ///
+    /// `[thread-safe]`
+    pub(crate) fn request_deactivate(&self) {
+        // TODO: Are we able to use relaxed ordering here?
+        let _ = self.request_flags.fetch_or(RequestFlags::DEACTIVATE.bits(), Ordering::SeqCst);
+    }
+
+    pub(crate) fn load_requested(&self) -> RequestFlags {
+        // TODO: Are we able to use relaxed ordering here?
+
+        // Safe because this u32 can only be set via a `RequestFlags` value.
+        unsafe { RequestFlags::from_bits_unchecked(self.request_flags.load(Ordering::SeqCst)) }
+    }
+
+    pub(crate) fn load_requested_and_reset_all(&self) -> RequestFlags {
+        // TODO: Are we able to use relaxed ordering here?
+        let flags = self.request_flags.fetch_and(0, Ordering::SeqCst);
+
+        // Safe because this u32 can only be set via a `RequestFlags` value.
+        unsafe { RequestFlags::from_bits_unchecked(flags) }
+    }
+
+    /// Returns true if the previous value had the `RequestFlags::RESTART` flag set.
+    pub(crate) fn reset_restart(&self) -> bool {
+        // TODO: Are we able to use relaxed ordering here?
+        let flags = self.request_flags.fetch_and(!RequestFlags::RESTART.bits(), Ordering::SeqCst);
+
+        // Safe because this u32 can only be set via a `RequestFlags` value.
+        unsafe { RequestFlags::from_bits_unchecked(flags).contains(RequestFlags::RESTART) }
+    }
+
+    pub(crate) fn reset_process(&self) {
+        // TODO: Are we able to use relaxed ordering here?
+        let _ = self.request_flags.fetch_and(!RequestFlags::PROCESS.bits(), Ordering::SeqCst);
+    }
+
+    /// Returns the value of the flags before the callback flag was reset.
+    pub(crate) fn load_requests_and_reset_callback(&self) -> RequestFlags {
+        // TODO: Are we able to use relaxed ordering here?
+
+        // Safe because this u32 can only be set via a `RequestFlags` value.
+        unsafe {
+            RequestFlags::from_bits_unchecked(
+                self.request_flags.fetch_and(!RequestFlags::CALLBACK.bits(), Ordering::SeqCst),
+            )
+        }
+    }
+
+    pub(crate) fn reset_deactivate(&self) {
+        // TODO: Are we able to use relaxed ordering here?
+        let _ = self.request_flags.fetch_and(!RequestFlags::DEACTIVATE.bits(), Ordering::SeqCst);
     }
 }
 
 impl Clone for HostRequest {
     fn clone(&self) -> Self {
-        Self {
-            info: Shared::clone(&self.info),
-            restart_requested: Arc::clone(&self.restart_requested),
-            process_requested: Arc::clone(&self.process_requested),
-            callback_requested: Arc::clone(&self.callback_requested),
-        }
+        Self { info: Shared::clone(&self.info), request_flags: Arc::clone(&self.request_flags) }
     }
 }
