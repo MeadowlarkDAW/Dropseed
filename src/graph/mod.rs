@@ -762,6 +762,9 @@ impl AudioGraph {
 
         let mut recompile_graph = false;
 
+        // TODO: Optimize by using some kind of hashmap queue that only iterates over the
+        // plugins that have a non-zero host request flag, instead of iterating over every
+        // plugin every time?
         for plugin in self.shared_plugin_pool.plugins.values_mut() {
             match plugin.plugin_host.on_idle(
                 self.sample_rate,
