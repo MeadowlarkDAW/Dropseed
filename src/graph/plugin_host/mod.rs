@@ -1,3 +1,4 @@
+use fnv::FnvHashMap;
 use rtrb_basedrop::{Consumer, Producer, RingBuffer};
 use rusty_daw_core::SampleRate;
 use std::error::Error;
@@ -7,6 +8,10 @@ use std::sync::{
 };
 
 use crate::host_request::RequestFlags;
+use crate::plugin::event_queue::EventQueue;
+use crate::plugin::events::{
+    EventFlags, EventParamGesture, EventParamMod, EventParamValue, PluginEvent,
+};
 use crate::plugin::ext::audio_ports::PluginAudioPortsExt;
 use crate::plugin::process_info::ProcBuffers;
 use crate::plugin::{PluginAudioThread, PluginMainThread, PluginSaveState};
@@ -173,12 +178,18 @@ impl PluginInstanceHost {
 
                 self.param_queues = param_queues_main_thread;
 
+                let mut in_param_event_reducer = FnvHashMap::default();
+                in_param_event_reducer.reserve(num_params);
+
                 Ok((
                     PluginInstanceHostAudioThread {
                         id: self.id.clone(),
                         plugin: plugin_audio_thread,
                         state: Arc::clone(&self.state),
                         param_queues: param_queues_audio_thread,
+                        in_events: EventQueue::new(num_params * 3),
+                        out_events: EventQueue::new(num_params * 3),
+                        in_param_event_reducer,
                         host_request: self.host_request.clone(),
                     },
                     audio_ports,
@@ -292,12 +303,17 @@ pub(crate) struct PluginInstanceHostAudioThread {
     state: Arc<SharedPluginState>,
 
     param_queues: Option<ParamQueuesAudioThread>,
+    in_events: EventQueue,
+    out_events: EventQueue,
+    in_param_event_reducer: FnvHashMap<u32, MainToAudioParamMsg>,
 
     host_request: HostRequest,
 }
 
 impl PluginInstanceHostAudioThread {
     pub fn process<'a>(&mut self, proc_info: &ProcInfo, buffers: &mut ProcBuffers) {
+        // TODO: Flush parameters while plugin is sleeping.
+
         let clear_outputs = |proc_info: &ProcInfo, buffers: &mut ProcBuffers| {
             // Safe because this `proc_info.frames` will always be less than or
             // equal to the length of all audio buffers.
@@ -314,6 +330,7 @@ impl PluginInstanceHostAudioThread {
         if !state.is_active() {
             // Can't process a plugin that is not active.
             clear_outputs(proc_info, buffers);
+            self.in_events.clear();
             return;
         }
 
@@ -327,17 +344,67 @@ impl PluginInstanceHostAudioThread {
 
             self.state.set(PluginState::ActiveAndReadyToDeactivate);
             clear_outputs(proc_info, buffers);
+            self.in_events.clear();
             return;
         }
 
         if state == PluginState::ActiveWithError {
             // We can't process a plugin which failed to start processing.
             clear_outputs(proc_info, buffers);
+            self.in_events.clear();
             return;
         }
 
+        self.out_events.clear();
+
         if let Some(params_queue) = &mut self.param_queues {
-            // Handle input events. TODO
+            self.in_param_event_reducer.clear();
+
+            while let Ok(param_event) = params_queue.main_to_audio_param_value_rx.pop() {
+                let _ = self.in_param_event_reducer.insert(param_event.param, param_event);
+            }
+            for (_, param_event) in self.in_param_event_reducer.drain() {
+                self.in_events.push(PluginEvent::ParamValue(&EventParamValue::new(
+                    // TODO: Finer values for `time` instead of just setting it to the first frame?
+                    0,                   // time
+                    0,                   // space_id
+                    EventFlags::empty(), // event_flags
+                    param_event.param,   // param_id
+                    // TODO: Note ID
+                    -1, // note_id
+                    // TODO: Port index
+                    -1, // port_index
+                    // TODO: Channel
+                    -1, // channel
+                    // TODO: Key
+                    -1,                // key
+                    param_event.value, // value
+                )))
+            }
+
+            self.in_param_event_reducer.clear();
+
+            while let Ok(param_event) = params_queue.main_to_audio_param_mod_rx.pop() {
+                let _ = self.in_param_event_reducer.insert(param_event.param, param_event);
+            }
+            for (_, param_event) in self.in_param_event_reducer.drain() {
+                self.in_events.push(PluginEvent::ParamMod(&EventParamMod::new(
+                    // TODO: Finer values for `time` instead of just setting it to the first frame?
+                    0,                   // time
+                    0,                   // space_id
+                    EventFlags::empty(), // event_flags
+                    param_event.param,   // param_id
+                    // TODO: Note ID
+                    -1, // note_id
+                    // TODO: Port index
+                    -1, // port_index
+                    // TODO: Channel
+                    -1, // channel
+                    // TODO: Key
+                    -1,                // key
+                    param_event.value, // amount
+                )))
+            }
         }
 
         if state == PluginState::ActiveAndWaitingForQuiet {
@@ -351,6 +418,7 @@ impl PluginInstanceHostAudioThread {
 
                 self.state.set(PluginState::ActiveAndSleeping);
                 clear_outputs(proc_info, buffers);
+                self.in_events.clear();
                 return;
             }
         }
@@ -362,6 +430,7 @@ impl PluginInstanceHostAudioThread {
                 // The plugin is sleeping, there is no request to wake it up, and there
                 // are no events to process.
                 clear_outputs(proc_info, buffers);
+                self.in_events.clear();
                 return;
             }
 
@@ -371,6 +440,7 @@ impl PluginInstanceHostAudioThread {
                 // The plugin failed to start processing.
                 self.state.set(PluginState::ActiveWithError);
                 clear_outputs(proc_info, buffers);
+                self.in_events.clear();
                 return;
             }
 
@@ -388,10 +458,21 @@ impl PluginInstanceHostAudioThread {
             buf.set_constant_mask(0);
         }
 
-        let status = self.plugin.process(proc_info, buffers);
+        let status = self.plugin.process(proc_info, buffers, &self.in_events, &mut self.out_events);
 
-        if let Some(params_queue) = &mut self.param_queues {
-            // Handle output events. TODO
+        self.in_events.clear();
+
+        while let Some(out_event) = self.out_events.pop() {
+            match out_event.get() {
+                Ok(PluginEvent::ParamGesture(event)) => {
+                    // TODO
+                }
+                Ok(PluginEvent::ParamValue(event)) => {
+                    // TODO
+                }
+                // TODO: Handle more output event types
+                _ => {}
+            }
         }
 
         match status {

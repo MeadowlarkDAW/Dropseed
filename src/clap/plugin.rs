@@ -33,7 +33,7 @@ use crate::plugin::{ext, PluginAudioThread, PluginDescriptor, PluginFactory, Plu
 use crate::thread_id::SharedThreadIDs;
 use crate::MainPortsLayout;
 use crate::PluginAudioPortsExt;
-use crate::{AudioPortInfo, PluginInstanceID};
+use crate::{AudioPortInfo, EventQueue, PluginInstanceID};
 
 struct SharedClapLib {
     // We hold on to this to make sure the host callback stays alive for as long as a
@@ -674,7 +674,13 @@ impl PluginAudioThread for ClapPluginAudioThread {
     /// Process audio and events.
     ///
     /// `[audio-thread & active_state & processing_state]`
-    fn process(&mut self, proc_info: &ProcInfo, buffers: &mut ProcBuffers) -> ProcessStatus {
+    fn process(
+        &mut self,
+        proc_info: &ProcInfo,
+        buffers: &mut ProcBuffers,
+        in_events: &EventQueue,
+        out_events: &mut EventQueue,
+    ) -> ProcessStatus {
         use clap_sys::process::{
             CLAP_PROCESS_CONTINUE, CLAP_PROCESS_CONTINUE_IF_NOT_QUIET, CLAP_PROCESS_ERROR,
             CLAP_PROCESS_SLEEP, CLAP_PROCESS_TAIL,
@@ -687,7 +693,7 @@ impl PluginAudioThread for ClapPluginAudioThread {
             self.process.update_buffers(buffers);
         }
 
-        self.process.sync_proc_info(proc_info, buffers);
+        self.process.sync_proc_info(proc_info, buffers, in_events, out_events);
 
         for b in buffers.audio_in.iter_mut() {
             b.sync_constant_mask_from_buffers();

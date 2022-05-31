@@ -20,6 +20,8 @@ pub use graph::shared_pool::PluginInstanceID;
 pub use graph::{Edge, PluginActivationStatus, PluginEdges, SharedSchedule};
 pub use host_request::{HostInfo, HostRequest};
 pub use plugin::audio_buffer::{AudioPortBuffer, AudioPortBufferMut};
+pub use plugin::event_queue::EventQueue;
+pub use plugin::events;
 pub use plugin::ext::audio_ports::{AudioPortInfo, MainPortsLayout, PluginAudioPortsExt};
 pub use plugin::process_info::{ProcInfo, ProcessStatus};
 pub use plugin_scanner::{ScannedPlugin, ScannedPluginKey};

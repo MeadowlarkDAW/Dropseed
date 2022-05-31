@@ -1,7 +1,7 @@
 use rusty_daw_core::SampleRate;
 use std::error::Error;
 
-use crate::{host_request::HostRequest, PluginInstanceID};
+use crate::{host_request::HostRequest, EventQueue, PluginInstanceID};
 
 pub mod audio_buffer;
 pub mod event_queue;
@@ -268,7 +268,13 @@ pub trait PluginAudioThread: Send + Sync + 'static {
     /// Process audio and events.
     ///
     /// `[audio-thread & active_state & processing_state]`
-    fn process(&mut self, proc_info: &ProcInfo, buffers: &mut ProcBuffers) -> ProcessStatus;
+    fn process(
+        &mut self,
+        proc_info: &ProcInfo,
+        buffers: &mut ProcBuffers,
+        in_events: &EventQueue,
+        out_events: &mut EventQueue,
+    ) -> ProcessStatus;
 
     /// Flushes a set of parameter changes.
     ///

@@ -118,7 +118,7 @@ unsafe fn parse_clap_host<'a>(clap_host: *const RawClapHost) -> Result<&'a HostD
         return Err(());
     }
 
-    let host = &*(clap_host as *const RawClapHost);
+    let host = &*clap_host;
 
     if host.host_data.is_null() {
         log::warn!("Received a null clap_host_t->host_data pointer from plugin");

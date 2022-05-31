@@ -6,7 +6,7 @@ use std::{pin::Pin, ptr};
 use crate::{
     plugin::process_info::ProcInfo,
     plugin::{audio_buffer::RawAudioChannelBuffers, process_info::ProcBuffers},
-    PluginAudioPortsExt,
+    EventQueue, PluginAudioPortsExt,
 };
 
 use super::events::{ClapInputEvents, ClapOutputEvents};
@@ -23,8 +23,8 @@ pub(crate) struct ClapProcess {
     audio_in_buffer_lists_f64: SmallVec<[Pin<Vec<*const f64>>; 2]>,
     audio_out_buffer_lists_f64: SmallVec<[Pin<Vec<*const f64>>; 2]>,
 
-    _in_events: Pin<Box<ClapInputEvents>>,
-    _out_events: Pin<Box<ClapOutputEvents>>,
+    in_events: ClapInputEvents,
+    out_events: ClapOutputEvents,
 }
 
 unsafe impl Send for ClapProcess {}
@@ -86,8 +86,8 @@ impl ClapProcess {
         let audio_in_port_list = Pin::new(audio_in_port_list);
         let mut audio_out_port_list = Pin::new(audio_out_port_list);
 
-        let _in_events = Pin::new(Box::new(ClapInputEvents::new()));
-        let _out_events = Pin::new(Box::new(ClapOutputEvents::new()));
+        let in_events = ClapInputEvents::new();
+        let out_events = ClapOutputEvents::new();
 
         Self {
             raw: RawClapProcess {
@@ -98,8 +98,8 @@ impl ClapProcess {
                 audio_outputs: (*audio_out_port_list).as_mut_ptr(),
                 audio_inputs_count: audio_in_port_list.len() as u32,
                 audio_outputs_count: audio_out_port_list.len() as u32,
-                in_events: _in_events.raw(),
-                out_events: _out_events.raw(),
+                in_events: in_events.raw(),
+                out_events: out_events.raw(),
             },
             audio_in_port_list,
             audio_out_port_list,
@@ -107,8 +107,8 @@ impl ClapProcess {
             audio_out_buffer_lists_f32,
             audio_in_buffer_lists_f64,
             audio_out_buffer_lists_f64,
-            _in_events,
-            _out_events,
+            in_events,
+            out_events,
         }
     }
 
@@ -187,9 +187,18 @@ impl ClapProcess {
         }
     }
 
-    pub fn sync_proc_info(&mut self, proc_info: &ProcInfo, buffers: &ProcBuffers) {
+    pub fn sync_proc_info(
+        &mut self,
+        proc_info: &ProcInfo,
+        buffers: &ProcBuffers,
+        in_events: &EventQueue,
+        out_events: &mut EventQueue,
+    ) {
         self.raw.steady_time = proc_info.steady_time;
         self.raw.frames_count = proc_info.frames as u32;
+
+        self.in_events.sync(in_events);
+        self.out_events.sync(out_events);
 
         debug_assert_eq!(buffers.audio_in.len(), self.audio_in_port_list.len());
         for (audio_in_port, host_audio_in_port) in

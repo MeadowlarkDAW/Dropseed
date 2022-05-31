@@ -1,12 +1,4 @@
 use bytemuck::{bytes_of, try_from_bytes};
-use crossbeam::channel;
-use fnv::FnvHashMap;
-use rtrb_basedrop::{Consumer, Producer};
-use rusty_daw_core::atomic::AtomicF64;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
 
 use std::mem::MaybeUninit;
 
@@ -19,12 +11,39 @@ use super::events::{
 // save on memory. The majority of events will be about half the size or
 // less than the less common maximum-sized event `EventTransport`.
 
-pub struct EventQueueAudioThread {}
+pub struct EventQueue {
+    pub(crate) events: Vec<AllocatedEvent>,
+}
 
-pub struct EventQueueMainThread {}
+impl EventQueue {
+    pub fn new(capacity: usize) -> Self {
+        Self { events: Vec::with_capacity(capacity) }
+    }
+
+    #[inline]
+    pub fn push<'a>(&mut self, event: PluginEvent<'a>) {
+        if self.events.len() >= self.events.capacity() {
+            log::warn!("Event queue has exceeded its capacity. This will cause an allocation on the audio thread.");
+        }
+
+        self.events.push(AllocatedEvent::from_event(event));
+    }
+
+    pub fn pop(&mut self) -> Option<AllocatedEvent> {
+        self.events.pop()
+    }
+
+    pub fn clear(&mut self) {
+        self.events.clear();
+    }
+
+    pub fn len(&self) -> usize {
+        self.events.len()
+    }
+}
 
 pub struct AllocatedEvent {
-    data: [u8; std::mem::size_of::<EventTransport>()],
+    pub(crate) data: [u8; std::mem::size_of::<EventTransport>()],
 }
 
 impl AllocatedEvent {
