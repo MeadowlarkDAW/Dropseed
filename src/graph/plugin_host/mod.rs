@@ -304,6 +304,9 @@ impl PluginInstanceHostAudioThread {
             unsafe {
                 buffers.clear_all_outputs_unchecked(proc_info.frames);
             }
+            for b in buffers.audio_out.iter_mut() {
+                b.sync_constant_mask_to_buffers();
+            }
         };
 
         let mut state = self.state.get();
@@ -338,6 +341,11 @@ impl PluginInstanceHostAudioThread {
         }
 
         if state == PluginState::ActiveAndWaitingForQuiet {
+            // Sync constant masks for more efficient silence checking.
+            for buf in buffers.audio_in.iter_mut() {
+                buf.sync_constant_mask_from_buffers();
+            }
+
             if buffers.audio_inputs_silent(proc_info.frames) {
                 self.plugin.stop_processing();
 
@@ -368,6 +376,16 @@ impl PluginInstanceHostAudioThread {
 
             self.state.set(PluginState::ActiveAndProcessing);
             state = PluginState::ActiveAndProcessing;
+        }
+
+        // Sync constant masks for the plugin.
+        if state != PluginState::ActiveAndWaitingForQuiet {
+            for buf in buffers.audio_in.iter_mut() {
+                buf.sync_constant_mask_from_buffers();
+            }
+        }
+        for buf in buffers.audio_out.iter_mut() {
+            buf.set_constant_mask(0);
         }
 
         let status = self.plugin.process(proc_info, buffers);
@@ -406,7 +424,12 @@ impl PluginInstanceHostAudioThread {
             ProcessStatus::Error => {
                 // Discard all output buffers.
                 clear_outputs(proc_info, buffers);
+                return;
             }
+        }
+
+        for buf in buffers.audio_out.iter_mut() {
+            buf.sync_constant_mask_to_buffers();
         }
     }
 }

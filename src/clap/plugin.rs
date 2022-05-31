@@ -646,7 +646,7 @@ impl PluginAudioThread for ClapPluginAudioThread {
     ///
     /// `[audio-thread & active_state & !processing_state]`
     fn start_processing(&mut self) -> Result<(), ()> {
-        log::trace!("clap plugin instance start_processing {}", &*self.shared_plugin.id);
+        //log::trace!("clap plugin instance start_processing {}", &*self.shared_plugin.id);
 
         let res = unsafe {
             ((&*self.shared_plugin.raw_plugin).start_processing)(self.shared_plugin.raw_plugin)
@@ -664,7 +664,7 @@ impl PluginAudioThread for ClapPluginAudioThread {
     ///
     /// `[audio-thread & active_state & processing_state]`
     fn stop_processing(&mut self) {
-        log::trace!("clap plugin instance stop_processing {}", &*self.shared_plugin.id);
+        //log::trace!("clap plugin instance stop_processing {}", &*self.shared_plugin.id);
 
         unsafe {
             ((&*self.shared_plugin.raw_plugin).stop_processing)(self.shared_plugin.raw_plugin)
@@ -689,6 +689,10 @@ impl PluginAudioThread for ClapPluginAudioThread {
 
         self.process.sync_proc_info(proc_info, buffers);
 
+        for b in buffers.audio_in.iter_mut() {
+            b.sync_constant_mask_from_buffers();
+        }
+
         let res = {
             #[cfg(debug_assertions)]
             // In debug mode, borrow all of the atomic ref cells to properly use the
@@ -708,12 +712,12 @@ impl PluginAudioThread for ClapPluginAudioThread {
                     match &in_port.raw_channels {
                         RawAudioChannelBuffers::F32(buffers) => {
                             for b in buffers.iter() {
-                                input_refs_f32.push(unsafe { b.buffer.0.borrow() });
+                                input_refs_f32.push(unsafe { b.buffer.data.borrow() });
                             }
                         }
                         RawAudioChannelBuffers::F64(buffers) => {
                             for b in buffers.iter() {
-                                input_refs_f64.push(unsafe { b.buffer.0.borrow() });
+                                input_refs_f64.push(unsafe { b.buffer.data.borrow() });
                             }
                         }
                     }
@@ -723,12 +727,12 @@ impl PluginAudioThread for ClapPluginAudioThread {
                     match &out_port.raw_channels {
                         RawAudioChannelBuffers::F32(buffers) => {
                             for b in buffers.iter() {
-                                output_refs_f32.push(unsafe { b.buffer.0.borrow_mut() });
+                                output_refs_f32.push(unsafe { b.buffer.data.borrow_mut() });
                             }
                         }
                         RawAudioChannelBuffers::F64(buffers) => {
                             for b in buffers.iter() {
-                                output_refs_f64.push(unsafe { b.buffer.0.borrow_mut() });
+                                output_refs_f64.push(unsafe { b.buffer.data.borrow_mut() });
                             }
                         }
                     }

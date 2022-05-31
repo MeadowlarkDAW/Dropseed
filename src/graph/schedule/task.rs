@@ -148,6 +148,8 @@ impl DeactivatedPluginTask {
         unsafe {
             // Pass audio through the main ports.
             for (in_buf, out_buf) in self.audio_through.iter() {
+                out_buf.set_constant(in_buf.is_constant());
+
                 let in_buf_ref = in_buf.borrow();
                 let mut out_buf_ref = out_buf.borrow_mut();
 
@@ -167,15 +169,7 @@ impl DeactivatedPluginTask {
 
             // Make sure any extra output buffers are cleared.
             for out_buf in self.extra_audio_out.iter() {
-                let mut out_buf_ref = out_buf.borrow_mut();
-
-                #[cfg(debug_assertions)]
-                let out_buf = &mut out_buf_ref[0..proc_info.frames];
-                #[cfg(not(debug_assertions))]
-                let out_buf =
-                    std::slice::from_raw_parts_mut(out_buf_ref.as_mut_ptr(), proc_info.frames);
-
-                out_buf.fill(0.0);
+                out_buf.clear(proc_info.frames);
             }
         }
     }

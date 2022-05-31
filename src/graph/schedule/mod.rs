@@ -102,16 +102,9 @@ impl Schedule {
                 // audio threads due to aliasing buffer pointers.
                 // - `proc_info.frames` will always be less than or equal to the allocated size of
                 // all process audio buffers.
-                let mut buffer_ref = unsafe { buffer.borrow_mut() };
-
-                #[cfg(debug_assertions)]
-                let buffer = &mut buffer_ref[0..proc_info.frames];
-                #[cfg(not(debug_assertions))]
-                let buffer = unsafe {
-                    std::slice::from_raw_parts_mut(buffer_ref.as_mut_ptr(), proc_info.frames)
-                };
-
-                buffer.fill(0.0);
+                unsafe {
+                    buffer.clear(proc_info.frames);
+                }
             }
 
             for task in self.tasks.iter_mut() {

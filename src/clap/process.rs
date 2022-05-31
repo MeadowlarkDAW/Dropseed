@@ -130,7 +130,7 @@ impl ClapProcess {
                         debug_assert_eq!(new_buffers.len(), buffers.len());
 
                         for (buf, new_buf) in buffers.iter_mut().zip(new_buffers.iter()) {
-                            *buf = new_buf.buffer.0.borrow().as_ptr();
+                            *buf = new_buf.buffer.data.borrow().as_ptr();
                         }
 
                         in_port.data32 = buffers.as_ptr();
@@ -142,7 +142,7 @@ impl ClapProcess {
                         debug_assert_eq!(new_buffers.len(), buffers.len());
 
                         for (buf, new_buf) in buffers.iter_mut().zip(new_buffers.iter()) {
-                            *buf = new_buf.buffer.0.borrow().as_ptr();
+                            *buf = new_buf.buffer.data.borrow().as_ptr();
                         }
 
                         in_port.data32 = ptr::null();
@@ -164,7 +164,7 @@ impl ClapProcess {
                         debug_assert_eq!(new_buffers.len(), buffers.len());
 
                         for (buf, new_buf) in buffers.iter_mut().zip(new_buffers.iter()) {
-                            *buf = new_buf.buffer.0.borrow().as_ptr();
+                            *buf = new_buf.buffer.data.borrow().as_ptr();
                         }
 
                         out_port.data32 = buffers.as_ptr();
@@ -176,7 +176,7 @@ impl ClapProcess {
                         debug_assert_eq!(new_buffers.len(), buffers.len());
 
                         for (buf, new_buf) in buffers.iter_mut().zip(new_buffers.iter()) {
-                            *buf = new_buf.buffer.0.borrow().as_ptr();
+                            *buf = new_buf.buffer.data.borrow().as_ptr();
                         }
 
                         out_port.data32 = ptr::null();

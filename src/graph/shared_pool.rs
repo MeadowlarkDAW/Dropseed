@@ -3,6 +3,7 @@ use basedrop::Shared;
 use fnv::FnvHashMap;
 use maybe_atomic_refcell::{MaybeAtomicRef, MaybeAtomicRefCell, MaybeAtomicRefMut};
 use std::hash::Hash;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::plugin_scanner::PluginFormat;
 
@@ -40,23 +41,70 @@ impl std::fmt::Debug for DebugBufferID {
     }
 }
 
+pub(crate) struct Buffer<T: Clone + Copy + Send + Default + 'static> {
+    pub data: MaybeAtomicRefCell<Vec<T>>,
+    pub is_constant: AtomicBool,
+    pub debug_id: DebugBufferID,
+}
+
+impl<T: Clone + Copy + Send + Default + 'static> Buffer<T> {
+    pub fn new(max_frames: usize, debug_id: DebugBufferID) -> Self {
+        Self {
+            data: MaybeAtomicRefCell::new(vec![Default::default(); max_frames]),
+            is_constant: AtomicBool::new(true),
+            debug_id,
+        }
+    }
+}
+
 pub(crate) struct SharedBuffer<T: Clone + Copy + Send + Default + 'static> {
-    pub buffer: Shared<(MaybeAtomicRefCell<Vec<T>>, DebugBufferID)>,
+    pub buffer: Shared<Buffer<T>>,
 }
 
 impl<T: Clone + Copy + Send + Default + 'static> SharedBuffer<T> {
     #[inline]
     pub unsafe fn borrow<'a>(&'a self) -> MaybeAtomicRef<'a, Vec<T>> {
-        self.buffer.0.borrow()
+        self.buffer.data.borrow()
     }
 
     #[inline]
     pub unsafe fn borrow_mut<'a>(&'a self) -> MaybeAtomicRefMut<'a, Vec<T>> {
-        self.buffer.0.borrow_mut()
+        self.buffer.data.borrow_mut()
+    }
+
+    #[inline]
+    pub unsafe fn clear(&self, frames: usize) {
+        let mut buf_ref = self.borrow_mut();
+
+        #[cfg(debug_assertions)]
+        let buf = &mut buf_ref[0..frames];
+        #[cfg(not(debug_assertions))]
+        let buf = std::slice::from_raw_parts_mut(buf_ref.as_mut_ptr(), frames);
+
+        buf.fill(Default::default());
+
+        self.set_constant(true);
+    }
+
+    #[inline]
+    pub fn set_constant(&self, is_constant: bool) {
+        // TODO: Can we use relaxed ordering?
+        self.buffer.is_constant.store(is_constant, Ordering::SeqCst);
+    }
+
+    #[inline]
+    pub fn is_constant(&self) -> bool {
+        // TODO: Can we use relaxed ordering?
+        self.buffer.is_constant.load(Ordering::SeqCst)
+    }
+
+    #[inline]
+    pub fn max_frames(&self) -> usize {
+        unsafe { self.borrow().len() }
     }
 
     pub fn id(&self) -> &DebugBufferID {
-        &self.buffer.1
+        &self.buffer.debug_id
     }
 }
 
@@ -274,8 +322,8 @@ impl SharedBufferPool {
             *slot = Some(SharedBuffer {
                 buffer: Shared::new(
                     &self.coll_handle,
-                    (
-                        MaybeAtomicRefCell::new(vec![0.0; self.buffer_size]),
+                    Buffer::new(
+                        self.buffer_size,
                         DebugBufferID {
                             buffer_type: DebugBufferType::Audio32,
                             index: index as u32,
@@ -304,8 +352,8 @@ impl SharedBufferPool {
             *slot = Some(SharedBuffer {
                 buffer: Shared::new(
                     &self.coll_handle,
-                    (
-                        MaybeAtomicRefCell::new(vec![0.0; self.buffer_size]),
+                    Buffer::new(
+                        self.buffer_size,
                         DebugBufferID {
                             buffer_type: DebugBufferType::Audio64,
                             index: index as u32,
@@ -334,8 +382,8 @@ impl SharedBufferPool {
             *slot = Some(SharedBuffer {
                 buffer: Shared::new(
                     &self.coll_handle,
-                    (
-                        MaybeAtomicRefCell::new(vec![0.0; self.buffer_size]),
+                    Buffer::new(
+                        self.buffer_size,
                         DebugBufferID {
                             buffer_type: DebugBufferType::IntermediaryAudio32,
                             index: index as u32,
