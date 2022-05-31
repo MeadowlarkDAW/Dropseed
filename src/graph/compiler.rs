@@ -1,12 +1,11 @@
 use audio_graph::{Graph, ScheduledNode};
-use basedrop::Shared;
 use smallvec::SmallVec;
 use std::error::Error;
 
 use crate::graph::shared_pool::{DelayCompKey, SharedDelayCompNode};
 use crate::plugin::ext::audio_ports::MainPortsLayout;
 use crate::plugin::process_info::ProcBuffers;
-use crate::{AudioPortBuffer, AudioPortBufferMut, HostInfo};
+use crate::{AudioPortBuffer, AudioPortBufferMut};
 
 use super::{
     schedule::sum::SumTask,
@@ -23,7 +22,6 @@ pub(crate) fn compile_graph(
     graph_in_node_id: &PluginInstanceID,
     graph_out_node_id: &PluginInstanceID,
     verifier: &mut Verifier,
-    host_info: &Shared<HostInfo>,
     coll_handle: &basedrop::Handle,
 ) -> Result<Schedule, GraphCompilerError> {
     let num_plugins = shared_plugin_pool.plugins.len();

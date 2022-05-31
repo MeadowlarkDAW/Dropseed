@@ -17,27 +17,62 @@ impl SumTask {
         // - `proc_info.frames` will always be less than or equal to the allocated size of
         // all process audio buffers.
         unsafe {
-            let out = self.audio_out.slice_from_frames_unchecked_mut(proc_info.frames);
+            let mut out_ref = self.audio_out.borrow_mut();
+
+            #[cfg(debug_assertions)]
+            let out = &mut out_ref[0..proc_info.frames];
+            #[cfg(not(debug_assertions))]
+            let out = std::slice::from_raw_parts_mut(out_ref.as_mut_ptr(), proc_info.frames);
 
             // Unroll loops for common number of inputs.
             match self.audio_in.len() {
                 0 => return,
                 1 => {
-                    let in_0 = self.audio_in[0].slice_from_frames_unchecked(proc_info.frames);
+                    let in_0_ref = self.audio_in[0].borrow();
+
+                    #[cfg(debug_assertions)]
+                    let in_0 = &in_0_ref[0..proc_info.frames];
+                    #[cfg(not(debug_assertions))]
+                    let in_0 = std::slice::from_raw_parts(in_0_ref.as_ptr(), proc_info.frames);
+
                     out.copy_from_slice(&in_0);
                 }
                 2 => {
-                    let in_0 = self.audio_in[0].slice_from_frames_unchecked(proc_info.frames);
-                    let in_1 = self.audio_in[1].slice_from_frames_unchecked(proc_info.frames);
+                    let in_0_ref = self.audio_in[0].borrow();
+                    let in_1_ref = self.audio_in[1].borrow();
+
+                    #[cfg(debug_assertions)]
+                    let in_0 = &in_0_ref[0..proc_info.frames];
+                    #[cfg(debug_assertions)]
+                    let in_1 = &in_1_ref[0..proc_info.frames];
+
+                    #[cfg(not(debug_assertions))]
+                    let in_0 = std::slice::from_raw_parts(in_0_ref.as_ptr(), proc_info.frames);
+                    #[cfg(not(debug_assertions))]
+                    let in_1 = std::slice::from_raw_parts(in_1_ref.as_ptr(), proc_info.frames);
 
                     for i in 0..proc_info.frames {
                         *out.get_unchecked_mut(i) = *in_0.get_unchecked(i) + *in_1.get_unchecked(i);
                     }
                 }
                 3 => {
-                    let in_0 = self.audio_in[0].slice_from_frames_unchecked(proc_info.frames);
-                    let in_1 = self.audio_in[1].slice_from_frames_unchecked(proc_info.frames);
-                    let in_2 = self.audio_in[2].slice_from_frames_unchecked(proc_info.frames);
+                    let in_0_ref = self.audio_in[0].borrow();
+                    let in_1_ref = self.audio_in[1].borrow();
+                    let in_2_ref = self.audio_in[2].borrow();
+
+                    #[cfg(debug_assertions)]
+                    let in_0 = &in_0_ref[0..proc_info.frames];
+                    #[cfg(debug_assertions)]
+                    let in_1 = &in_1_ref[0..proc_info.frames];
+                    #[cfg(debug_assertions)]
+                    let in_2 = &in_2_ref[0..proc_info.frames];
+
+                    #[cfg(not(debug_assertions))]
+                    let in_0 = std::slice::from_raw_parts(in_0_ref.as_ptr(), proc_info.frames);
+                    #[cfg(not(debug_assertions))]
+                    let in_1 = std::slice::from_raw_parts(in_1_ref.as_ptr(), proc_info.frames);
+                    #[cfg(not(debug_assertions))]
+                    let in_2 = std::slice::from_raw_parts(in_2_ref.as_ptr(), proc_info.frames);
 
                     for i in 0..proc_info.frames {
                         *out.get_unchecked_mut(i) = *in_0.get_unchecked(i)
@@ -46,10 +81,28 @@ impl SumTask {
                     }
                 }
                 4 => {
-                    let in_0 = self.audio_in[0].slice_from_frames_unchecked(proc_info.frames);
-                    let in_1 = self.audio_in[1].slice_from_frames_unchecked(proc_info.frames);
-                    let in_2 = self.audio_in[2].slice_from_frames_unchecked(proc_info.frames);
-                    let in_3 = self.audio_in[3].slice_from_frames_unchecked(proc_info.frames);
+                    let in_0_ref = self.audio_in[0].borrow();
+                    let in_1_ref = self.audio_in[1].borrow();
+                    let in_2_ref = self.audio_in[2].borrow();
+                    let in_3_ref = self.audio_in[3].borrow();
+
+                    #[cfg(debug_assertions)]
+                    let in_0 = &in_0_ref[0..proc_info.frames];
+                    #[cfg(debug_assertions)]
+                    let in_1 = &in_1_ref[0..proc_info.frames];
+                    #[cfg(debug_assertions)]
+                    let in_2 = &in_2_ref[0..proc_info.frames];
+                    #[cfg(debug_assertions)]
+                    let in_3 = &in_3_ref[0..proc_info.frames];
+
+                    #[cfg(not(debug_assertions))]
+                    let in_0 = std::slice::from_raw_parts(in_0_ref.as_ptr(), proc_info.frames);
+                    #[cfg(not(debug_assertions))]
+                    let in_1 = std::slice::from_raw_parts(in_1_ref.as_ptr(), proc_info.frames);
+                    #[cfg(not(debug_assertions))]
+                    let in_2 = std::slice::from_raw_parts(in_2_ref.as_ptr(), proc_info.frames);
+                    #[cfg(not(debug_assertions))]
+                    let in_3 = std::slice::from_raw_parts(in_3_ref.as_ptr(), proc_info.frames);
 
                     for i in 0..proc_info.frames {
                         *out.get_unchecked_mut(i) = *in_0.get_unchecked(i)
@@ -59,13 +112,24 @@ impl SumTask {
                     }
                 }
                 num_inputs => {
-                    let in_0 = self.audio_in[0].slice_from_frames_unchecked(proc_info.frames);
+                    let in_0_ref = self.audio_in[0].borrow();
+
+                    #[cfg(debug_assertions)]
+                    let in_0 = &in_0_ref[0..proc_info.frames];
+                    #[cfg(not(debug_assertions))]
+                    let in_0 = std::slice::from_raw_parts(in_0_ref.as_ptr(), proc_info.frames);
 
                     out.copy_from_slice(in_0);
 
                     for ch_i in 1..num_inputs {
+                        let input_ref = self.audio_in[ch_i].borrow();
+
+                        #[cfg(debug_assertions)]
+                        let input = &input_ref[0..proc_info.frames];
+                        #[cfg(not(debug_assertions))]
                         let input =
-                            self.audio_in[ch_i].slice_from_frames_unchecked(proc_info.frames);
+                            std::slice::from_raw_parts(input_ref.as_ptr(), proc_info.frames);
+
                         for smp_i in 0..proc_info.frames {
                             *out.get_unchecked_mut(smp_i) += *input.get_unchecked(smp_i);
                         }

@@ -9,6 +9,11 @@ use std::sync::{
     Arc,
 };
 
+#[cfg(debug_assertions)]
+use maybe_atomic_refcell::{MaybeAtomicRef, MaybeAtomicRefMut};
+#[cfg(debug_assertions)]
+use smallvec::SmallVec;
+
 use clap_sys::entry::clap_plugin_entry as RawClapEntry;
 use clap_sys::plugin::clap_plugin as RawClapPlugin;
 use clap_sys::plugin::clap_plugin_descriptor as RawClapPluginDescriptor;
@@ -22,6 +27,7 @@ use super::host_request::ClapHostRequest;
 use super::process::ClapProcess;
 use crate::clap::c_char_helpers::c_char_buf_to_str;
 use crate::host_request::HostRequest;
+use crate::plugin::audio_buffer::RawAudioChannelBuffers;
 use crate::plugin::process_info::{ProcBuffers, ProcInfo, ProcessStatus};
 use crate::plugin::{ext, PluginAudioThread, PluginDescriptor, PluginFactory, PluginMainThread};
 use crate::thread_id::SharedThreadIDs;
@@ -683,11 +689,71 @@ impl PluginAudioThread for ClapPluginAudioThread {
 
         self.process.sync_proc_info(proc_info, buffers);
 
-        let res = unsafe {
-            ((&*self.shared_plugin.raw_plugin).process)(
-                self.shared_plugin.raw_plugin,
-                self.process.raw(),
-            )
+        let res = {
+            #[cfg(debug_assertions)]
+            // In debug mode, borrow all of the atomic ref cells to properly use the
+            // safety checks, since external plugins just use the raw pointer to each
+            // buffer.
+            let (mut input_refs_f32, mut input_refs_f64, mut output_refs_f32, mut output_refs_f64) = {
+                let mut input_refs_f32: SmallVec<[MaybeAtomicRef<'_, Vec<f32>>; 32]> =
+                    SmallVec::new();
+                let mut input_refs_f64: SmallVec<[MaybeAtomicRef<'_, Vec<f64>>; 32]> =
+                    SmallVec::new();
+                let mut output_refs_f32: SmallVec<[MaybeAtomicRefMut<'_, Vec<f32>>; 32]> =
+                    SmallVec::new();
+                let mut output_refs_f64: SmallVec<[MaybeAtomicRefMut<'_, Vec<f64>>; 32]> =
+                    SmallVec::new();
+
+                for in_port in buffers.audio_in.iter() {
+                    match &in_port.raw_channels {
+                        RawAudioChannelBuffers::F32(buffers) => {
+                            for b in buffers.iter() {
+                                input_refs_f32.push(unsafe { b.buffer.0.borrow() });
+                            }
+                        }
+                        RawAudioChannelBuffers::F64(buffers) => {
+                            for b in buffers.iter() {
+                                input_refs_f64.push(unsafe { b.buffer.0.borrow() });
+                            }
+                        }
+                    }
+                }
+
+                for out_port in buffers.audio_out.iter() {
+                    match &out_port.raw_channels {
+                        RawAudioChannelBuffers::F32(buffers) => {
+                            for b in buffers.iter() {
+                                output_refs_f32.push(unsafe { b.buffer.0.borrow_mut() });
+                            }
+                        }
+                        RawAudioChannelBuffers::F64(buffers) => {
+                            for b in buffers.iter() {
+                                output_refs_f64.push(unsafe { b.buffer.0.borrow_mut() });
+                            }
+                        }
+                    }
+                }
+
+                (input_refs_f32, input_refs_f64, output_refs_f32, output_refs_f64)
+            };
+
+            let res = unsafe {
+                ((&*self.shared_plugin.raw_plugin).process)(
+                    self.shared_plugin.raw_plugin,
+                    self.process.raw(),
+                )
+            };
+
+            #[cfg(debug_assertions)]
+            input_refs_f32.clear();
+            #[cfg(debug_assertions)]
+            input_refs_f64.clear();
+            #[cfg(debug_assertions)]
+            output_refs_f32.clear();
+            #[cfg(debug_assertions)]
+            output_refs_f64.clear();
+
+            res
         };
 
         self.process.sync_output_constant_masks(buffers);

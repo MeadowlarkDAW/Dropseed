@@ -1,10 +1,8 @@
-use std::cell::UnsafeCell;
+use basedrop::{Shared, SharedCell};
+use maybe_atomic_refcell::MaybeAtomicRefCell;
+use smallvec::SmallVec;
 use std::thread::ThreadId;
 
-use basedrop::{Shared, SharedCell};
-use smallvec::SmallVec;
-
-use crate::host_request::HostInfo;
 use crate::thread_id::SharedThreadIDs;
 use crate::ProcInfo;
 
@@ -26,7 +24,7 @@ pub struct Schedule {
 }
 
 impl Schedule {
-    pub(crate) fn empty(max_block_size: usize, host_info: Shared<HostInfo>) -> Self {
+    pub(crate) fn empty(max_block_size: usize) -> Self {
         Self {
             tasks: Vec::new(),
             graph_audio_in: SmallVec::new(),
@@ -104,7 +102,14 @@ impl Schedule {
                 // audio threads due to aliasing buffer pointers.
                 // - `proc_info.frames` will always be less than or equal to the allocated size of
                 // all process audio buffers.
-                let buffer = unsafe { buffer.slice_from_frames_unchecked_mut(proc_info.frames) };
+                let mut buffer_ref = unsafe { buffer.borrow_mut() };
+
+                #[cfg(debug_assertions)]
+                let buffer = &mut buffer_ref[0..proc_info.frames];
+                #[cfg(not(debug_assertions))]
+                let buffer = unsafe {
+                    std::slice::from_raw_parts_mut(buffer_ref.as_mut_ptr(), proc_info.frames)
+                };
 
                 buffer.fill(0.0);
             }
@@ -123,8 +128,14 @@ impl Schedule {
                     // audio threads due to aliasing buffer pointers.
                     // - `proc_info.frames` will always be less than or equal to the allocated size of
                     // all process audio buffers.
-                    let buffer =
-                        unsafe { buffer.slice_from_frames_unchecked_mut(proc_info.frames) };
+                    let mut buffer_ref = unsafe { buffer.borrow_mut() };
+
+                    #[cfg(debug_assertions)]
+                    let buffer = &mut buffer_ref[0..proc_info.frames];
+                    #[cfg(not(debug_assertions))]
+                    let buffer = unsafe {
+                        std::slice::from_raw_parts_mut(buffer_ref.as_mut_ptr(), proc_info.frames)
+                    };
 
                     for i in 0..frames {
                         // TODO: Optimize with unsafe bounds checking?
@@ -144,13 +155,13 @@ impl Schedule {
 }
 
 struct ScheduleWrapper {
-    schedule: UnsafeCell<Schedule>,
+    schedule: MaybeAtomicRefCell<Schedule>,
 }
 
 // Required because of basedrop's `SharedCell` container.
 //
-// The reason why rust flags this as unsafe is because of the `UnsafeCell`s in
-// the schedule. But this is safe because those `UnsafeCell`s only ever get
+// The reason why rust flags this as unsafe is because of the `MaybeAtomicRefCell`s in
+// the schedule. But this is safe because those `MaybeAtomicRefCell`s only ever get
 // borrowed in the audio thread.
 unsafe impl Send for ScheduleWrapper {}
 unsafe impl Sync for ScheduleWrapper {}
@@ -179,7 +190,7 @@ impl SharedSchedule {
             coll_handle,
             SharedCell::new(Shared::new(
                 coll_handle,
-                ScheduleWrapper { schedule: UnsafeCell::new(schedule) },
+                ScheduleWrapper { schedule: MaybeAtomicRefCell::new(schedule) },
             )),
         );
 
@@ -200,8 +211,10 @@ impl SharedSchedule {
     }
 
     pub(crate) fn set_new_schedule(&mut self, schedule: Schedule, coll_handle: &basedrop::Handle) {
-        self.schedule
-            .set(Shared::new(coll_handle, ScheduleWrapper { schedule: UnsafeCell::new(schedule) }));
+        self.schedule.set(Shared::new(
+            coll_handle,
+            ScheduleWrapper { schedule: MaybeAtomicRefCell::new(schedule) },
+        ));
     }
 
     #[cfg(feature = "cpal-backend")]
@@ -210,9 +223,11 @@ impl SharedSchedule {
         num_out_channels: usize,
         out: &mut [T],
     ) {
+        let latest_schedule = self.schedule.get();
+
         // This is safe because the schedule is only ever accessed by the
         // audio thread.
-        let schedule = unsafe { &mut *(*self.schedule.get()).schedule.get() };
+        let mut schedule = unsafe { latest_schedule.schedule.borrow_mut() };
 
         // TODO: Set this in the sandbox thread once we implement plugin sandboxing.
         // Make sure the the audio thread ID is correct.

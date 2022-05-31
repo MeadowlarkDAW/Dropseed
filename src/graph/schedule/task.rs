@@ -107,7 +107,7 @@ impl PluginTask {
         // - This is only ever borrowed here in this method in the audio thread.
         // - The schedule verifier has ensured that a single plugin instance does
         // not appear twice within the same schedule, so no data races can occur.
-        let plugin_audio_thread = unsafe { &mut *self.plugin.plugin.get() };
+        let mut plugin_audio_thread = unsafe { (*self.plugin.plugin).borrow_mut() };
 
         plugin_audio_thread.process(proc_info, &mut self.buffers);
     }
@@ -126,7 +126,7 @@ impl DelayCompTask {
         // - This is only ever borrowed here in this method in the audio thread.
         // - The schedule verifier has ensured that a single node instance does
         // not appear twice within the same schedule, so no data races can occur.
-        let delay_comp_node = unsafe { &mut *self.delay_comp_node.node.get() };
+        let mut delay_comp_node = unsafe { (*self.delay_comp_node.node).borrow_mut() };
 
         delay_comp_node.process(proc_info, &self.audio_in, &self.audio_out);
     }
@@ -148,15 +148,32 @@ impl DeactivatedPluginTask {
         unsafe {
             // Pass audio through the main ports.
             for (in_buf, out_buf) in self.audio_through.iter() {
-                let in_buf = in_buf.slice_from_frames_unchecked(proc_info.frames);
-                let out_buf = out_buf.slice_from_frames_unchecked_mut(proc_info.frames);
+                let in_buf_ref = in_buf.borrow();
+                let mut out_buf_ref = out_buf.borrow_mut();
+
+                #[cfg(debug_assertions)]
+                let in_buf = &in_buf_ref[0..proc_info.frames];
+                #[cfg(debug_assertions)]
+                let out_buf = &mut out_buf_ref[0..proc_info.frames];
+
+                #[cfg(not(debug_assertions))]
+                let in_buf = std::slice::from_raw_parts(in_buf_ref.as_ptr(), proc_info.frames);
+                #[cfg(not(debug_assertions))]
+                let out_buf =
+                    std::slice::from_raw_parts_mut(out_buf_ref.as_mut_ptr(), proc_info.frames);
 
                 out_buf.copy_from_slice(in_buf);
             }
 
             // Make sure any extra output buffers are cleared.
             for out_buf in self.extra_audio_out.iter() {
-                let out_buf = out_buf.slice_from_frames_unchecked_mut(proc_info.frames);
+                let mut out_buf_ref = out_buf.borrow_mut();
+
+                #[cfg(debug_assertions)]
+                let out_buf = &mut out_buf_ref[0..proc_info.frames];
+                #[cfg(not(debug_assertions))]
+                let out_buf =
+                    std::slice::from_raw_parts_mut(out_buf_ref.as_mut_ptr(), proc_info.frames);
 
                 out_buf.fill(0.0);
             }

@@ -100,11 +100,8 @@ impl AudioGraph {
         let shared_plugin_pool = SharedPluginPool::new();
         let shared_buffer_pool = SharedBufferPool::new(max_frames as usize, coll_handle.clone());
 
-        let (shared_schedule, shared_schedule_clone) = SharedSchedule::new(
-            Schedule::empty(max_frames as usize, Shared::clone(&host_info)),
-            thread_ids,
-            &coll_handle,
-        );
+        let (shared_schedule, shared_schedule_clone) =
+            SharedSchedule::new(Schedule::empty(max_frames as usize), thread_ids, &coll_handle);
 
         let graph_in_rdn = Shared::new(&coll_handle, String::from("org.rustydaw.graph_in_node"));
         let graph_out_rdn = Shared::new(&coll_handle, String::from("org.rustydaw.graph_out_node"));
@@ -567,10 +564,8 @@ impl AudioGraph {
             }
         }
 
-        self.shared_schedule.set_new_schedule(
-            Schedule::empty(self.max_frames as usize, Shared::clone(&self.host_info)),
-            &self.coll_handle,
-        );
+        self.shared_schedule
+            .set_new_schedule(Schedule::empty(self.max_frames as usize), &self.coll_handle);
 
         self.shared_plugin_pool.plugins.clear();
         self.shared_buffer_pool.remove_excess_audio_buffers(0, 0);
@@ -734,7 +729,6 @@ impl AudioGraph {
             &self.graph_in_node_id,
             &self.graph_out_node_id,
             &mut self.verifier,
-            &self.host_info,
             &self.coll_handle,
         ) {
             Ok(schedule) => {
@@ -746,10 +740,8 @@ impl AudioGraph {
             Err(e) => {
                 // Replace the current schedule with an emtpy one now that the graph
                 // is in an invalid state.
-                self.shared_schedule.set_new_schedule(
-                    Schedule::empty(self.max_frames as usize, Shared::clone(&self.host_info)),
-                    &self.coll_handle,
-                );
+                self.shared_schedule
+                    .set_new_schedule(Schedule::empty(self.max_frames as usize), &self.coll_handle);
                 Err(e)
             }
         }

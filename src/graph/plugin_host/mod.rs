@@ -1,61 +1,51 @@
+use rtrb_basedrop::{Consumer, Producer, RingBuffer};
+use rusty_daw_core::SampleRate;
 use std::error::Error;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
     Arc,
 };
 
-use rusty_daw_core::SampleRate;
-
 use crate::host_request::RequestFlags;
 use crate::plugin::ext::audio_ports::PluginAudioPortsExt;
 use crate::plugin::process_info::ProcBuffers;
 use crate::plugin::{PluginAudioThread, PluginMainThread, PluginSaveState};
-use crate::reducing_queue::{self, RQConsumer, RQProducer, ReducingQueueValue};
 use crate::{HostRequest, ProcInfo, ProcessStatus};
 
 use super::shared_pool::PluginInstanceID;
 
 #[derive(Clone, Copy)]
-struct MainToAudioParamQueueValue {
+struct MainToAudioParamMsg {
+    param: u32,
     value: f64,
 }
-
-impl ReducingQueueValue for MainToAudioParamQueueValue {}
 
 #[derive(Clone, Copy)]
-struct AudioToMainParamQueueValue {
-    has_value: bool,
-    has_gesture: bool,
-    is_begin: bool,
-    value: f64,
+enum AudioToMainParamMsgType {
+    Value(f64),
+    HasGesture,
+    IsBegin,
+    IsNotBegin,
 }
 
-impl ReducingQueueValue for AudioToMainParamQueueValue {
-    fn update(&mut self, new: &Self) {
-        if new.has_value {
-            self.has_value = true;
-            self.value = new.value;
-        }
-
-        if new.has_gesture {
-            self.has_gesture = true;
-            self.is_begin = new.is_begin;
-        }
-    }
+#[derive(Clone, Copy)]
+struct AudioToMainParamMsg {
+    param: u32,
+    msg_type: AudioToMainParamMsgType,
 }
 
 struct ParamQueuesMainThread {
-    main_to_audio_param_value_tx: RQProducer<u32, MainToAudioParamQueueValue>,
-    main_to_audio_param_mod_tx: RQProducer<u32, MainToAudioParamQueueValue>,
+    main_to_audio_param_value_tx: Producer<MainToAudioParamMsg>,
+    main_to_audio_param_mod_tx: Producer<MainToAudioParamMsg>,
 
-    audio_to_main_param_value_rx: RQConsumer<u32, AudioToMainParamQueueValue>,
+    audio_to_main_param_value_rx: Consumer<AudioToMainParamMsg>,
 }
 
 struct ParamQueuesAudioThread {
-    audio_to_main_param_value_tx: RQProducer<u32, AudioToMainParamQueueValue>,
+    audio_to_main_param_value_tx: Producer<AudioToMainParamMsg>,
 
-    main_to_audio_param_value_rx: RQConsumer<u32, MainToAudioParamQueueValue>,
-    main_to_audio_param_mod_rx: RQConsumer<u32, MainToAudioParamQueueValue>,
+    main_to_audio_param_value_rx: Consumer<MainToAudioParamMsg>,
+    main_to_audio_param_mod_rx: Consumer<MainToAudioParamMsg>,
 }
 
 pub(crate) struct PluginInstanceHost {
@@ -157,12 +147,13 @@ impl PluginInstanceHost {
                 let num_params = 5; // TODO
 
                 let (param_queues_main_thread, param_queues_audio_thread) = if num_params > 0 {
+                    // TODO: Tweak these capacities?
                     let (main_to_audio_param_value_tx, main_to_audio_param_value_rx) =
-                        reducing_queue::reducing_queue(num_params, coll_handle);
+                        RingBuffer::new(num_params * 3, coll_handle);
                     let (main_to_audio_param_mod_tx, main_to_audio_param_mod_rx) =
-                        reducing_queue::reducing_queue(num_params, coll_handle);
+                        RingBuffer::new(num_params * 2, coll_handle);
                     let (audio_to_main_param_value_tx, audio_to_main_param_value_rx) =
-                        reducing_queue::reducing_queue(num_params, coll_handle);
+                        RingBuffer::new(num_params * 3, coll_handle);
 
                     (
                         Some(ParamQueuesMainThread {
@@ -344,14 +335,6 @@ impl PluginInstanceHostAudioThread {
 
         if let Some(params_queue) = &mut self.param_queues {
             // Handle input events. TODO
-
-            params_queue
-                .main_to_audio_param_value_rx
-                .consume(|key: &u32, value: &MainToAudioParamQueueValue| {});
-
-            params_queue
-                .main_to_audio_param_mod_rx
-                .consume(|key: &u32, value: &MainToAudioParamQueueValue| {});
         }
 
         if state == PluginState::ActiveAndWaitingForQuiet {
@@ -391,8 +374,6 @@ impl PluginInstanceHostAudioThread {
 
         if let Some(params_queue) = &mut self.param_queues {
             // Handle output events. TODO
-
-            params_queue.audio_to_main_param_value_tx.producer_done();
         }
 
         match status {

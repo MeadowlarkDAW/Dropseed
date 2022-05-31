@@ -1,7 +1,7 @@
 use bytemuck::{bytes_of, try_from_bytes};
 use crossbeam::channel;
 use fnv::FnvHashMap;
-use ringbuf::{Consumer, Producer};
+use rtrb_basedrop::{Consumer, Producer};
 use rusty_daw_core::atomic::AtomicF64;
 use std::sync::{
     atomic::{AtomicBool, Ordering},

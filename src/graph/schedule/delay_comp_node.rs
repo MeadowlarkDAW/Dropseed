@@ -22,10 +22,16 @@ impl DelayCompNode {
         // audio threads due to aliasing buffer pointers.
         // - `proc_info.frames` will always be less than or equal to the allocated size of
         // all process audio buffers.
+        let (input_ref, mut output_ref) = unsafe { (input.borrow(), output.borrow_mut()) };
+
+        #[cfg(debug_assertions)]
+        let (input, output) =
+            (&input_ref[0..proc_info.frames], &mut output_ref[0..proc_info.frames]);
+        #[cfg(not(debug_assertions))]
         let (input, output) = unsafe {
             (
-                input.slice_from_frames_unchecked(proc_info.frames),
-                output.slice_from_frames_unchecked_mut(proc_info.frames),
+                std::slice::from_raw_parts(input_ref.as_ptr(), proc_info.frames),
+                std::slice::from_raw_parts_mut(output_ref.as_mut_ptr(), proc_info.frames),
             )
         };
 

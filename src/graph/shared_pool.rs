@@ -1,7 +1,7 @@
 use audio_graph::NodeRef;
 use basedrop::Shared;
 use fnv::FnvHashMap;
-use std::cell::UnsafeCell;
+use maybe_atomic_refcell::{MaybeAtomicRef, MaybeAtomicRefCell, MaybeAtomicRefMut};
 use std::hash::Hash;
 
 use crate::plugin_scanner::PluginFormat;
@@ -41,26 +41,18 @@ impl std::fmt::Debug for DebugBufferID {
 }
 
 pub(crate) struct SharedBuffer<T: Clone + Copy + Send + Default + 'static> {
-    pub buffer: Shared<(UnsafeCell<Vec<T>>, DebugBufferID)>,
+    pub buffer: Shared<(MaybeAtomicRefCell<Vec<T>>, DebugBufferID)>,
 }
 
 impl<T: Clone + Copy + Send + Default + 'static> SharedBuffer<T> {
     #[inline]
-    pub unsafe fn slice_from_frames_unchecked(&self, frames: usize) -> &[T] {
-        #[cfg(debug_assertions)]
-        return &(&*self.buffer.0.get())[0..frames];
-
-        #[cfg(not(debug_assertions))]
-        return std::slice::from_raw_parts((*self.buffer.0.get()).as_ptr(), frames);
+    pub unsafe fn borrow<'a>(&'a self) -> MaybeAtomicRef<'a, Vec<T>> {
+        self.buffer.0.borrow()
     }
 
     #[inline]
-    pub unsafe fn slice_from_frames_unchecked_mut(&self, frames: usize) -> &mut [T] {
-        #[cfg(debug_assertions)]
-        return &mut (&mut *self.buffer.0.get())[0..frames];
-
-        #[cfg(not(debug_assertions))]
-        return std::slice::from_raw_parts_mut((*self.buffer.0.get()).as_mut_ptr(), frames);
+    pub unsafe fn borrow_mut<'a>(&'a self) -> MaybeAtomicRefMut<'a, Vec<T>> {
+        self.buffer.0.borrow_mut()
     }
 
     pub fn id(&self) -> &DebugBufferID {
@@ -166,20 +158,20 @@ impl Hash for PluginInstanceID {
 }
 
 pub(crate) struct SharedPluginHostAudioThread {
-    pub plugin: Shared<UnsafeCell<PluginInstanceHostAudioThread>>,
+    pub plugin: Shared<MaybeAtomicRefCell<PluginInstanceHostAudioThread>>,
     pub task_version: u64,
 }
 
 impl SharedPluginHostAudioThread {
     pub fn new(plugin: PluginInstanceHostAudioThread, coll_handle: &basedrop::Handle) -> Self {
-        Self { plugin: Shared::new(coll_handle, UnsafeCell::new(plugin)), task_version: 0 }
+        Self { plugin: Shared::new(coll_handle, MaybeAtomicRefCell::new(plugin)), task_version: 0 }
     }
 }
 
 impl SharedPluginHostAudioThread {
-    pub fn id(&self) -> &PluginInstanceID {
+    pub fn id(&self) -> PluginInstanceID {
         // Safe because we are just borrowing this immutably.
-        unsafe { &(*self.plugin.get()).id }
+        unsafe { self.plugin.borrow().id.clone() }
     }
 }
 
@@ -205,14 +197,14 @@ pub(crate) struct DelayCompKey {
 }
 
 pub(crate) struct SharedDelayCompNode {
-    pub node: Shared<UnsafeCell<DelayCompNode>>,
+    pub node: Shared<MaybeAtomicRefCell<DelayCompNode>>,
     pub active: bool,
 }
 
 impl SharedDelayCompNode {
     pub fn new(delay: u32, coll_handle: &basedrop::Handle) -> Self {
         Self {
-            node: Shared::new(coll_handle, UnsafeCell::new(DelayCompNode::new(delay))),
+            node: Shared::new(coll_handle, MaybeAtomicRefCell::new(DelayCompNode::new(delay))),
             active: true,
         }
     }
@@ -227,7 +219,7 @@ impl Clone for SharedDelayCompNode {
 impl SharedDelayCompNode {
     pub fn delay(&self) -> u32 {
         // Safe because we are just borrowing this immutably.
-        unsafe { (*self.node.get()).delay() }
+        unsafe { self.node.borrow().delay() }
     }
 }
 
@@ -283,7 +275,7 @@ impl SharedBufferPool {
                 buffer: Shared::new(
                     &self.coll_handle,
                     (
-                        UnsafeCell::new(vec![0.0; self.buffer_size]),
+                        MaybeAtomicRefCell::new(vec![0.0; self.buffer_size]),
                         DebugBufferID {
                             buffer_type: DebugBufferType::Audio32,
                             index: index as u32,
@@ -313,7 +305,7 @@ impl SharedBufferPool {
                 buffer: Shared::new(
                     &self.coll_handle,
                     (
-                        UnsafeCell::new(vec![0.0; self.buffer_size]),
+                        MaybeAtomicRefCell::new(vec![0.0; self.buffer_size]),
                         DebugBufferID {
                             buffer_type: DebugBufferType::Audio64,
                             index: index as u32,
@@ -343,7 +335,7 @@ impl SharedBufferPool {
                 buffer: Shared::new(
                     &self.coll_handle,
                     (
-                        UnsafeCell::new(vec![0.0; self.buffer_size]),
+                        MaybeAtomicRefCell::new(vec![0.0; self.buffer_size]),
                         DebugBufferID {
                             buffer_type: DebugBufferType::IntermediaryAudio32,
                             index: index as u32,
