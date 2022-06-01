@@ -24,7 +24,7 @@
 //! OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 //! SOFTWARE.
 
-use atomic_refcell::AtomicRefCell;
+use atomic_refcell::{AtomicRefCell, AtomicRefMut};
 use basedrop::Shared;
 use fnv::FnvHashMap;
 use std::collections::hash_map::Entry;
@@ -127,6 +127,54 @@ impl<K: Hash + Eq + Send + 'static, V: ReducFnvValue> ReducFnvProducer<K, V> {
         self.shared.producer.store(free, Ordering::SeqCst);
         self.shared.free.store(NULL_USIZE, Ordering::SeqCst);
         self.shared.consumer.store(temp, Ordering::SeqCst)
+    }
+
+    pub fn produce<'a, P: FnOnce(ReducFnvProducerRefMut<'a, K, V>)>(&'a mut self, p: P) {
+        let producer_i = self.shared.producer.load(Ordering::SeqCst);
+
+        if producer_i == NULL_USIZE {
+            panic!("ReducingFnvQueue::produce(): producer pointer is invalid");
+        }
+
+        {
+            let producer = unsafe { self.shared.queues.get_unchecked(producer_i).borrow_mut() };
+
+            (p)(ReducFnvProducerRefMut { producer });
+        }
+
+        if self.shared.consumer.load(Ordering::SeqCst) != NULL_USIZE {
+            return;
+        }
+
+        let temp = producer_i;
+
+        let free = self.shared.free.load(Ordering::SeqCst);
+        if free == NULL_USIZE {
+            panic!("ReducingFnvQueue::produce(): free pointer is invalid");
+        }
+
+        self.shared.producer.store(free, Ordering::SeqCst);
+        self.shared.free.store(NULL_USIZE, Ordering::SeqCst);
+        self.shared.consumer.store(temp, Ordering::SeqCst)
+    }
+}
+
+pub struct ReducFnvProducerRefMut<'a, K: Hash + Eq + Send + 'static, V: ReducFnvValue> {
+    producer: AtomicRefMut<'a, FnvHashMap<K, V>>,
+}
+
+impl<'a, K: Hash + Eq + Send + 'static, V: ReducFnvValue> ReducFnvProducerRefMut<'a, K, V> {
+    pub fn set(&mut self, key: K, value: V) {
+        let _ = self.producer.insert(key, value);
+    }
+
+    pub fn set_or_update(&mut self, key: K, value: V) {
+        match self.producer.entry(key) {
+            Entry::Occupied(mut old_value) => old_value.get_mut().update(&value),
+            Entry::Vacant(entry) => {
+                entry.insert(value);
+            }
+        }
     }
 }
 

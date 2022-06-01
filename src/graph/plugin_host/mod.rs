@@ -460,76 +460,70 @@ impl PluginInstanceHostAudioThread {
         self.in_events.clear();
 
         if let Some(params_queue) = &mut self.param_queues {
-            while let Some(out_event) = self.out_events.pop() {
-                match out_event.get() {
-                    Ok(PluginEvent::ParamGesture(event)) => {
-                        // TODO: Use event.time for more accurate recording of automation.
+            params_queue.audio_to_main_param_value_tx.produce(|mut queue| {
+                while let Some(out_event) = self.out_events.pop() {
+                    match out_event.get() {
+                        Ok(PluginEvent::ParamGesture(event)) => {
+                            // TODO: Use event.time for more accurate recording of automation.
 
-                        let is_adjusting =
-                            self.is_adjusting_parameter.entry(event.param_id).or_insert(false);
+                            let is_adjusting =
+                                self.is_adjusting_parameter.entry(event.param_id).or_insert(false);
 
-                        if event.is_begin() {
-                            if *is_adjusting {
-                                log::warn!(
-                                    "The plugin sent BEGIN_ADJUST twice. The event was ignored."
-                                );
-                                continue;
+                            if event.is_begin() {
+                                if *is_adjusting {
+                                    log::warn!(
+                                        "The plugin sent BEGIN_ADJUST twice. The event was ignored."
+                                    );
+                                    continue;
+                                }
+
+                                *is_adjusting = true;
+
+                                let value = AudioToMainParamValue {
+                                    has_value: false,
+                                    has_gesture: true,
+                                    is_begin: true,
+                                    value: 0.0,
+                                };
+
+                                queue.set_or_update(event.param_id, value);
+                            } else {
+                                if !*is_adjusting {
+                                    log::warn!(
+                                        "The plugin sent END_ADJUST without a preceding BEGIN_ADJUST. The event was ignored."
+                                    );
+                                    continue;
+                                }
+
+                                *is_adjusting = false;
+
+                                let value = AudioToMainParamValue {
+                                    has_value: false,
+                                    has_gesture: true,
+                                    is_begin: false,
+                                    value: 0.0,
+                                };
+
+                                queue.set_or_update(event.param_id, value);
                             }
-
-                            *is_adjusting = true;
-
-                            let value = AudioToMainParamValue {
-                                has_value: false,
-                                has_gesture: true,
-                                is_begin: true,
-                                value: 0.0,
-                            };
-
-                            params_queue
-                                .audio_to_main_param_value_tx
-                                .set_or_update(event.param_id, value);
-                        } else {
-                            if !*is_adjusting {
-                                log::warn!(
-                                    "The plugin sent END_ADJUST without a preceding BEGIN_ADJUST. The event was ignored."
-                                );
-                                continue;
-                            }
-
-                            *is_adjusting = false;
-
-                            let value = AudioToMainParamValue {
-                                has_value: false,
-                                has_gesture: true,
-                                is_begin: false,
-                                value: 0.0,
-                            };
-
-                            params_queue
-                                .audio_to_main_param_value_tx
-                                .set_or_update(event.param_id, value);
                         }
-                    }
-                    Ok(PluginEvent::ParamValue(event)) => {
-                        // TODO: Use event.time for more accurate recording of automation.
+                        Ok(PluginEvent::ParamValue(event)) => {
+                            // TODO: Use event.time for more accurate recording of automation.
 
-                        let value = AudioToMainParamValue {
-                            has_value: true,
-                            has_gesture: false,
-                            is_begin: false,
-                            value: event.value,
-                        };
+                            let value = AudioToMainParamValue {
+                                has_value: true,
+                                has_gesture: false,
+                                is_begin: false,
+                                value: event.value,
+                            };
 
-                        params_queue
-                            .audio_to_main_param_value_tx
-                            .set_or_update(event.param_id, value);
+                            queue.set_or_update(event.param_id, value);
+                        }
+                        // TODO: Handle more output event types
+                        _ => {}
                     }
-                    // TODO: Handle more output event types
-                    _ => {}
                 }
-            }
-
-            params_queue.audio_to_main_param_value_tx.producer_done();
+            });
         } else {
             self.out_events.clear();
         }
