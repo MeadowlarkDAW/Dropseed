@@ -1,5 +1,4 @@
 use fnv::FnvHashMap;
-use rtrb_basedrop::{Consumer, Producer, RingBuffer};
 use rusty_daw_core::SampleRate;
 use std::error::Error;
 use std::sync::{
@@ -9,48 +8,56 @@ use std::sync::{
 
 use crate::host_request::RequestFlags;
 use crate::plugin::event_queue::EventQueue;
-use crate::plugin::events::{
-    EventFlags, EventParamGesture, EventParamMod, EventParamValue, PluginEvent,
-};
+use crate::plugin::events::{EventFlags, EventParamMod, EventParamValue, PluginEvent};
 use crate::plugin::ext::audio_ports::PluginAudioPortsExt;
 use crate::plugin::process_info::ProcBuffers;
 use crate::plugin::{PluginAudioThread, PluginMainThread, PluginSaveState};
+use crate::reducing_queue::{ReducFnvConsumer, ReducFnvProducer, ReducFnvValue, ReducingFnvQueue};
 use crate::{HostRequest, ProcInfo, ProcessStatus};
 
 use super::shared_pool::PluginInstanceID;
 
 #[derive(Clone, Copy)]
-struct MainToAudioParamMsg {
-    param: u32,
+struct MainToAudioParamValue {
     value: f64,
 }
 
-#[derive(Clone, Copy)]
-enum AudioToMainParamMsgType {
-    Value(f64),
-    HasGesture,
-    IsBegin,
-    IsNotBegin,
-}
+impl ReducFnvValue for MainToAudioParamValue {}
 
 #[derive(Clone, Copy)]
-struct AudioToMainParamMsg {
-    param: u32,
-    msg_type: AudioToMainParamMsgType,
+struct AudioToMainParamValue {
+    has_value: bool,
+    has_gesture: bool,
+    is_begin: bool,
+    value: f64,
+}
+
+impl ReducFnvValue for AudioToMainParamValue {
+    fn update(&mut self, new_value: &Self) {
+        if new_value.has_value {
+            self.has_value = true;
+            self.value = new_value.value;
+        }
+
+        if new_value.has_gesture {
+            self.has_gesture = true;
+            self.is_begin = new_value.is_begin;
+        }
+    }
 }
 
 struct ParamQueuesMainThread {
-    main_to_audio_param_value_tx: Producer<MainToAudioParamMsg>,
-    main_to_audio_param_mod_tx: Producer<MainToAudioParamMsg>,
+    main_to_audio_param_value_tx: ReducFnvProducer<u32, MainToAudioParamValue>,
+    main_to_audio_param_mod_tx: ReducFnvProducer<u32, MainToAudioParamValue>,
 
-    audio_to_main_param_value_rx: Consumer<AudioToMainParamMsg>,
+    audio_to_main_param_value_rx: ReducFnvConsumer<u32, AudioToMainParamValue>,
 }
 
 struct ParamQueuesAudioThread {
-    audio_to_main_param_value_tx: Producer<AudioToMainParamMsg>,
+    audio_to_main_param_value_tx: ReducFnvProducer<u32, AudioToMainParamValue>,
 
-    main_to_audio_param_value_rx: Consumer<MainToAudioParamMsg>,
-    main_to_audio_param_mod_rx: Consumer<MainToAudioParamMsg>,
+    main_to_audio_param_value_rx: ReducFnvConsumer<u32, MainToAudioParamValue>,
+    main_to_audio_param_mod_rx: ReducFnvConsumer<u32, MainToAudioParamValue>,
 }
 
 pub(crate) struct PluginInstanceHost {
@@ -152,13 +159,12 @@ impl PluginInstanceHost {
                 let num_params = 5; // TODO
 
                 let (param_queues_main_thread, param_queues_audio_thread) = if num_params > 0 {
-                    // TODO: Tweak these capacities?
                     let (main_to_audio_param_value_tx, main_to_audio_param_value_rx) =
-                        RingBuffer::new(num_params * 3, coll_handle);
+                        ReducingFnvQueue::new(num_params, coll_handle);
                     let (main_to_audio_param_mod_tx, main_to_audio_param_mod_rx) =
-                        RingBuffer::new(num_params * 2, coll_handle);
+                        ReducingFnvQueue::new(num_params, coll_handle);
                     let (audio_to_main_param_value_tx, audio_to_main_param_value_rx) =
-                        RingBuffer::new(num_params * 3, coll_handle);
+                        ReducingFnvQueue::new(num_params, coll_handle);
 
                     (
                         Some(ParamQueuesMainThread {
@@ -178,8 +184,8 @@ impl PluginInstanceHost {
 
                 self.param_queues = param_queues_main_thread;
 
-                let mut in_param_event_reducer = FnvHashMap::default();
-                in_param_event_reducer.reserve(num_params);
+                let mut is_adjusting_parameter = FnvHashMap::default();
+                is_adjusting_parameter.reserve(num_params * 2);
 
                 Ok((
                     PluginInstanceHostAudioThread {
@@ -189,7 +195,7 @@ impl PluginInstanceHost {
                         param_queues: param_queues_audio_thread,
                         in_events: EventQueue::new(num_params * 3),
                         out_events: EventQueue::new(num_params * 3),
-                        in_param_event_reducer,
+                        is_adjusting_parameter,
                         host_request: self.host_request.clone(),
                     },
                     audio_ports,
@@ -305,7 +311,8 @@ pub(crate) struct PluginInstanceHostAudioThread {
     param_queues: Option<ParamQueuesAudioThread>,
     in_events: EventQueue,
     out_events: EventQueue,
-    in_param_event_reducer: FnvHashMap<u32, MainToAudioParamMsg>,
+
+    is_adjusting_parameter: FnvHashMap<u32, bool>,
 
     host_request: HostRequest,
 }
@@ -358,18 +365,13 @@ impl PluginInstanceHostAudioThread {
         self.out_events.clear();
 
         if let Some(params_queue) = &mut self.param_queues {
-            self.in_param_event_reducer.clear();
-
-            while let Ok(param_event) = params_queue.main_to_audio_param_value_rx.pop() {
-                let _ = self.in_param_event_reducer.insert(param_event.param, param_event);
-            }
-            for (_, param_event) in self.in_param_event_reducer.drain() {
+            params_queue.main_to_audio_param_value_rx.consume(|param_id, value| {
                 self.in_events.push(PluginEvent::ParamValue(&EventParamValue::new(
                     // TODO: Finer values for `time` instead of just setting it to the first frame?
                     0,                   // time
                     0,                   // space_id
                     EventFlags::empty(), // event_flags
-                    param_event.param,   // param_id
+                    *param_id,           // param_id
                     // TODO: Note ID
                     -1, // note_id
                     // TODO: Port index
@@ -377,23 +379,18 @@ impl PluginInstanceHostAudioThread {
                     // TODO: Channel
                     -1, // channel
                     // TODO: Key
-                    -1,                // key
-                    param_event.value, // value
+                    -1,          // key
+                    value.value, // value
                 )))
-            }
+            });
 
-            self.in_param_event_reducer.clear();
-
-            while let Ok(param_event) = params_queue.main_to_audio_param_mod_rx.pop() {
-                let _ = self.in_param_event_reducer.insert(param_event.param, param_event);
-            }
-            for (_, param_event) in self.in_param_event_reducer.drain() {
+            params_queue.main_to_audio_param_mod_rx.consume(|param_id, value| {
                 self.in_events.push(PluginEvent::ParamMod(&EventParamMod::new(
                     // TODO: Finer values for `time` instead of just setting it to the first frame?
                     0,                   // time
                     0,                   // space_id
                     EventFlags::empty(), // event_flags
-                    param_event.param,   // param_id
+                    *param_id,           // param_id
                     // TODO: Note ID
                     -1, // note_id
                     // TODO: Port index
@@ -401,10 +398,10 @@ impl PluginInstanceHostAudioThread {
                     // TODO: Channel
                     -1, // channel
                     // TODO: Key
-                    -1,                // key
-                    param_event.value, // amount
+                    -1,          // key
+                    value.value, // value
                 )))
-            }
+            });
         }
 
         if state == PluginState::ActiveAndWaitingForQuiet {
@@ -462,17 +459,79 @@ impl PluginInstanceHostAudioThread {
 
         self.in_events.clear();
 
-        while let Some(out_event) = self.out_events.pop() {
-            match out_event.get() {
-                Ok(PluginEvent::ParamGesture(event)) => {
-                    // TODO
+        if let Some(params_queue) = &mut self.param_queues {
+            while let Some(out_event) = self.out_events.pop() {
+                match out_event.get() {
+                    Ok(PluginEvent::ParamGesture(event)) => {
+                        // TODO: Use event.time for more accurate recording of automation.
+
+                        let is_adjusting =
+                            self.is_adjusting_parameter.entry(event.param_id).or_insert(false);
+
+                        if event.is_begin() {
+                            if *is_adjusting {
+                                log::warn!(
+                                    "The plugin sent BEGIN_ADJUST twice. The event was ignored."
+                                );
+                                continue;
+                            }
+
+                            *is_adjusting = true;
+
+                            let value = AudioToMainParamValue {
+                                has_value: false,
+                                has_gesture: true,
+                                is_begin: true,
+                                value: 0.0,
+                            };
+
+                            params_queue
+                                .audio_to_main_param_value_tx
+                                .set_or_update(event.param_id, value);
+                        } else {
+                            if !*is_adjusting {
+                                log::warn!(
+                                    "The plugin sent END_ADJUST without a preceding BEGIN_ADJUST. The event was ignored."
+                                );
+                                continue;
+                            }
+
+                            *is_adjusting = false;
+
+                            let value = AudioToMainParamValue {
+                                has_value: false,
+                                has_gesture: true,
+                                is_begin: false,
+                                value: 0.0,
+                            };
+
+                            params_queue
+                                .audio_to_main_param_value_tx
+                                .set_or_update(event.param_id, value);
+                        }
+                    }
+                    Ok(PluginEvent::ParamValue(event)) => {
+                        // TODO: Use event.time for more accurate recording of automation.
+
+                        let value = AudioToMainParamValue {
+                            has_value: true,
+                            has_gesture: false,
+                            is_begin: false,
+                            value: event.value,
+                        };
+
+                        params_queue
+                            .audio_to_main_param_value_tx
+                            .set_or_update(event.param_id, value);
+                    }
+                    // TODO: Handle more output event types
+                    _ => {}
                 }
-                Ok(PluginEvent::ParamValue(event)) => {
-                    // TODO
-                }
-                // TODO: Handle more output event types
-                _ => {}
             }
+
+            params_queue.audio_to_main_param_value_tx.producer_done();
+        } else {
+            self.out_events.clear();
         }
 
         match status {

@@ -590,6 +590,14 @@ impl EventParamGesture {
             param_id,
         }
     }
+
+    pub fn is_begin(&self) -> bool {
+        if let Some(event_type) = EventType::from_u16(self.header.event_type) {
+            event_type == EventType::ParamGestureBegin
+        } else {
+            false
+        }
+    }
 }
 
 unsafe impl bytemuck::Pod for EventParamGesture {}
