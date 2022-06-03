@@ -184,7 +184,7 @@ pub trait PluginMainThread {
     ///
     /// [main-thread]
     #[allow(unused)]
-    fn param_info(&mut self) -> Result<&ext::params::ParamInfo, ()> {
+    fn param_info(&mut self, param_id: u32) -> Result<ext::params::ParamInfo, ()> {
         Err(())
     }
 
@@ -238,7 +238,7 @@ pub trait PluginMainThread {
     ///
     /// [!active : main-thread]
     #[allow(unused)]
-    fn param_flush(&mut self) {}
+    fn param_flush(&mut self, in_events: &EventQueue, out_events: &mut EventQueue) {}
 }
 
 /// The methods of an audio plugin instance which run in the "audio" thread.
@@ -290,5 +290,5 @@ pub trait PluginAudioThread: Send + Sync + 'static {
     ///
     /// [active && !processing : audio-thread]
     #[allow(unused)]
-    fn param_flush(&mut self) {}
+    fn param_flush(&mut self, in_events: &EventQueue, out_events: &mut EventQueue) {}
 }

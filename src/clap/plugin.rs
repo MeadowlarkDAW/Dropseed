@@ -23,6 +23,7 @@ use clap_sys::string_sizes::CLAP_PATH_SIZE;
 use clap_sys::version::clap_version as ClapVersion;
 
 use super::c_char_helpers::c_char_ptr_to_maybe_str;
+use super::events::{ClapInputEvents, ClapOutputEvents};
 use super::host_request::ClapHostRequest;
 use super::process::ClapProcess;
 use crate::clap::c_char_helpers::c_char_buf_to_str;
@@ -34,6 +35,8 @@ use crate::thread_id::SharedThreadIDs;
 use crate::MainPortsLayout;
 use crate::PluginAudioPortsExt;
 use crate::{AudioPortInfo, EventQueue, PluginInstanceID};
+
+use super::params::ClapPluginParams;
 
 struct SharedClapLib {
     // We hold on to this to make sure the host callback stays alive for as long as a
@@ -245,18 +248,27 @@ impl PluginFactory for ClapPluginFactory {
             .into());
         }
 
+        let (params_ext, has_params_ext) = ClapPluginParams::new(raw_plugin);
+
+        let in_out_events = if has_params_ext {
+            Some((ClapInputEvents::new(), ClapOutputEvents::new()))
+        } else {
+            None
+        };
+
         let shared_plugin = Shared::new(
             main_thread_coll_handle,
             SharedClapPluginInstance {
                 raw_plugin,
                 activated: Arc::new(AtomicBool::new(false)),
                 id: Shared::clone(&self.id),
+                params_ext,
                 _host_request: clap_host_request,
                 _shared_lib: Shared::clone(&self.shared_lib),
             },
         );
 
-        Ok(Box::new(ClapPluginMainThread { shared_plugin, audio_ports_ext: None }))
+        Ok(Box::new(ClapPluginMainThread { shared_plugin, audio_ports_ext: None, in_out_events }))
     }
 }
 
@@ -265,6 +277,8 @@ pub(crate) struct SharedClapPluginInstance {
     activated: Arc<AtomicBool>,
 
     raw_plugin: *const RawClapPlugin,
+
+    params_ext: ClapPluginParams,
 
     // We hold on to these to make sure these stay alive for as long as a
     // reference to this struct exists.
@@ -301,6 +315,8 @@ unsafe impl Sync for SharedClapPluginInstance {}
 pub(crate) struct ClapPluginMainThread {
     shared_plugin: Shared<SharedClapPluginInstance>,
     audio_ports_ext: Option<PluginAudioPortsExt>,
+
+    in_out_events: Option<(ClapInputEvents, ClapOutputEvents)>,
 }
 
 impl ClapPluginMainThread {
@@ -627,6 +643,91 @@ impl PluginMainThread for ClapPluginMainThread {
             }
         }
     }
+
+    // --- Parameters ---------------------------------------------------------------------------------
+
+    /// Get the total number of parameters in this plugin.
+    ///
+    /// You may return 0 if this plugins has no parameters.
+    ///
+    /// By default this returns 0.
+    ///
+    /// [main-thread]
+    #[allow(unused)]
+    fn num_params(&mut self) -> u32 {
+        self.shared_plugin.params_ext.num_params()
+    }
+
+    /// Get the info of the given parameter.
+    ///
+    /// This will never be called if `PluginMainThread::num_params()` returned 0.
+    ///
+    /// By default this returns an Err(()).
+    ///
+    /// [main-thread]
+    #[allow(unused)]
+    fn param_info(&mut self, param_id: u32) -> Result<ext::params::ParamInfo, ()> {
+        self.shared_plugin.params_ext.param_info(param_id)
+    }
+
+    /// Get the plain value of the parameter.
+    ///
+    /// This will never be called if `PluginMainThread::num_params()` returned 0.
+    ///
+    /// By default this returns `Err(())`
+    ///
+    /// [main-thread]
+    #[allow(unused)]
+    fn param_value(&self, param_id: u32) -> Result<f64, ()> {
+        self.shared_plugin.params_ext.param_value(param_id)
+    }
+
+    /// Formats the display text for the given parameter value.
+    ///
+    /// This will never be called if `PluginMainThread::num_params()` returned 0.
+    ///
+    /// By default this returns `Err(())`
+    ///
+    /// [main-thread]
+    #[allow(unused)]
+    fn param_value_to_text(&self, param_id: u32, value: f64) -> Result<String, ()> {
+        self.shared_plugin.params_ext.param_value_to_text(param_id, value)
+    }
+
+    /// Converts the display text to a parameter value.
+    ///
+    /// This will never be called if `PluginMainThread::num_params()` returned 0.
+    ///
+    /// By default this returns `Err(())`
+    ///
+    /// [main-thread]
+    #[allow(unused)]
+    fn param_text_to_value(&self, param_id: u32, display: &str) -> Result<f64, ()> {
+        self.shared_plugin.params_ext.param_text_to_value(param_id, display)
+    }
+
+    /// Flushes a set of parameter changes.
+    ///
+    /// This will only be called while the plugin is inactive.
+    ///
+    /// This will never be called if `PluginMainThread::num_params()` returned 0.
+    ///
+    /// This method will not be called concurrently to clap_plugin->process().
+    ///
+    /// This method will not be used while the plugin is processing.
+    ///
+    /// By default this does nothing.
+    ///
+    /// [!active : main-thread]
+    #[allow(unused)]
+    fn param_flush(&mut self, in_events: &EventQueue, out_events: &mut EventQueue) {
+        if let Some((clap_in_events, clap_out_events)) = &mut self.in_out_events {
+            clap_in_events.sync(in_events);
+            clap_out_events.sync(out_events);
+
+            self.shared_plugin.params_ext.param_flush(clap_in_events, clap_out_events);
+        }
+    }
 }
 
 pub(crate) struct ClapPluginAudioThread {
@@ -776,6 +877,26 @@ impl PluginAudioThread for ClapPluginAudioThread {
             CLAP_PROCESS_SLEEP => ProcessStatus::Sleep,
             _ => ProcessStatus::Error,
         }
+    }
+
+    /// Flushes a set of parameter changes.
+    ///
+    /// This will only be called while the plugin is inactive.
+    ///
+    /// This will never be called if `PluginMainThread::num_params()` returned 0.
+    ///
+    /// This method will not be called concurrently to clap_plugin->process().
+    ///
+    /// This method will not be used while the plugin is processing.
+    ///
+    /// By default this does nothing.
+    ///
+    /// [active && !processing : audio-thread]
+    #[allow(unused)]
+    fn param_flush(&mut self, in_events: &EventQueue, out_events: &mut EventQueue) {
+        let (clap_in_events, clap_out_events) = self.process.sync_events(in_events, out_events);
+
+        self.shared_plugin.params_ext.param_flush(clap_in_events, clap_out_events);
     }
 }
 

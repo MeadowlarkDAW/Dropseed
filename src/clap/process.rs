@@ -208,6 +208,17 @@ impl ClapProcess {
         }
     }
 
+    pub fn sync_events(
+        &mut self,
+        in_events: &EventQueue,
+        out_events: &mut EventQueue,
+    ) -> (&ClapInputEvents, &ClapOutputEvents) {
+        self.in_events.sync(in_events);
+        self.out_events.sync(out_events);
+
+        (&self.in_events, &self.out_events)
+    }
+
     pub fn raw(&self) -> *const RawClapProcess {
         &self.raw
     }

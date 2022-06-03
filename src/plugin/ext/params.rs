@@ -1,4 +1,5 @@
 use bitflags::bitflags;
+use std::ffi::c_void;
 use std::sync::{
     atomic::{AtomicBool, AtomicU32, Ordering},
     Arc,
@@ -84,7 +85,7 @@ pub struct ParamInfo {
 
     pub flags: ParamInfoFlags,
 
-    /// This name of this parameter displayed to the user.
+    /// The name of this parameter displayed to the user.
     pub display_name: String,
 
     /// The module containing the param.
@@ -100,6 +101,43 @@ pub struct ParamInfo {
     pub max_value: f64,
     /// Default plain value.
     pub default_value: f64,
+
+    /// Reserved for CLAP plugins.
+    pub(crate) cookie: *const c_void,
+}
+
+impl ParamInfo {
+    /// Create info for a parameter.
+    ///
+    /// - `stable_id` - Stable parameter identifier, it must never change.
+    /// - `flags` - Additional flags.
+    /// - `display_name` - The name of this parameter displayed to the user.
+    /// - `module` - The module containing the param.
+    ///     - eg: `"oscillators/wt1"`
+    ///     - `/` will be used as a separator to show a tree like structure.
+    /// - `min_value`: Minimum plain value.
+    /// - `max_value`: Maximum plain value.
+    /// - `default_value`: Default plain value.
+    pub fn new(
+        stable_id: u32,
+        flags: ParamInfoFlags,
+        display_name: String,
+        module: String,
+        min_value: f64,
+        max_value: f64,
+        default_value: f64,
+    ) -> Self {
+        Self {
+            stable_id,
+            flags,
+            display_name,
+            module,
+            min_value,
+            max_value,
+            default_value,
+            cookie: std::ptr::null(),
+        }
+    }
 }
 
 bitflags! {
