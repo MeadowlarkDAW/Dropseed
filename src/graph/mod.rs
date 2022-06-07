@@ -1,5 +1,6 @@
 use audio_graph::{DefaultPortType, Graph, NodeRef};
 use basedrop::Shared;
+use crossbeam::channel::Sender;
 use fnv::FnvHashMap;
 use fnv::FnvHashSet;
 use rusty_daw_core::SampleRate;
@@ -18,15 +19,16 @@ use schedule::Schedule;
 use shared_pool::{PluginInstanceHostEntry, SharedBufferPool, SharedPluginPool};
 use verifier::Verifier;
 
-use crate::event::DAWEngineEvent;
+use crate::event::{DAWEngineEvent, PluginEvent};
 use crate::graph::plugin_host::PluginInstanceHost;
 use crate::graph::shared_pool::SharedPluginHostAudioThread;
 use crate::host_request::HostRequest;
 use crate::plugin::ext::audio_ports::PluginAudioPortsExt;
 use crate::thread_id::SharedThreadIDs;
+use crate::ParamID;
 
 pub use compiler::GraphCompilerError;
-pub use plugin_host::ActivatePluginError;
+pub use plugin_host::{ActivatePluginError, ParamGestureInfo, ParamModifiedInfo, PluginParamsExt};
 pub use save_state::{AudioGraphSaveState, EdgeSaveState};
 pub use schedule::SharedSchedule;
 pub use shared_pool::PluginInstanceID;
@@ -253,19 +255,19 @@ impl AudioGraph {
             self.max_frames as u32,
             &self.coll_handle,
         ) {
-            Ok((plugin_audio_thread, audio_ports)) => (
+            Ok((plugin_audio_thread, new_audio_ports, new_params, new_param_values)) => (
                 Some(SharedPluginHostAudioThread::new(plugin_audio_thread, &self.coll_handle)),
-                PluginActivationStatus::Activated { audio_ports },
+                PluginActivationStatus::Activated { new_audio_ports, new_params, new_param_values },
             ),
             Err(e) => (None, PluginActivationStatus::ActivationError(e)),
         };
 
         entry.audio_thread = plugin_audio_thread;
 
-        if let PluginActivationStatus::Activated { audio_ports } = &activation_status {
+        if let PluginActivationStatus::Activated { new_audio_ports, .. } = &activation_status {
             // Update the number of channels (ports) in our abstract graph.
 
-            update_plugin_ports(&mut self.abstract_graph, entry, audio_ports);
+            update_plugin_ports(&mut self.abstract_graph, entry, new_audio_ports);
         }
 
         Ok(activation_status)
@@ -556,7 +558,7 @@ impl AudioGraph {
             while self.shared_plugin_pool.plugins.len() > 2 && start_time.elapsed() < TIMEOUT {
                 std::thread::sleep(std::time::Duration::from_millis(10));
 
-                let _ = self.on_idle();
+                let _ = self.on_idle(None);
             }
 
             if self.shared_plugin_pool.plugins.len() > 2 {
@@ -747,9 +749,7 @@ impl AudioGraph {
         }
     }
 
-    pub(crate) fn on_idle(&mut self) -> (SmallVec<[DAWEngineEvent; 4]>, bool) {
-        let mut changed_plugins: SmallVec<[DAWEngineEvent; 4]> = SmallVec::new();
-
+    pub(crate) fn on_idle(&mut self, event_tx: Option<&mut Sender<DAWEngineEvent>>) -> bool {
         let mut plugins_to_remove: SmallVec<[PluginInstanceID; 4]> = SmallVec::new();
 
         let mut recompile_graph = false;
@@ -758,22 +758,33 @@ impl AudioGraph {
         // plugins that have a non-zero host request flag, instead of iterating over every
         // plugin every time?
         for plugin in self.shared_plugin_pool.plugins.values_mut() {
-            match plugin.plugin_host.on_idle(
+            let (res, modified_params) = plugin.plugin_host.on_idle(
                 self.sample_rate,
                 self.min_frames,
                 self.max_frames,
                 &self.coll_handle,
-            ) {
+            );
+
+            match res {
                 OnIdleResult::Ok => {}
                 OnIdleResult::PluginDeactivated => {
                     recompile_graph = true;
 
-                    changed_plugins.push(DAWEngineEvent::PluginDeactivated {
-                        plugin_id: plugin.plugin_host.id.clone(),
-                        status: Ok(()),
-                    });
+                    if let Some(event_tx) = event_tx.as_ref() {
+                        event_tx
+                            .send(DAWEngineEvent::Plugin(PluginEvent::Deactivated {
+                                plugin_id: plugin.plugin_host.id.clone(),
+                                status: Ok(()),
+                            }))
+                            .unwrap();
+                    }
                 }
-                OnIdleResult::PluginActivated(plugin_audio_thread, audio_ports) => {
+                OnIdleResult::PluginActivated(
+                    plugin_audio_thread,
+                    audio_ports,
+                    params,
+                    new_param_values,
+                ) => {
                     plugin.audio_thread = Some(SharedPluginHostAudioThread::new(
                         plugin_audio_thread,
                         &self.coll_handle,
@@ -783,10 +794,16 @@ impl AudioGraph {
 
                     recompile_graph = true;
 
-                    changed_plugins.push(DAWEngineEvent::PluginActivated {
-                        plugin_id: plugin.plugin_host.id.clone(),
-                        new_audio_ports: audio_ports,
-                    });
+                    if let Some(event_tx) = event_tx.as_ref() {
+                        event_tx
+                            .send(DAWEngineEvent::Plugin(PluginEvent::Activated {
+                                plugin_id: plugin.plugin_host.id.clone(),
+                                new_audio_ports: audio_ports,
+                                new_params: params,
+                                new_param_values,
+                            }))
+                            .unwrap();
+                    }
                 }
                 OnIdleResult::PluginReadyToRemove => {
                     plugins_to_remove.push(plugin.plugin_host.id.clone());
@@ -797,10 +814,25 @@ impl AudioGraph {
                 OnIdleResult::PluginFailedToActivate(e) => {
                     recompile_graph = true;
 
-                    changed_plugins.push(DAWEngineEvent::PluginDeactivated {
-                        plugin_id: plugin.plugin_host.id.clone(),
-                        status: Err(e),
-                    });
+                    if let Some(event_tx) = event_tx.as_ref() {
+                        event_tx
+                            .send(DAWEngineEvent::Plugin(PluginEvent::Deactivated {
+                                plugin_id: plugin.plugin_host.id.clone(),
+                                status: Err(e),
+                            }))
+                            .unwrap();
+                    }
+                }
+            }
+
+            if modified_params.len() > 0 {
+                if let Some(event_tx) = event_tx.as_ref() {
+                    event_tx
+                        .send(DAWEngineEvent::Plugin(PluginEvent::ParamsModified {
+                            plugin_id: plugin.plugin_host.id.clone(),
+                            modified_params: modified_params.to_owned(),
+                        }))
+                        .unwrap();
                 }
             }
         }
@@ -809,7 +841,7 @@ impl AudioGraph {
             let _ = self.shared_plugin_pool.plugins.remove(plugin);
         }
 
-        (changed_plugins, recompile_graph)
+        recompile_graph
     }
 }
 
@@ -870,8 +902,13 @@ impl Drop for AudioGraph {
 #[derive(Debug)]
 pub enum PluginActivationStatus {
     /// This means the plugin successfully activated and returned
-    /// its new audio/event port configuration.
-    Activated { audio_ports: PluginAudioPortsExt },
+    /// its new audio/event port configuration and its new
+    /// parameter configuration.
+    Activated {
+        new_audio_ports: PluginAudioPortsExt,
+        new_params: PluginParamsExt,
+        new_param_values: FnvHashMap<ParamID, f64>,
+    },
 
     /// This means that the plugin loaded but did not activate yet. This
     /// can happen when the user loads a project with a deactivated

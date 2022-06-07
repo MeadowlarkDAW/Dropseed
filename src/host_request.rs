@@ -7,6 +7,8 @@ use std::sync::{
     Arc,
 };
 
+use crate::plugin::ext::params::HostParamsExtMainThread;
+
 #[derive(Debug, Clone)]
 pub struct HostInfo {
     /// The name of this host (mandatory).
@@ -82,13 +84,18 @@ bitflags! {
 
 /// Used to get info and request actions from the host.
 pub struct HostRequest {
+    pub params: HostParamsExtMainThread,
     pub(crate) info: Shared<HostInfo>,
     request_flags: Arc<AtomicU32>,
 }
 
 impl HostRequest {
     pub(crate) fn new(info: Shared<HostInfo>) -> Self {
-        Self { info, request_flags: Arc::new(AtomicU32::new(0)) }
+        Self {
+            params: HostParamsExtMainThread::new(),
+            info,
+            request_flags: Arc::new(AtomicU32::new(0)),
+        }
     }
 
     /// Retrieve info about this host.
@@ -181,6 +188,10 @@ impl HostRequest {
 
 impl Clone for HostRequest {
     fn clone(&self) -> Self {
-        Self { info: Shared::clone(&self.info), request_flags: Arc::clone(&self.request_flags) }
+        Self {
+            params: self.params.clone(),
+            info: Shared::clone(&self.info),
+            request_flags: Arc::clone(&self.request_flags),
+        }
     }
 }

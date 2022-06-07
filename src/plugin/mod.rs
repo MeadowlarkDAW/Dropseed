@@ -1,7 +1,7 @@
 use rusty_daw_core::SampleRate;
 use std::error::Error;
 
-use crate::{host_request::HostRequest, EventQueue, PluginInstanceID};
+use crate::{host_request::HostRequest, EventQueue, ParamID, PluginInstanceID};
 
 pub mod audio_buffer;
 pub mod event_queue;
@@ -178,13 +178,15 @@ pub trait PluginMainThread {
 
     /// Get the info of the given parameter.
     ///
+    /// (Note this is takes the index of the parameter as input (length given by `num_params()`), *NOT* the ID of the parameter)
+    ///
     /// This will never be called if `PluginMainThread::num_params()` returned 0.
     ///
     /// By default this returns an Err(()).
     ///
     /// [main-thread]
     #[allow(unused)]
-    fn param_info(&mut self, param_id: u32) -> Result<ext::params::ParamInfo, ()> {
+    fn param_info(&mut self, param_index: usize) -> Result<ext::params::ParamInfo, ()> {
         Err(())
     }
 
@@ -196,7 +198,7 @@ pub trait PluginMainThread {
     ///
     /// [main-thread]
     #[allow(unused)]
-    fn param_value(&self, param_id: u32) -> Result<f64, ()> {
+    fn param_value(&self, param_id: ParamID) -> Result<f64, ()> {
         Err(())
     }
 
@@ -208,7 +210,7 @@ pub trait PluginMainThread {
     ///
     /// [main-thread]
     #[allow(unused)]
-    fn param_value_to_text(&self, param_id: u32, value: f64) -> Result<String, ()> {
+    fn param_value_to_text(&self, param_id: ParamID, value: f64) -> Result<String, ()> {
         Err(())
     }
 
@@ -220,7 +222,7 @@ pub trait PluginMainThread {
     ///
     /// [main-thread]
     #[allow(unused)]
-    fn param_text_to_value(&self, param_id: u32, display: &str) -> Result<f64, ()> {
+    fn param_text_to_value(&self, param_id: ParamID, display: &str) -> Result<f64, ()> {
         Err(())
     }
 

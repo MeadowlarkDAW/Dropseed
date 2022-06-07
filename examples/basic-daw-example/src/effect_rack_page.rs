@@ -1,6 +1,8 @@
 use eframe::egui;
+use fnv::FnvHashMap;
 use rusty_daw_engine::{
-    plugin::ext::audio_ports::PluginAudioPortsExt, Edge, PluginEdges, PluginInstanceID, PortType,
+    plugin::ext::audio_ports::PluginAudioPortsExt, Edge, ParamID, ParamInfoFlags,
+    ParamModifiedInfo, PluginEdges, PluginInstanceID, PluginParamsExt, PortType,
 };
 
 use super::BasicDawExampleGUI;
@@ -65,10 +67,74 @@ impl AudioPortState {
     }
 }
 
+pub struct ParamState {
+    id: ParamID,
+
+    display_name: String,
+
+    value: f64,
+
+    min_value: f64,
+    max_value: f64,
+    default_value: f64,
+
+    is_stepped: bool,
+    is_read_only: bool,
+    is_hidden: bool,
+
+    is_gesturing: bool,
+}
+
+pub struct ParamsState {
+    params_ext: PluginParamsExt,
+
+    params: FnvHashMap<ParamID, ParamState>,
+}
+
+impl ParamsState {
+    pub fn new(params_ext: PluginParamsExt, param_values: FnvHashMap<ParamID, f64>) -> Self {
+        let mut params: FnvHashMap<ParamID, ParamState> = FnvHashMap::default();
+
+        for info in params_ext.params.values() {
+            let _ = params.insert(
+                info.stable_id,
+                ParamState {
+                    id: info.stable_id,
+                    display_name: info.display_name.clone(),
+                    value: *param_values.get(&info.stable_id).unwrap(),
+                    min_value: info.min_value,
+                    max_value: info.max_value,
+                    default_value: info.default_value,
+                    is_stepped: info.flags.contains(ParamInfoFlags::IS_STEPPED),
+                    is_read_only: info.flags.contains(ParamInfoFlags::IS_READONLY),
+                    is_hidden: info.flags.contains(ParamInfoFlags::IS_HIDDEN),
+                    is_gesturing: false,
+                },
+            );
+        }
+
+        Self { params_ext, params }
+    }
+
+    pub fn parameters_modified(&mut self, modified_params: &[ParamModifiedInfo]) {
+        for m_p in modified_params.iter() {
+            let param = self.params.get_mut(&m_p.param_id).unwrap();
+
+            if let Some(new_value) = m_p.new_value {
+                param.value = new_value;
+            }
+
+            param.is_gesturing = m_p.is_gesturing;
+        }
+    }
+}
+
 pub struct EffectRackPluginState {
     pub plugin_name: String,
     pub plugin_id: PluginInstanceID,
     pub audio_ports_state: Option<AudioPortState>,
+    pub params_state: Option<ParamsState>,
+
     pub active: bool,
     pub selected_port: PortChannel,
 }
@@ -237,7 +303,69 @@ pub(crate) fn show(app: &mut BasicDawExampleGUI, ui: &mut egui::Ui) {
                                 ui.separator();
                             }
 
-                            // TODO: Parameters
+                            if let Some(params_state) = &mut plugin.params_state {
+                                let mut values_to_set: Vec<(ParamID, f64)> = Vec::new();
+
+                                for param in params_state.params.values_mut() {
+                                    if param.is_hidden {
+                                        continue;
+                                    }
+
+                                    if param.is_read_only {
+                                        ui.horizontal(|ui| {
+                                            ui.label(&format!(
+                                                "{}: {:.8}",
+                                                &param.display_name, param.value
+                                            ));
+                                        });
+
+                                        continue;
+                                    }
+
+                                    ui.horizontal(|ui| {
+                                        if param.is_stepped {
+                                            let mut value: i64 = param.value.round() as i64;
+                                            let min_value: i64 = param.min_value.round() as i64;
+                                            let max_value: i64 = param.max_value.round() as i64;
+
+                                            if ui
+                                                .add(
+                                                    egui::Slider::new(
+                                                        &mut value,
+                                                        min_value..=max_value,
+                                                    )
+                                                    .text(&param.display_name),
+                                                )
+                                                .changed()
+                                            {
+                                                values_to_set.push((param.id, value as f64));
+                                                param.value = value as f64;
+                                            }
+                                        } else {
+                                            if ui
+                                                .add(
+                                                    egui::Slider::new(
+                                                        &mut param.value,
+                                                        param.min_value..=param.max_value,
+                                                    )
+                                                    .text(&param.display_name),
+                                                )
+                                                .changed()
+                                            {
+                                                values_to_set.push((param.id, param.value))
+                                            }
+                                        }
+
+                                        if param.is_gesturing {
+                                            ui.colored_label(egui::Color32::GREEN, "Gesturing");
+                                        }
+                                    });
+                                }
+
+                                for (param_id, value) in values_to_set.drain(..) {
+                                    params_state.params_ext.set_value(param_id, value);
+                                }
+                            }
                         });
                 });
         }

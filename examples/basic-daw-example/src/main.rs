@@ -5,15 +5,15 @@ use eframe::egui;
 use rusty_daw_core::SampleRate;
 use rusty_daw_engine::{
     DAWEngineEvent, Edge, EdgeReq, HostInfo, ModifyGraphRequest, PluginActivationStatus,
-    PluginEdges, PluginIDReq, PluginInstanceID, PluginScannerEvent, PortType, RustyDAWEngine,
-    ScannedPlugin, SharedSchedule,
+    PluginEdges, PluginEvent, PluginIDReq, PluginInstanceID, PluginScannerEvent, PortType,
+    RustyDAWEngine, ScannedPlugin, SharedSchedule,
 };
 use std::time::Duration;
 
 mod effect_rack_page;
 mod scanned_plugins_page;
 
-use effect_rack_page::{AudioPortState, EffectRackPluginState, EffectRackState};
+use effect_rack_page::{AudioPortState, EffectRackPluginState, EffectRackState, ParamsState};
 
 const MIN_BLOCK_SIZE: u32 = 1;
 const MAX_BLOCK_SIZE: u32 = 512;
@@ -229,11 +229,22 @@ impl BasicDawExampleGUI {
                             let plugin_name = found.unwrap();
 
                             let effect_rack_plugin = match new_plugin_res.status {
-                                PluginActivationStatus::Activated { audio_ports } => {
+                                PluginActivationStatus::Activated {
+                                    new_audio_ports,
+                                    new_params,
+                                    new_param_values,
+                                } => {
+                                    dbg!(&new_params);
                                     EffectRackPluginState {
                                         plugin_name,
                                         plugin_id: new_plugin_res.plugin_id,
-                                        audio_ports_state: Some(AudioPortState::new(audio_ports)),
+                                        audio_ports_state: Some(AudioPortState::new(
+                                            new_audio_ports,
+                                        )),
+                                        params_state: Some(ParamsState::new(
+                                            new_params,
+                                            new_param_values,
+                                        )),
                                         selected_port: Default::default(),
                                         active: true,
                                     }
@@ -242,6 +253,7 @@ impl BasicDawExampleGUI {
                                     plugin_name,
                                     plugin_id: new_plugin_res.plugin_id,
                                     audio_ports_state: None,
+                                    params_state: None,
                                     selected_port: Default::default(),
                                     active: false,
                                 },
@@ -252,6 +264,7 @@ impl BasicDawExampleGUI {
                                         plugin_name,
                                         plugin_id: new_plugin_res.plugin_id,
                                         audio_ports_state: None,
+                                        params_state: None,
                                         selected_port: Default::default(),
                                         active: false,
                                     }
@@ -263,6 +276,7 @@ impl BasicDawExampleGUI {
                                         plugin_name,
                                         plugin_id: new_plugin_res.plugin_id,
                                         audio_ports_state: None,
+                                        params_state: None,
                                         selected_port: Default::default(),
                                         active: false,
                                     }
@@ -285,51 +299,69 @@ impl BasicDawExampleGUI {
                     }
                 }
 
-                // Sent whenever a plugin becomes deactivated. When a plugin is deactivated
-                // you cannot access any of its methods until it is reactivated.
-                DAWEngineEvent::PluginDeactivated {
-                    plugin_id,
-                    // If this is `Ok(())`, then it means the plugin was gracefully
-                    // deactivated from user request.
+                DAWEngineEvent::Plugin(event) => match event {
+                    // Sent whenever a plugin becomes activated after being deactivated or
+                    // when the plugin restarts.
                     //
-                    // If this is `Err(e)`, then it means the plugin became deactivated
-                    // because it failed to restart.
-                    status,
-                } => {
-                    if let Some(engine_state) = &mut self.engine_state {
-                        let effect_rack_plugin =
-                            engine_state.effect_rack_state.plugin_mut(&plugin_id).unwrap();
+                    // Make sure your UI updates the port configuration on this plugin.
+                    PluginEvent::Activated {
+                        plugin_id,
+                        new_audio_ports,
+                        new_params,
+                        new_param_values,
+                    } => {
+                        if let Some(engine_state) = &mut self.engine_state {
+                            let effect_rack_plugin =
+                                engine_state.effect_rack_state.plugin_mut(&plugin_id).unwrap();
 
-                        effect_rack_plugin.active = false;
-
-                        if let Err(e) = status {
-                            println!("Plugin failed to activate: {}", e);
+                            effect_rack_plugin.active = true;
+                            effect_rack_plugin.audio_ports_state =
+                                Some(AudioPortState::new(new_audio_ports));
+                            effect_rack_plugin.params_state =
+                                Some(ParamsState::new(new_params, new_param_values));
                         }
                     }
-                }
 
-                // Sent whenever a plugin becomes activated after being deactivated or
-                // when the plugin restarts.
-                //
-                // Make sure your UI updates the port configuration on this plugin.
-                DAWEngineEvent::PluginActivated {
-                    plugin_id,
-                    // If this is `Some(audio_ports)`, then it means that the plugin has
-                    // updated its audio port configuration.
-                    //
-                    // If this is `None`, then it means that the plugin has not changed
-                    // its audio port configuration since the last time it was activated.
-                    new_audio_ports,
-                } => {
-                    if let Some(engine_state) = &mut self.engine_state {
-                        let effect_rack_plugin =
-                            engine_state.effect_rack_state.plugin_mut(&plugin_id).unwrap();
+                    // Sent whenever a plugin becomes deactivated. When a plugin is deactivated
+                    // you cannot access any of its methods until it is reactivated.
+                    PluginEvent::Deactivated {
+                        plugin_id,
+                        // If this is `Ok(())`, then it means the plugin was gracefully
+                        // deactivated from user request.
+                        //
+                        // If this is `Err(e)`, then it means the plugin became deactivated
+                        // because it failed to restart.
+                        status,
+                    } => {
+                        if let Some(engine_state) = &mut self.engine_state {
+                            let effect_rack_plugin =
+                                engine_state.effect_rack_state.plugin_mut(&plugin_id).unwrap();
 
-                        effect_rack_plugin.active = true;
-                        effect_rack_plugin.audio_ports_state =
-                            Some(AudioPortState::new(new_audio_ports));
+                            effect_rack_plugin.active = false;
+                            effect_rack_plugin.audio_ports_state = None;
+                            effect_rack_plugin.params_state = None;
+
+                            if let Err(e) = status {
+                                println!("Plugin failed to activate: {}", e);
+                            }
+                        }
                     }
-                }
+
+                    PluginEvent::ParamsModified { plugin_id, modified_params } => {
+                        if let Some(engine_state) = &mut self.engine_state {
+                            let effect_rack_plugin =
+                                engine_state.effect_rack_state.plugin_mut(&plugin_id).unwrap();
+
+                            if let Some(params_state) = &mut effect_rack_plugin.params_state {
+                                params_state.parameters_modified(&modified_params);
+                            }
+                        }
+                    }
+
+                    unkown_event => {
+                        dbg!(unkown_event);
+                    }
+                },
 
                 DAWEngineEvent::PluginScanner(event) => match event {
                     // A new CLAP plugin scan path was added.

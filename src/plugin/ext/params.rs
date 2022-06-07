@@ -1,9 +1,19 @@
 use bitflags::bitflags;
 use std::ffi::c_void;
+use std::hash::Hash;
 use std::sync::{
     atomic::{AtomicBool, AtomicU32, Ordering},
     Arc,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ParamID(pub(crate) u32);
+
+impl ParamID {
+    pub const fn new(stable_id: u32) -> Self {
+        Self(stable_id)
+    }
+}
 
 bitflags! {
     pub struct ParamInfoFlags: u32 {
@@ -81,7 +91,7 @@ bitflags! {
 #[derive(Debug, Clone)]
 pub struct ParamInfo {
     /// Stable parameter identifier, it must never change.
-    pub stable_id: u32,
+    pub stable_id: ParamID,
 
     pub flags: ParamInfoFlags,
 
@@ -103,6 +113,7 @@ pub struct ParamInfo {
     pub default_value: f64,
 
     /// Reserved for CLAP plugins.
+    #[allow(unused)]
     pub(crate) cookie: *const c_void,
 }
 
@@ -119,7 +130,7 @@ impl ParamInfo {
     /// - `max_value`: Maximum plain value.
     /// - `default_value`: Default plain value.
     pub fn new(
-        stable_id: u32,
+        stable_id: ParamID,
         flags: ParamInfoFlags,
         display_name: String,
         module: String,
@@ -205,6 +216,16 @@ pub struct HostParamsExtMainThread {
     pub(crate) flush_requested: Arc<AtomicBool>,
 }
 
+impl Clone for HostParamsExtMainThread {
+    fn clone(&self) -> Self {
+        Self {
+            rescan_requested: Arc::clone(&self.rescan_requested),
+            clear_requested: Arc::clone(&self.clear_requested),
+            flush_requested: Arc::clone(&self.flush_requested),
+        }
+    }
+}
+
 impl HostParamsExtMainThread {
     pub(crate) fn new() -> Self {
         Self {
@@ -220,15 +241,20 @@ impl HostParamsExtMainThread {
     pub fn rescan(&self, rescan_flags: ParamRescanFlags) {
         let flags = rescan_flags.bits();
 
-        self.rescan_requested.1.store(flags, Ordering::Relaxed);
-        self.rescan_requested.0.store(true, Ordering::Relaxed);
+        self.rescan_requested.1.store(flags, Ordering::SeqCst);
+        self.rescan_requested.0.store(true, Ordering::SeqCst);
     }
 
     /// Clears references to a parameter.
     ///
     /// [main-thread]
-    pub fn clear(&self, param_id: u32, clear_flags: ParamClearFlags) {
-        todo!()
+    pub fn clear(&self, param_id: ParamID, clear_flags: ParamClearFlags) {
+        // TODO
+        log::info!(
+            "got request to clear param with id {:?} and flags: {:?}",
+            param_id,
+            clear_flags
+        );
     }
 
     /// Request the host to call clap_plugin_params->fush().
@@ -242,7 +268,7 @@ impl HostParamsExtMainThread {
     ///
     /// [thread-safe]
     pub fn request_flush(&self) {
-        self.flush_requested.store(true, Ordering::Relaxed);
+        self.flush_requested.store(true, Ordering::SeqCst);
     }
 }
 
@@ -266,6 +292,6 @@ impl HostParamsExtAudioThread {
     ///
     /// [thread-safe]
     pub fn request_flush(&self) {
-        self.flush_requested.store(true, Ordering::Relaxed);
+        self.flush_requested.store(true, Ordering::SeqCst);
     }
 }

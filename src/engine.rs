@@ -383,11 +383,7 @@ impl RustyDAWEngine {
     /// handle the state of plugins.
     pub fn on_idle(&mut self) {
         if let Some(audio_graph) = &mut self.audio_graph {
-            let (mut changed_plugins, recompile) = audio_graph.on_idle();
-
-            for msg in changed_plugins.drain(..) {
-                self.event_tx.send(msg).unwrap();
-            }
+            let recompile = audio_graph.on_idle(Some(&mut self.event_tx));
 
             if recompile {
                 self.compile_audio_graph();

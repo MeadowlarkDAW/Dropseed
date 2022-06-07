@@ -1,10 +1,15 @@
+use fnv::FnvHashMap;
+use smallvec::SmallVec;
 use std::path::PathBuf;
 
 use crate::{
     engine::{EngineActivatedInfo, ModifyGraphRes},
-    graph::{ActivatePluginError, AudioGraphSaveState, GraphCompilerError, PluginInstanceID},
+    graph::{
+        plugin_host::PluginParamsExt, ActivatePluginError, AudioGraphSaveState, GraphCompilerError,
+        ParamModifiedInfo, PluginInstanceID,
+    },
     plugin_scanner::RescanPluginDirectoriesRes,
-    PluginAudioPortsExt,
+    ParamID, PluginAudioPortsExt,
 };
 
 #[derive(Debug)]
@@ -52,9 +57,29 @@ pub enum DAWEngineEvent {
     /// Be sure to update your UI from this new state.
     AudioGraphModified(ModifyGraphRes),
 
+    Plugin(PluginEvent),
+
+    PluginScanner(PluginScannerEvent),
+    // TODO: More stuff
+}
+
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum PluginEvent {
+    /// Sent whenever a plugin becomes activated after being deactivated or
+    /// when the plugin restarts.
+    ///
+    /// Make sure your UI updates the port configuration on this plugin.
+    Activated {
+        plugin_id: PluginInstanceID,
+        new_audio_ports: PluginAudioPortsExt,
+        new_params: PluginParamsExt,
+        new_param_values: FnvHashMap<ParamID, f64>,
+    },
+
     /// Sent whenever a plugin becomes deactivated. When a plugin is deactivated
     /// you cannot access any of its methods until it is reactivated.
-    PluginDeactivated {
+    Deactivated {
         plugin_id: PluginInstanceID,
         /// If this is `Ok(())`, then it means the plugin was gracefully
         /// deactivated from user request.
@@ -64,17 +89,10 @@ pub enum DAWEngineEvent {
         status: Result<(), ActivatePluginError>,
     },
 
-    /// Sent whenever a plugin becomes activated after being deactivated or
-    /// when the plugin restarts.
-    ///
-    /// Make sure your UI updates the port configuration on this plugin.
-    PluginActivated {
+    ParamsModified {
         plugin_id: PluginInstanceID,
-        new_audio_ports: PluginAudioPortsExt,
+        modified_params: SmallVec<[ParamModifiedInfo; 4]>,
     },
-
-    PluginScanner(PluginScannerEvent),
-    // TODO: More stuff
 }
 
 #[derive(Debug)]

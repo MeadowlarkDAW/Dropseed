@@ -9,7 +9,7 @@
 
 use bitflags::bitflags;
 
-use crate::FixedPoint64;
+use crate::{FixedPoint64, ParamID};
 
 pub enum PluginEvent<'a> {
     Note(&'a EventNote),
@@ -434,7 +434,7 @@ pub struct EventParamValue {
     pub header: EventHeader,
 
     /// Target parameter.
-    pub param_id: u32,
+    pub param_id: ParamID,
 
     /// (Reserved for the CLAP plugin host)
     pub _cookie: *const std::ffi::c_void,
@@ -464,7 +464,7 @@ impl EventParamValue {
         time: u32,
         space_id: u16,
         event_flags: EventFlags,
-        param_id: u32,
+        param_id: ParamID,
         note_id: i32,
         port_index: i16,
         channel: i16,
@@ -499,7 +499,7 @@ pub struct EventParamMod {
     pub header: EventHeader,
 
     /// Target parameter.
-    pub param_id: u32,
+    pub param_id: ParamID,
 
     /// (Reserved for the CLAP plugin host)
     pub _cookie: *const std::ffi::c_void,
@@ -529,7 +529,7 @@ impl EventParamMod {
         time: u32,
         space_id: u16,
         event_flags: EventFlags,
-        param_id: u32,
+        param_id: ParamID,
         note_id: i32,
         port_index: i16,
         channel: i16,
@@ -564,7 +564,7 @@ pub struct EventParamGesture {
     pub header: EventHeader,
 
     /// Target parameter.
-    pub param_id: u32,
+    pub param_id: ParamID,
 }
 
 impl EventParamGesture {
@@ -575,7 +575,7 @@ impl EventParamGesture {
         space_id: u16,
         event_type: ParamGestureEventType,
         event_flags: EventFlags,
-        param_id: u32,
+        param_id: ParamID,
     ) -> Self {
         let event_type: EventType = event_type.into();
 

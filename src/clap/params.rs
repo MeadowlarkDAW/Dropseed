@@ -1,6 +1,3 @@
-use clap_sys::events::clap_input_events as RawClapInputEvents;
-use clap_sys::events::clap_output_events as RawClapOutputEvents;
-use clap_sys::ext::params::clap_host_params as RawClapHostParams;
 use clap_sys::ext::params::clap_param_info as RawClapParamInfo;
 use clap_sys::ext::params::clap_plugin_params as RawClapPluginParams;
 use clap_sys::ext::params::CLAP_EXT_PARAMS;
@@ -13,7 +10,7 @@ use std::ptr;
 
 use super::c_char_helpers::c_char_buf_to_str;
 use super::events::{ClapInputEvents, ClapOutputEvents};
-use crate::plugin::ext::params::{ParamInfo, ParamInfoFlags};
+use crate::plugin::ext::params::{ParamID, ParamInfo, ParamInfoFlags};
 
 #[derive(Clone)]
 pub struct ClapPluginParams {
@@ -49,7 +46,7 @@ impl ClapPluginParams {
     }
 
     /// [main-thread]
-    pub fn param_info(&self, param_id: u32) -> Result<ParamInfo, ()> {
+    pub fn param_info(&self, param_index: usize) -> Result<ParamInfo, ()> {
         if !self.is_some {
             return Err(());
         }
@@ -57,12 +54,13 @@ impl ClapPluginParams {
         let mut raw_info: RawClapParamInfo = unsafe { MaybeUninit::uninit().assume_init() };
         raw_info.cookie = ptr::null_mut();
 
-        let res = unsafe { ((*self.raw).get_info)(self.raw_plugin, param_id, &mut raw_info) };
+        let res =
+            unsafe { ((*self.raw).get_info)(self.raw_plugin, param_index as u32, &mut raw_info) };
 
         if !res {
             log::warn!(
-                "Plugin returned `false` in call to clap_plugin_params.get_info() on parameter with id {}",
-                param_id
+                "Plugin returned `false` in call to clap_plugin_params.get_info() on parameter at index {}",
+                param_index
             );
             return Err(());
         }
@@ -73,8 +71,8 @@ impl ClapPluginParams {
             Ok(name) => name.to_string(),
             Err(_) => {
                 log::warn!(
-                    "Failed to parse clap_param_info.name in call to clap_plugin_params.get_info() on parameter with id {}",
-                    param_id
+                    "Failed to parse clap_param_info.name in call to clap_plugin_params.get_info() on parameter at index {}",
+                    param_index
                 );
                 String::from("(unkown)")
             }
@@ -84,15 +82,15 @@ impl ClapPluginParams {
             Ok(module) => module.to_string(),
             Err(_) => {
                 log::warn!(
-                    "Failed to parse clap_param_info.module in call to clap_plugin_params.get_info() on parameter with id {}",
-                    param_id
+                    "Failed to parse clap_param_info.module in call to clap_plugin_params.get_info() on parameter at index {}",
+                    param_index
                 );
                 String::new()
             }
         };
 
         Ok(ParamInfo {
-            stable_id: raw_info.id,
+            stable_id: ParamID::new(raw_info.id),
             flags,
             display_name,
             module,
@@ -104,18 +102,18 @@ impl ClapPluginParams {
     }
 
     /// [main-thread]
-    pub fn param_value(&self, param_id: u32) -> Result<f64, ()> {
+    pub fn param_value(&self, param_id: ParamID) -> Result<f64, ()> {
         if !self.is_some {
             return Err(());
         }
 
         let mut value: f64 = 0.0;
 
-        let res = unsafe { ((*self.raw).get_value)(self.raw_plugin, param_id, &mut value) };
+        let res = unsafe { ((*self.raw).get_value)(self.raw_plugin, param_id.0, &mut value) };
 
         if !res {
             log::warn!(
-                "Plugin returned `false` in call to clap_plugin_params.get_value() on parameter with id {}",
+                "Plugin returned `false` in call to clap_plugin_params.get_value() on parameter with id {:?}",
                 param_id
             );
             return Err(());
@@ -125,7 +123,7 @@ impl ClapPluginParams {
     }
 
     /// [main-thread]
-    pub fn param_value_to_text(&self, param_id: u32, value: f64) -> Result<String, ()> {
+    pub fn param_value_to_text(&self, param_id: ParamID, value: f64) -> Result<String, ()> {
         if !self.is_some {
             return Err(());
         }
@@ -135,7 +133,7 @@ impl ClapPluginParams {
         let res = unsafe {
             ((*self.raw).value_to_text)(
                 self.raw_plugin,
-                param_id,
+                param_id.0,
                 value,
                 char_buf.as_mut_ptr(),
                 char_buf.len() as u32,
@@ -144,7 +142,7 @@ impl ClapPluginParams {
 
         if !res {
             log::warn!(
-                "Plugin returned `false` in call to clap_plugin_params.value_to_text() on parameter with id {}",
+                "Plugin returned `false` in call to clap_plugin_params.value_to_text() on parameter with id {:?}",
                 param_id
             );
             return Err(());
@@ -154,7 +152,7 @@ impl ClapPluginParams {
             Ok(text) => Ok(text.to_string()),
             Err(_) => {
                 log::warn!(
-                    "Failed to parse char *display in call to clap_plugin_params.value_to_text() on parameter with id {}",
+                    "Failed to parse char *display in call to clap_plugin_params.value_to_text() on parameter with id {:?}",
                     param_id
                 );
                 Err(())
@@ -163,7 +161,7 @@ impl ClapPluginParams {
     }
 
     /// [main-thread]
-    pub fn param_text_to_value(&self, param_id: u32, display: &str) -> Result<f64, ()> {
+    pub fn param_text_to_value(&self, param_id: ParamID, display: &str) -> Result<f64, ()> {
         if !self.is_some {
             return Err(());
         }
@@ -174,7 +172,7 @@ impl ClapPluginParams {
             Ok(cstr) => cstr,
             Err(e) => {
                 log::error!(
-                    "Failed to turn {} into a c_str buf in call to ClapPluginParams::param_text_to_value() on parameter with id {}: {}",
+                    "Failed to turn {} into a c_str buf in call to ClapPluginParams::param_text_to_value() on parameter with id {:?}: {}",
                     display,
                     param_id,
                     e,
@@ -184,12 +182,12 @@ impl ClapPluginParams {
         };
 
         let res = unsafe {
-            ((*self.raw).text_to_value)(self.raw_plugin, param_id, cstr.as_ptr(), &mut value)
+            ((*self.raw).text_to_value)(self.raw_plugin, param_id.0, cstr.as_ptr(), &mut value)
         };
 
         if !res {
             log::warn!(
-                "Plugin returned `false` in call to clap_plugin_params.text_to_value() on parameter with id {} with text {}",
+                "Plugin returned `false` in call to clap_plugin_params.text_to_value() on parameter with id {:?} with text {}",
                 param_id,
                 display,
             );

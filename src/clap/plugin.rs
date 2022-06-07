@@ -34,7 +34,7 @@ use crate::plugin::{ext, PluginAudioThread, PluginDescriptor, PluginFactory, Plu
 use crate::thread_id::SharedThreadIDs;
 use crate::MainPortsLayout;
 use crate::PluginAudioPortsExt;
-use crate::{AudioPortInfo, EventQueue, PluginInstanceID};
+use crate::{AudioPortInfo, EventQueue, ParamID, PluginInstanceID};
 
 use super::params::ClapPluginParams;
 
@@ -666,8 +666,8 @@ impl PluginMainThread for ClapPluginMainThread {
     ///
     /// [main-thread]
     #[allow(unused)]
-    fn param_info(&mut self, param_id: u32) -> Result<ext::params::ParamInfo, ()> {
-        self.shared_plugin.params_ext.param_info(param_id)
+    fn param_info(&mut self, param_index: usize) -> Result<ext::params::ParamInfo, ()> {
+        self.shared_plugin.params_ext.param_info(param_index)
     }
 
     /// Get the plain value of the parameter.
@@ -678,7 +678,7 @@ impl PluginMainThread for ClapPluginMainThread {
     ///
     /// [main-thread]
     #[allow(unused)]
-    fn param_value(&self, param_id: u32) -> Result<f64, ()> {
+    fn param_value(&self, param_id: ParamID) -> Result<f64, ()> {
         self.shared_plugin.params_ext.param_value(param_id)
     }
 
@@ -690,7 +690,7 @@ impl PluginMainThread for ClapPluginMainThread {
     ///
     /// [main-thread]
     #[allow(unused)]
-    fn param_value_to_text(&self, param_id: u32, value: f64) -> Result<String, ()> {
+    fn param_value_to_text(&self, param_id: ParamID, value: f64) -> Result<String, ()> {
         self.shared_plugin.params_ext.param_value_to_text(param_id, value)
     }
 
@@ -702,7 +702,7 @@ impl PluginMainThread for ClapPluginMainThread {
     ///
     /// [main-thread]
     #[allow(unused)]
-    fn param_text_to_value(&self, param_id: u32, display: &str) -> Result<f64, ()> {
+    fn param_text_to_value(&self, param_id: ParamID, display: &str) -> Result<f64, ()> {
         self.shared_plugin.params_ext.param_text_to_value(param_id, display)
     }
 

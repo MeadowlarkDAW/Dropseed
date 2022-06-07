@@ -1,6 +1,7 @@
 use basedrop::Shared;
 use clap_sys::ext::audio_ports::clap_host_audio_ports as RawClapHostAudioPorts;
 use clap_sys::ext::log::clap_host_log as RawClapHostLog;
+use clap_sys::ext::params::clap_host_params as RawClapHostParams;
 use clap_sys::ext::thread_check::clap_host_thread_check as RawClapHostThreadCheck;
 use clap_sys::host::clap_host as RawClapHost;
 use clap_sys::version::CLAP_VERSION;
@@ -13,6 +14,7 @@ use super::c_char_helpers::c_char_ptr_to_maybe_str;
 
 use crate::host_request::HostRequest;
 use crate::thread_id::SharedThreadIDs;
+use crate::ParamID;
 use crate::PluginInstanceID;
 
 // TODO: Make sure that the log and print methods don't allocate on the current thread.
@@ -44,6 +46,11 @@ impl ClapHostRequest {
                 host_request,
                 host_audio_ports: [RawClapHostAudioPorts { is_rescan_flag_supported, rescan }],
                 host_thread_check: [RawClapHostThreadCheck { is_main_thread, is_audio_thread }],
+                host_params: [RawClapHostParams {
+                    rescan: params_rescan,
+                    clear: params_clear,
+                    request_flush: params_request_flush,
+                }],
                 host_log: [RawClapHostLog { log }],
                 plugin_log_name,
                 thread_ids,
@@ -106,6 +113,7 @@ struct HostData {
     host_request: HostRequest,
     host_audio_ports: [RawClapHostAudioPorts; 1],
     host_thread_check: [RawClapHostThreadCheck; 1],
+    host_params: [RawClapHostParams; 1],
     host_log: [RawClapHostLog; 1],
     plugin_log_name: Shared<String>,
 
@@ -163,19 +171,24 @@ unsafe extern "C" fn get_extension(
         return ptr::null();
     };
 
-    if extension_id == "clap.audio-ports" {
-        // Safe because host_data is pinned in place via the `Shared` pointer.
-        return (host_data.host_audio_ports).as_ptr() as *const c_void;
-    }
-
     if extension_id == "clap.thread-check" {
         // Safe because host_data is pinned in place via the `Shared` pointer.
         return (host_data.host_thread_check).as_ptr() as *const c_void;
     }
 
+    if extension_id == "clap.audio-ports" {
+        // Safe because host_data is pinned in place via the `Shared` pointer.
+        return (host_data.host_audio_ports).as_ptr() as *const c_void;
+    }
+
     if extension_id == "clap.log" {
         // Safe because host_data is pinned in place via the `Shared` pointer.
         return (host_data.host_log).as_ptr() as *const c_void;
+    }
+
+    if extension_id == "clap.params" {
+        // Safe because host_data is pinned in place via the `Shared` pointer.
+        return (host_data.host_params).as_ptr() as *const c_void;
     }
 
     ptr::null()
@@ -365,4 +378,59 @@ unsafe extern "C" fn log(clap_host: *const RawClapHost, severity: i32, msg: *con
     }
 
     println!("{}", msg);
+}
+
+/// ---  Parameters  -------------------------------------------------------------
+
+/// [main-thread]
+unsafe extern "C" fn params_rescan(clap_host: *const RawClapHost, rescan_flags: u32) {
+    use crate::plugin::ext::params::ParamRescanFlags;
+
+    let host_data = match parse_clap_host(clap_host) {
+        Ok(host_data) => host_data,
+        Err(()) => return,
+    };
+
+    if !host_data.thread_ids.is_external_main_thread() {
+        log::warn!("Plugin called clap_host_params->rescan() not in the main thread");
+        return;
+    }
+
+    let flags = ParamRescanFlags::from_bits_truncate(rescan_flags);
+
+    host_data.host_request.params.rescan(flags);
+}
+
+/// [main-thread]
+unsafe extern "C" fn params_clear(clap_host: *const RawClapHost, param_id: u32, clear_flags: u32) {
+    use crate::plugin::ext::params::ParamClearFlags;
+
+    let host_data = match parse_clap_host(clap_host) {
+        Ok(host_data) => host_data,
+        Err(()) => return,
+    };
+
+    if !host_data.thread_ids.is_external_main_thread() {
+        log::warn!("Plugin called clap_host_params->clear() not in the main thread");
+        return;
+    }
+
+    let flags = ParamClearFlags::from_bits_truncate(clear_flags);
+
+    host_data.host_request.params.clear(ParamID(param_id), flags);
+}
+
+/// [main-thread]
+unsafe extern "C" fn params_request_flush(clap_host: *const RawClapHost) {
+    let host_data = match parse_clap_host(clap_host) {
+        Ok(host_data) => host_data,
+        Err(()) => return,
+    };
+
+    if host_data.thread_ids.is_external_audio_thread() {
+        log::warn!("Plugin called clap_host_params->request_flush() in the audio thread");
+        return;
+    }
+
+    host_data.host_request.params.request_flush();
 }
