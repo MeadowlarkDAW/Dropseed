@@ -43,6 +43,7 @@ fnv = "1.0"
 log = "0.4"
 derive_more = "0.99.6"
 bytemuck = "1.9"
+audio_thread_priority = "0.26.1"
 cpal = { version = "0.13", optional = true }
 libloading = { version = "0.7", optional = true }
 globwalk = { version = "0.8", optional = true }

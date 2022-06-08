@@ -213,7 +213,7 @@ impl RustyDAWEngine {
 
             // TODO: Spawn a high priority thread.
             let process_thread_handle = std::thread::spawn(move || {
-                process_thread.run(run_process_thread_clone);
+                process_thread.run(run_process_thread_clone, max_frames, sample_rate);
             });
 
             self.process_thread_handle = Some(process_thread_handle);
