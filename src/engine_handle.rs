@@ -16,16 +16,6 @@ use crate::plugin::PluginFactory;
 use crate::ModifyGraphRequest;
 use crate::{host_request::HostInfo, plugin_scanner::ScannedPluginKey};
 
-pub trait DAWEngineCrashHandler {
-    fn engine_crashed(
-        &mut self,
-        error_msg: Box<dyn Error + Send>,
-        recovered_save_state: Option<AudioGraphSaveState>,
-    );
-
-    fn engine_restored(&mut self, new_event_rx: Receiver<DAWEngineEvent>);
-}
-
 pub struct DAWEngineHandle {
     /// The results of scanning the internal plugins.
     pub internal_plugins_res: Vec<Result<ScannedPluginKey, Box<dyn Error + Send>>>,
@@ -37,7 +27,7 @@ pub struct DAWEngineHandle {
     sandboxed_thread_handle: Option<JoinHandle<()>>,
     run_sandboxed_thread: Arc<AtomicBool>,
 
-    crash_handler: Box<dyn DAWEngineCrashHandler>,
+    event_tx: Sender<DAWEngineEvent>,
 
     host_info: HostInfo,
 }
@@ -46,7 +36,6 @@ impl DAWEngineHandle {
     pub fn new(
         host_info: HostInfo,
         internal_plugins: Vec<Box<dyn PluginFactory>>,
-        crash_handler: Box<dyn DAWEngineCrashHandler>,
     ) -> (Self, Receiver<DAWEngineEvent>) {
         let (event_tx, event_rx) = channel::unbounded::<DAWEngineEvent>();
         let (handle_to_engine_tx, handle_to_engine_rx) = channel::unbounded::<DAWEngineRequest>();
@@ -59,6 +48,8 @@ impl DAWEngineHandle {
         let run_sandboxed_thread = Arc::new(AtomicBool::new(true));
         let run_sandboxed_thread_clone = Arc::clone(&run_sandboxed_thread);
 
+        let event_tx_clone = event_tx.clone();
+
         // TODO: Use a sandboxed thread/process (which is the whole point of using a message
         // passing model in the first place).
         let sandboxed_thread_handle = thread::spawn(move || {
@@ -66,7 +57,7 @@ impl DAWEngineHandle {
                 host_info_clone,
                 internal_plugins,
                 handle_to_engine_rx,
-                event_tx,
+                event_tx_clone,
             );
 
             internal_plugin_res_tx.send(internal_plugin_res).unwrap();
@@ -85,7 +76,7 @@ impl DAWEngineHandle {
                 handle_to_engine_tx,
                 sandboxed_thread_handle: Some(sandboxed_thread_handle),
                 run_sandboxed_thread: run_sandboxed_thread_clone,
-                crash_handler,
+                event_tx,
                 host_info,
             },
             event_rx,

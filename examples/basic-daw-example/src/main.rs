@@ -4,11 +4,11 @@ use crossbeam::channel::Receiver;
 use eframe::egui;
 use rusty_daw_core::SampleRate;
 use rusty_daw_engine::{
-    DAWEngineAudioThread, DAWEngineEvent, DAWEngineHandle, Edge, EdgeReq, HostInfo,
-    ModifyGraphRequest, PluginActivationStatus, PluginEdges, PluginEvent, PluginIDReq,
-    PluginInstanceID, PluginScannerEvent, PortType, ScannedPlugin,
+    ActivateEngineSettings, DAWEngineAudioThread, DAWEngineEvent, DAWEngineHandle,
+    DAWEngineRequest, EdgeReq, EngineDeactivatedInfo, HostInfo, ModifyGraphRequest,
+    PluginActivationStatus, PluginEvent, PluginIDReq, PluginInstanceID, PluginScannerEvent,
+    PortType, ScannedPlugin,
 };
-use std::time::Duration;
 
 mod effect_rack_page;
 mod scanned_plugins_page;
@@ -45,17 +45,17 @@ fn main() {
             move |audio_buffer: &mut [f32], _: &cpal::OutputCallbackInfo| {
                 while let Some(msg) = from_gui_rx.pop() {
                     match msg {
-                        UIToAudioThreadMsg::NewSharedSchedule(schedule) => {
-                            shared_schedule = Some(schedule);
+                        UIToAudioThreadMsg::NewEngineAudioThread(new_audio_thread) => {
+                            audio_thread = Some(new_audio_thread);
                         }
-                        UIToAudioThreadMsg::DropSharedSchedule => {
-                            shared_schedule = None;
+                        UIToAudioThreadMsg::DropEngineAudioThread => {
+                            audio_thread = None;
                         }
                     }
                 }
 
-                if let Some(shared_schedule) = &mut shared_schedule {
-                    shared_schedule
+                if let Some(audio_thread) = &mut audio_thread {
+                    audio_thread
                         .process_cpal_interleaved_output_only(num_out_channels, audio_buffer);
                 }
             },
@@ -67,19 +67,22 @@ fn main() {
 
     // ---  Initialize RustyDAW Engine  -------------------------------------------
 
-    let (mut engine, engine_rx, internal_scan_res) = RustyDAWEngine::new(
+    let (mut engine_handle, engine_rx) = DAWEngineHandle::new(
         HostInfo::new(String::from("RustyDAW integration test"), String::from("0.1.0"), None, None),
         Vec::new(),
     );
 
-    engine.activate_engine(
+    dbg!(&engine_handle.internal_plugins_res);
+
+    engine_handle.send(DAWEngineRequest::ActivateEngine(Box::new(ActivateEngineSettings {
         sample_rate,
-        MIN_BLOCK_SIZE,
-        MAX_BLOCK_SIZE,
-        GRAPH_IN_CHANNELS,
-        GRAPH_OUT_CHANNELS,
-    );
-    engine.rescan_plugin_directories();
+        min_frames: MIN_BLOCK_SIZE,
+        max_frames: MAX_BLOCK_SIZE,
+        num_audio_in_channels: GRAPH_IN_CHANNELS,
+        num_audio_out_channels: GRAPH_OUT_CHANNELS,
+    })));
+
+    engine_handle.send(DAWEngineRequest::RescanPluginDirectories);
 
     // ---  Run the UI  -----------------------------------------------------------
 
@@ -91,7 +94,7 @@ fn main() {
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
 
             Box::new(BasicDawExampleGUI::new(
-                engine,
+                engine_handle,
                 engine_rx,
                 cpal_stream,
                 sample_rate,
@@ -103,8 +106,8 @@ fn main() {
 
 #[derive(Debug)]
 enum UIToAudioThreadMsg {
-    NewSharedSchedule(SharedSchedule),
-    DropSharedSchedule,
+    NewEngineAudioThread(DAWEngineAudioThread),
+    DropEngineAudioThread,
 }
 
 pub struct EngineState {
@@ -115,7 +118,7 @@ pub struct EngineState {
 }
 
 struct BasicDawExampleGUI {
-    engine: RustyDAWEngine,
+    engine_handle: DAWEngineHandle,
     engine_rx: Receiver<DAWEngineEvent>,
 
     to_audio_thread_tx: ringbuf::Producer<UIToAudioThreadMsg>,
@@ -134,14 +137,14 @@ struct BasicDawExampleGUI {
 
 impl BasicDawExampleGUI {
     fn new(
-        engine: RustyDAWEngine,
+        engine_handle: DAWEngineHandle,
         engine_rx: Receiver<DAWEngineEvent>,
         cpal_stream: Stream,
         sample_rate: SampleRate,
         to_audio_thread_tx: ringbuf::Producer<UIToAudioThreadMsg>,
     ) -> Self {
         Self {
-            engine,
+            engine_handle,
             engine_rx,
             to_audio_thread_tx,
             _cpal_stream: Some(cpal_stream),
@@ -160,23 +163,33 @@ impl BasicDawExampleGUI {
             match msg {
                 // Sent whenever the engine is deactivated.
                 //
-                // If the result is `Ok(save_state)`, then it means that the engine
-                // deactivated gracefully via calling `RustyDAWEngine::deactivate_engine()`,
-                // and the latest save state of the audio graph is returned.
-                //
-                // If the result is `Err(e)`, then it means that the engine deactivated
-                // because of a unrecoverable audio graph compiler error.
+                // The DAWEngineAudioThread sent in a previous EngineActivated event is now
+                // invalidated. Please drop it and wait for a new EngineActivated event to
+                // replace it.
                 //
                 // To keep using the audio graph, you must reactivate the engine with
-                // `RustyDAWEngine::activate_engine()`, and then restore the audio graph
+                // `DAWEngineRequest::ActivateEngine`, and then restore the audio graph
                 // from an existing save state if you wish using
-                // `RustyDAWEngine::restore_audio_graph_from_save_state()`.
+                // `DAWEngineRequest::RestoreFromSaveState`.
                 DAWEngineEvent::EngineDeactivated(res) => {
-                    if let Err(e) = res {
-                        println!("Engine crashed: {}", e);
-                    }
+                    self.to_audio_thread_tx
+                        .push(UIToAudioThreadMsg::DropEngineAudioThread)
+                        .unwrap();
 
-                    self.to_audio_thread_tx.push(UIToAudioThreadMsg::DropSharedSchedule).unwrap();
+                    match res {
+                        // The engine was deactivated gracefully after recieving a
+                        // `DAWEngineRequest::DeactivateEngine` request.
+                        EngineDeactivatedInfo::DeactivatedGracefully { recovered_save_state } => {
+                            println!("Engine deactivated gracefully");
+                        }
+                        // The engine has crashed.
+                        EngineDeactivatedInfo::EngineCrashed {
+                            error_msg,
+                            recovered_save_state,
+                        } => {
+                            println!("Engine crashed: {}", error_msg);
+                        }
+                    }
 
                     self.engine_state = None;
                 }
@@ -190,7 +203,7 @@ impl BasicDawExampleGUI {
                     });
 
                     self.to_audio_thread_tx
-                        .push(UIToAudioThreadMsg::NewSharedSchedule(info.shared_schedule))
+                        .push(UIToAudioThreadMsg::NewEngineAudioThread(info.audio_thread))
                         .unwrap();
                 }
 
@@ -201,8 +214,7 @@ impl BasicDawExampleGUI {
                 // wait for the `AudioGraphModified` event to repopulate the UI.
                 //
                 // If the audio graph is in an invalid state as a result of restoring from
-                // the save state, then the `EngineDeactivated(Err(e))` event
-                // will be sent instead.
+                // the save state, then the `EngineDeactivated` event will be sent instead.
                 DAWEngineEvent::AudioGraphCleared => {
                     if let Some(engine_state) = &mut self.engine_state {
                         engine_state.effect_rack_state.plugins.clear();
@@ -463,7 +475,7 @@ impl BasicDawExampleGUI {
                                 */
                             };
 
-                            self.engine.modify_graph(req);
+                            self.engine_handle.send(DAWEngineRequest::ModifyGraph(req));
                         }
                     }
                     unkown_event => {
@@ -494,20 +506,22 @@ impl eframe::App for BasicDawExampleGUI {
                         ui.label("engine status:");
 
                         if ui.button("deactivate").clicked() {
-                            self.engine.deactivate_engine();
+                            self.engine_handle.send(DAWEngineRequest::DeactivateEngine);
                         }
                     } else {
                         ui.colored_label(egui::Color32::RED, "inactive");
                         ui.label("engine status:");
 
                         if ui.button("activate").clicked() {
-                            self.engine.activate_engine(
-                                self.sample_rate,
-                                MIN_BLOCK_SIZE,
-                                MAX_BLOCK_SIZE,
-                                GRAPH_IN_CHANNELS,
-                                GRAPH_OUT_CHANNELS,
-                            );
+                            self.engine_handle.send(DAWEngineRequest::ActivateEngine(Box::new(
+                                ActivateEngineSettings {
+                                    sample_rate: self.sample_rate,
+                                    min_frames: MIN_BLOCK_SIZE,
+                                    max_frames: MAX_BLOCK_SIZE,
+                                    num_audio_in_channels: GRAPH_IN_CHANNELS,
+                                    num_audio_out_channels: GRAPH_OUT_CHANNELS,
+                                },
+                            )));
                         }
                     }
                 });
@@ -518,8 +532,6 @@ impl eframe::App for BasicDawExampleGUI {
             Tab::EffectRack => effect_rack_page::show(self, ui),
             Tab::ScannedPlugins => scanned_plugins_page::show(self, ui),
         });
-
-        self.engine.on_idle();
     }
 
     fn on_exit(&mut self, _gl: &eframe::glow::Context) {

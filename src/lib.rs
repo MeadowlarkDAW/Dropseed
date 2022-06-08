@@ -18,14 +18,13 @@ pub mod reducing_queue;
 
 pub use audio_thread::DAWEngineAudioThread;
 pub use engine::{EdgeReq, ModifyGraphRequest, ModifyGraphRes, PluginIDReq};
-pub use engine_handle::{
-    ActivateEngineSettings, DAWEngineCrashHandler, DAWEngineHandle, DAWEngineRequest,
-};
-pub use event::{DAWEngineEvent, PluginEvent, PluginScannerEvent};
+pub use engine_handle::{ActivateEngineSettings, DAWEngineHandle, DAWEngineRequest};
+pub use event::{DAWEngineEvent, EngineDeactivatedInfo, PluginEvent, PluginScannerEvent};
 pub use fixed_point::FixedPoint64;
 pub use graph::shared_pool::PluginInstanceID;
 pub use graph::{
-    Edge, ParamGestureInfo, ParamModifiedInfo, PluginActivationStatus, PluginEdges, PluginParamsExt,
+    AudioGraphSaveState, Edge, ParamGestureInfo, ParamModifiedInfo, PluginActivationStatus,
+    PluginEdges, PluginParamsExt,
 };
 pub use host_request::{HostInfo, HostRequest};
 pub use plugin::audio_buffer::{AudioPortBuffer, AudioPortBufferMut};

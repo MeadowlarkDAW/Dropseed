@@ -1,12 +1,14 @@
 use eframe::egui;
 
+use rusty_daw_engine::DAWEngineRequest;
+
 use super::BasicDawExampleGUI;
 
 pub(crate) fn show(app: &mut BasicDawExampleGUI, ui: &mut egui::Ui) {
     // TODO: Add/remove plugin paths.
 
     if ui.button("Rescan all plugin directories").clicked() {
-        app.engine.rescan_plugin_directories();
+        app.engine_handle.send(DAWEngineRequest::RescanPluginDirectories);
     }
 
     ui.separator();

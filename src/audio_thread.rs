@@ -1,6 +1,7 @@
 use basedrop::Owned;
 use rtrb_basedrop::{Consumer, Producer, RingBuffer};
 use rusty_daw_core::SampleRate;
+use std::fmt::Debug;
 use std::time::{Duration, Instant};
 use std::{
     mem::MaybeUninit,
@@ -34,6 +35,19 @@ pub struct DAWEngineAudioThread {
     /// In case there are no inputs, use this to let the engine know when there
     /// are frames to render.
     num_frames_wanted: Option<Arc<AtomicU32>>,
+}
+
+impl Debug for DAWEngineAudioThread {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut f = f.debug_struct("DAWEngineAudioThread");
+
+        f.field("in_channels", &self.in_channels);
+        f.field("out_channels", &self.out_channels);
+        f.field("sample_rate", &self.sample_rate);
+        f.field("sample_rate_recip", &self.sample_rate_recip);
+
+        f.finish()
+    }
 }
 
 impl DAWEngineAudioThread {

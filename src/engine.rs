@@ -14,14 +14,14 @@ use std::time::Duration;
 
 use crate::audio_thread::DAWEngineAudioThread;
 use crate::engine_handle::DAWEngineRequest;
-use crate::event::{DAWEngineEvent, PluginScannerEvent};
-use crate::graph::schedule::SharedSchedule;
+use crate::event::{DAWEngineEvent, EngineDeactivatedInfo, PluginScannerEvent};
 use crate::graph::{
     AudioGraph, AudioGraphSaveState, Edge, NewPluginRes, PluginEdges, PluginInstanceID,
 };
 use crate::plugin::{PluginFactory, PluginSaveState};
 use crate::plugin_scanner::PluginScanner;
 use crate::thread_id::SharedThreadIDs;
+use crate::ActivateEngineSettings;
 use crate::{host_request::HostInfo, plugin_scanner::ScannedPluginKey};
 
 static ENGINE_THREAD_UPDATE_INTERVAL: Duration = Duration::from_millis(10);
@@ -82,7 +82,29 @@ impl RustyDAWEngine {
 
     pub fn run(&mut self, run: Arc<AtomicBool>) {
         while run.load(Ordering::Relaxed) {
-            // TODO: Poll events from handle.
+            while let Ok(msg) = self.handle_to_engine_rx.try_recv() {
+                match msg {
+                    DAWEngineRequest::ModifyGraph(req) => self.modify_graph(req),
+                    DAWEngineRequest::ActivateEngine(settings) => self.activate_engine(settings),
+                    DAWEngineRequest::DeactivateEngine => self.deactivate_engine(),
+                    DAWEngineRequest::RestoreFromSaveState(save_state) => {
+                        self.restore_audio_graph_from_save_state(&save_state)
+                    }
+                    DAWEngineRequest::RequestLatestSaveState => self.request_latest_save_state(),
+
+                    #[cfg(feature = "clap-host")]
+                    DAWEngineRequest::AddClapScanDirectory(path) => {
+                        self.add_clap_scan_directory(path)
+                    }
+
+                    #[cfg(feature = "clap-host")]
+                    DAWEngineRequest::RemoveClapScanDirectory(path) => {
+                        self.remove_clap_scan_directory(path)
+                    }
+
+                    DAWEngineRequest::RescanPluginDirectories => self.rescan_plugin_directories(),
+                }
+            }
 
             if let Some(audio_graph) = &mut self.audio_graph {
                 let recompile = audio_graph.on_idle(Some(&mut self.event_tx));
@@ -119,20 +141,19 @@ impl RustyDAWEngine {
         self.event_tx.send(PluginScannerEvent::RescanFinished(res).into()).unwrap();
     }
 
-    fn activate_engine(
-        &mut self,
-        sample_rate: SampleRate,
-        min_frames: u32,
-        max_frames: u32,
-        num_audio_in_channels: u16,
-        num_audio_out_channels: u16,
-    ) {
+    fn activate_engine(&mut self, settings: Box<ActivateEngineSettings>) {
         if self.audio_graph.is_some() {
             log::warn!("Ignored request to activate RustyDAW engine: Engine is already activated");
             return;
         }
 
         log::info!("Activating RustyDAW engine...");
+
+        let num_audio_in_channels = settings.num_audio_in_channels;
+        let num_audio_out_channels = settings.num_audio_out_channels;
+        let min_frames = settings.min_frames;
+        let max_frames = settings.max_frames;
+        let sample_rate = settings.sample_rate;
 
         let (mut audio_graph, shared_schedule) = AudioGraph::new(
             self.collector.handle(),
@@ -363,7 +384,11 @@ impl RustyDAWEngine {
         }
         self.process_thread_handle = None;
 
-        self.event_tx.send(DAWEngineEvent::EngineDeactivated(Ok(save_state))).unwrap();
+        self.event_tx
+            .send(DAWEngineEvent::EngineDeactivated(EngineDeactivatedInfo::DeactivatedGracefully {
+                recovered_save_state: save_state,
+            }))
+            .unwrap();
     }
 
     fn restore_audio_graph_from_save_state(&mut self, save_state: &AudioGraphSaveState) {
@@ -430,7 +455,18 @@ impl RustyDAWEngine {
                 Err(e) => {
                     log::error!("{}", e);
 
-                    self.event_tx.send(DAWEngineEvent::EngineDeactivated(Err(e))).unwrap();
+                    if let Some(run_process_thread) = self.run_process_thread.take() {
+                        run_process_thread.store(false, Ordering::Relaxed);
+                    }
+                    self.process_thread_handle = None;
+
+                    // TODO: Try to recover save state?
+                    self.event_tx.send(DAWEngineEvent::EngineDeactivated(
+                        EngineDeactivatedInfo::EngineCrashed {
+                            error_msg: Box::new(e),
+                            recovered_save_state: None,
+                        },
+                    ));
 
                     // Audio graph is in an invalid state. Drop it and have the user restore
                     // from the last working save state.
