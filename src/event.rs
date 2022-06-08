@@ -1,12 +1,13 @@
 use fnv::FnvHashMap;
 use smallvec::SmallVec;
+use std::error::Error;
 use std::path::PathBuf;
 
 use crate::{
     engine::{EngineActivatedInfo, ModifyGraphRes},
     graph::{
-        plugin_host::PluginParamsExt, ActivatePluginError, AudioGraphSaveState, GraphCompilerError,
-        ParamModifiedInfo, PluginInstanceID,
+        plugin_host::PluginParamsExt, ActivatePluginError, AudioGraphSaveState, ParamModifiedInfo,
+        PluginInstanceID,
     },
     plugin_scanner::RescanPluginDirectoriesRes,
     ParamID, PluginAudioPortsExt,
@@ -17,24 +18,21 @@ use crate::{
 pub enum DAWEngineEvent {
     /// Sent whenever the engine is deactivated.
     ///
-    /// If the result is `Ok(save_state)`, then it means that the engine
-    /// deactivated gracefully via calling `RustyDAWEngine::deactivate_engine()`,
-    /// and the latest save state of the audio graph is returned.
-    ///
-    /// If the result is `Err(e)`, then it means that the engine deactivated
-    /// because of a unrecoverable audio graph compiler error.
+    /// The DAWEngineAudioThread sent in a previous EngineActivated event is now
+    /// invalidated. Please drop it and wait for a new EngineActivated event to
+    /// replace it.
     ///
     /// To keep using the audio graph, you must reactivate the engine with
-    /// `RustyDAWEngine::activate_engine()`, and then restore the audio graph
+    /// `DAWEngineRequest::ActivateEngine`, and then restore the audio graph
     /// from an existing save state if you wish using
-    /// `RustyDAWEngine::restore_audio_graph_from_save_state()`.
-    EngineDeactivated(Result<AudioGraphSaveState, GraphCompilerError>),
+    /// `DAWEngineRequest::RestoreFromSaveState`.
+    EngineDeactivated(EngineDeactivatedInfo),
 
     /// This message is sent whenever the engine successfully activates.
     EngineActivated(EngineActivatedInfo),
 
     /// This message is sent after the user requests the latest save state from
-    /// calling `RustyDAWEngine::request_latest_save_state()`.
+    /// calling `DAWEngineRequest::RequestLatestSaveState`.
     ///
     /// Use the latest save state as a backup in case a plugin crashes or a bug
     /// in the audio graph compiler causes the audio graph to be in an invalid
@@ -48,8 +46,7 @@ pub enum DAWEngineEvent {
     /// wait for the `AudioGraphModified` event to repopulate the UI.
     ///
     /// If the audio graph is in an invalid state as a result of restoring from
-    /// the save state, then the `EngineDeactivated(Err(e))` event
-    /// will be sent instead.
+    /// the save state, then the `EngineDeactivated` event will be sent instead.
     AudioGraphCleared,
 
     /// This message is sent whenever the audio graph has been modified.
@@ -61,6 +58,28 @@ pub enum DAWEngineEvent {
 
     PluginScanner(PluginScannerEvent),
     // TODO: More stuff
+}
+
+#[derive(Debug)]
+/// Sent whenever the engine is deactivated.
+    ///
+    /// The DAWEngineAudioThread sent in a previous EngineActivated event is now
+    /// invalidated. Please drop it and wait for a new EngineActivated event to
+    /// replace it.
+    ///
+    /// To keep using the audio graph, you must reactivate the engine with
+    /// `DAWEngineRequest::ActivateEngine`, and then restore the audio graph
+    /// from an existing save state if you wish using
+    /// `DAWEngineRequest::RestoreFromSaveState`.
+pub enum EngineDeactivatedInfo {
+    /// The engine was deactivated gracefully after recieving a
+    /// `DAWEngineRequest::DeactivateEngine` request.
+    DeactivatedGracefully { recovered_save_state: AudioGraphSaveState },
+    /// The engine has crashed.
+    EngineCrashed {
+        error_msg: Box<dyn Error + Send>,
+        recovered_save_state: Option<AudioGraphSaveState>,
+    },
 }
 
 #[derive(Debug)]
