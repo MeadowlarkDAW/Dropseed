@@ -11,6 +11,8 @@ use bitflags::bitflags;
 
 use crate::{FixedPoint64, ParamID};
 
+pub mod event_queue;
+
 pub enum PluginEvent<'a> {
     Note(&'a EventNote),
     NoteExpression(&'a EventNoteExpression),

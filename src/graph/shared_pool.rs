@@ -5,13 +5,14 @@ use maybe_atomic_refcell::{MaybeAtomicRef, MaybeAtomicRefCell, MaybeAtomicRefMut
 use std::hash::Hash;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::plugin_scanner::PluginFormat;
+use crate::engine::sandboxed::plugin_scanner::PluginFormat;
 
 use super::plugin_host::{PluginInstanceHost, PluginInstanceHostAudioThread};
 use super::schedule::delay_comp_node::DelayCompNode;
 
 /// Used for debugging and verifying purposes.
 #[repr(u8)]
+#[allow(unused)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum DebugBufferType {
     Audio32,
@@ -336,6 +337,7 @@ impl SharedBufferPool {
         }
     }
 
+    /*
     pub fn audio_f64(&mut self, index: usize) -> SharedBuffer<f64> {
         if self.audio_buffers_f64.len() <= index {
             let n_new_slots = (index + 1) - self.audio_buffers_f64.len();
@@ -365,6 +367,7 @@ impl SharedBufferPool {
             slot.as_ref().unwrap().clone()
         }
     }
+    */
 
     pub fn intermediary_audio_f32(&mut self, index: usize) -> SharedBuffer<f32> {
         if self.intermediary_audio_f32.len() <= index {

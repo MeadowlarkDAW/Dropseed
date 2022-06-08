@@ -4,12 +4,12 @@ use std::error::Error;
 use std::path::PathBuf;
 
 use crate::{
-    engine::{EngineActivatedInfo, ModifyGraphRes},
+    engine::sandboxed::main_thread::{EngineActivatedInfo, ModifyGraphRes},
+    engine::sandboxed::plugin_scanner::RescanPluginDirectoriesRes,
     graph::{
         plugin_host::PluginParamsExt, ActivatePluginError, AudioGraphSaveState, ParamModifiedInfo,
         PluginInstanceID,
     },
-    plugin_scanner::RescanPluginDirectoriesRes,
     ParamID, PluginAudioPortsExt,
 };
 

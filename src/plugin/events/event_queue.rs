@@ -2,7 +2,7 @@ use bytemuck::{bytes_of, try_from_bytes};
 
 use std::mem::MaybeUninit;
 
-use super::events::{
+use super::{
     EventHeader, EventMidi, EventMidi2, EventMidiSysex, EventNote, EventNoteExpression,
     EventParamGesture, EventParamMod, EventParamValue, EventTransport, EventType, PluginEvent,
 };

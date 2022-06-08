@@ -180,6 +180,7 @@ impl Verifier {
     }
 }
 
+#[allow(unused)]
 #[derive(Debug, Clone)]
 pub enum VerifyScheduleError {
     BufferAppearsTwiceInSameTask {

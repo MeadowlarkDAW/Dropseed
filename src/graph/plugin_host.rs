@@ -8,17 +8,18 @@ use std::sync::{
     Arc,
 };
 
-use crate::host_request::RequestFlags;
-use crate::plugin::event_queue::EventQueue;
+use super::shared_pool::PluginInstanceID;
+use crate::plugin::events::event_queue::EventQueue;
 use crate::plugin::events::{EventFlags, EventParamMod, EventParamValue, PluginEvent};
 use crate::plugin::ext::audio_ports::PluginAudioPortsExt;
 use crate::plugin::ext::params::{ParamInfo, ParamInfoFlags};
+use crate::plugin::host_request::RequestFlags;
 use crate::plugin::process_info::ProcBuffers;
 use crate::plugin::{PluginAudioThread, PluginMainThread, PluginSaveState};
-use crate::reducing_queue::{ReducFnvConsumer, ReducFnvProducer, ReducFnvValue, ReducingFnvQueue};
+use crate::utils::reducing_queue::{
+    ReducFnvConsumer, ReducFnvProducer, ReducFnvValue, ReducingFnvQueue,
+};
 use crate::{HostRequest, ParamID, ProcInfo, ProcessStatus};
-
-use super::shared_pool::PluginInstanceID;
 
 #[derive(Clone, Copy)]
 struct MainToAudioParamValue {

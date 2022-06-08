@@ -15,16 +15,19 @@ mod compiler;
 mod save_state;
 mod verifier;
 
+use plugin_host::OnIdleResult;
 use schedule::{Schedule, SharedSchedule};
 use shared_pool::{PluginInstanceHostEntry, SharedBufferPool, SharedPluginPool};
 use verifier::Verifier;
 
-use crate::event::{DAWEngineEvent, PluginEvent};
+use crate::engine::events::from_engine::{DAWEngineEvent, PluginEvent};
+use crate::engine::sandboxed::plugin_scanner::{NewPluginInstanceError, PluginScanner};
 use crate::graph::plugin_host::PluginInstanceHost;
 use crate::graph::shared_pool::SharedPluginHostAudioThread;
-use crate::host_request::HostRequest;
 use crate::plugin::ext::audio_ports::PluginAudioPortsExt;
-use crate::thread_id::SharedThreadIDs;
+use crate::plugin::host_request::{HostInfo, HostRequest};
+use crate::plugin::PluginSaveState;
+use crate::utils::thread_id::SharedThreadIDs;
 use crate::ParamID;
 
 pub use compiler::GraphCompilerError;
@@ -47,14 +50,6 @@ impl PortID {
         }
     }
 }
-
-use crate::{
-    host_request::HostInfo,
-    plugin::PluginSaveState,
-    plugin_scanner::{NewPluginInstanceError, PluginScanner},
-};
-
-use self::plugin_host::OnIdleResult;
 
 pub(crate) struct AudioGraph {
     shared_plugin_pool: SharedPluginPool,
@@ -83,7 +78,7 @@ pub(crate) struct AudioGraph {
 }
 
 impl AudioGraph {
-    pub(crate) fn new(
+    pub fn new(
         coll_handle: basedrop::Handle,
         host_info: Shared<HostInfo>,
         graph_in_channels: u16,
@@ -477,14 +472,6 @@ impl AudioGraph {
         }
     }
 
-    pub fn collect_plugin_save_state(&mut self, id: &PluginInstanceID) -> Option<PluginSaveState> {
-        if let Some(plugin) = self.shared_plugin_pool.plugins.get_mut(id) {
-            plugin.plugin_host.collect_save_state()
-        } else {
-            None
-        }
-    }
-
     pub fn collect_save_state(&mut self) -> AudioGraphSaveState {
         log::trace!("Collecting audio graph save state...");
 
@@ -722,7 +709,7 @@ impl AudioGraph {
     ///
     /// If an error is returned then the graph **MUST** be restored with the previous
     /// working save state.
-    pub(crate) fn compile(&mut self) -> Result<(), GraphCompilerError> {
+    pub fn compile(&mut self) -> Result<(), GraphCompilerError> {
         match compiler::compile_graph(
             &mut self.shared_plugin_pool,
             &mut self.shared_buffer_pool,
@@ -748,7 +735,7 @@ impl AudioGraph {
         }
     }
 
-    pub(crate) fn on_idle(&mut self, event_tx: Option<&mut Sender<DAWEngineEvent>>) -> bool {
+    pub fn on_idle(&mut self, event_tx: Option<&mut Sender<DAWEngineEvent>>) -> bool {
         let mut plugins_to_remove: SmallVec<[PluginInstanceID; 4]> = SmallVec::new();
 
         let mut recompile_graph = false;
@@ -889,12 +876,8 @@ fn update_plugin_ports(
 
 impl Drop for AudioGraph {
     fn drop(&mut self) {
-        /*
-        self.shared_schedule.set_new_schedule(
-            Schedule::empty(self.max_frames, Shared::clone(&self.host_info)),
-            &self.coll_handle,
-        );
-        */
+        self.shared_schedule
+            .set_new_schedule(Schedule::empty(self.max_frames as usize), &self.coll_handle);
     }
 }
 

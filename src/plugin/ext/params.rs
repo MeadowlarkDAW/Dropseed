@@ -280,10 +280,6 @@ pub struct HostParamsExtAudioThread {
 }
 
 impl HostParamsExtAudioThread {
-    pub(crate) fn new(flush_requested: Arc<AtomicBool>) -> Self {
-        Self { flush_requested }
-    }
-
     /// Request the host to call clap_plugin_params->fush().
     /// This is useful if the plugin has parameters value changes to report to the host but the plugin
     /// is not processing.

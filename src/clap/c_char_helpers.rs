@@ -1,8 +1,7 @@
-use std::borrow::Cow;
 use std::ffi::CStr;
-use std::mem::MaybeUninit;
 use std::os::raw::c_char;
 
+/*
 /// Convert a Rust `str` to a constant-sized `c_char` buffer.
 ///
 /// Returns `None` when the given string does not fit in the buffer.
@@ -27,6 +26,7 @@ pub(crate) fn str_to_c_char_buf<const BUF_SIZE: usize>(s: &str) -> Option<[c_cha
         None
     }
 }
+*/
 
 pub(crate) fn c_char_buf_to_str<'a, const BUF_SIZE: usize>(
     buf: &'a [c_char; BUF_SIZE],

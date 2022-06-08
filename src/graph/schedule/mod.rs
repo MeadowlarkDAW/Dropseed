@@ -1,9 +1,8 @@
 use basedrop::{Shared, SharedCell};
 use maybe_atomic_refcell::MaybeAtomicRefCell;
 use smallvec::SmallVec;
-use std::thread::ThreadId;
 
-use crate::thread_id::SharedThreadIDs;
+use crate::utils::thread_id::SharedThreadIDs;
 use crate::ProcInfo;
 
 use super::shared_pool::SharedBuffer;
@@ -215,7 +214,6 @@ unsafe impl Sync for ScheduleWrapper {}
 pub(crate) struct SharedSchedule {
     schedule: Shared<SharedCell<ScheduleWrapper>>,
     thread_ids: SharedThreadIDs,
-    current_audio_thread_id: Option<ThreadId>,
     coll_handle: basedrop::Handle,
 }
 
@@ -244,15 +242,9 @@ impl SharedSchedule {
             Self {
                 schedule: schedule.clone(),
                 thread_ids: thread_ids.clone(),
-                current_audio_thread_id: None,
                 coll_handle: coll_handle.clone(),
             },
-            Self {
-                schedule,
-                thread_ids,
-                current_audio_thread_id: None,
-                coll_handle: coll_handle.clone(),
-            },
+            Self { schedule, thread_ids, coll_handle: coll_handle.clone() },
         )
     }
 

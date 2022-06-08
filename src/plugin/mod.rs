@@ -1,22 +1,17 @@
 use rusty_daw_core::SampleRate;
 use std::error::Error;
 
-use crate::{host_request::HostRequest, EventQueue, ParamID, PluginInstanceID};
-
 pub mod audio_buffer;
-pub mod event_queue;
 pub mod events;
 pub mod ext;
-
+pub mod host_request;
 pub(crate) mod process_info;
-
 mod save_state;
 
-use process_info::{ProcInfo, ProcessStatus};
-
+use crate::{EventQueue, ParamID, PluginInstanceID};
+use host_request::HostRequest;
+use process_info::{ProcBuffers, ProcInfo, ProcessStatus};
 pub use save_state::PluginSaveState;
-
-use self::process_info::ProcBuffers;
 
 /// The description of a plugin.
 #[derive(Debug, Clone)]

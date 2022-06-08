@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use super::c_char_helpers::c_char_ptr_to_maybe_str;
 
-use crate::host_request::HostRequest;
-use crate::thread_id::SharedThreadIDs;
+use crate::plugin::host_request::HostRequest;
+use crate::utils::thread_id::SharedThreadIDs;
 use crate::ParamID;
 use crate::PluginInstanceID;
 

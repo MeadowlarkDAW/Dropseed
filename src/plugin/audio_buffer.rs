@@ -1,10 +1,9 @@
-use std::{borrow::Borrow, slice::SliceIndex};
-
 use maybe_atomic_refcell::{MaybeAtomicRef, MaybeAtomicRefMut};
 use smallvec::SmallVec;
 
 use crate::graph::shared_pool::SharedBuffer;
 
+#[allow(unused)]
 pub(crate) enum RawAudioChannelBuffers {
     F32(SmallVec<[SharedBuffer<f32>; 2]>),
     F64(SmallVec<[SharedBuffer<f64>; 2]>),
@@ -98,6 +97,7 @@ impl AudioPortBuffer {
         }
     }
 
+    /*
     pub(crate) fn sync_constant_mask_to_buffers(&mut self) {
         match &self.raw_channels {
             RawAudioChannelBuffers::F32(buffers) => {
@@ -114,6 +114,7 @@ impl AudioPortBuffer {
             }
         }
     }
+    */
 
     pub fn num_channels(&self) -> usize {
         self.raw_channels.num_channels()
@@ -276,6 +277,7 @@ impl AudioPortBufferMut {
         Self { raw_channels: RawAudioChannelBuffers::F32(buffers), latency, constant_mask: 0 }
     }
 
+    /*
     pub(crate) fn sync_constant_mask_from_buffers(&mut self) {
         self.constant_mask = 0;
 
@@ -296,6 +298,7 @@ impl AudioPortBufferMut {
             }
         }
     }
+    */
 
     pub(crate) fn sync_constant_mask_to_buffers(&mut self) {
         match &self.raw_channels {

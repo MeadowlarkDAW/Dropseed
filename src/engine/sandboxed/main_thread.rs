@@ -12,21 +12,22 @@ use std::sync::{
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use crate::audio_thread::DAWEngineAudioThread;
-use crate::engine_handle::DAWEngineRequest;
-use crate::event::{DAWEngineEvent, EngineDeactivatedInfo, PluginScannerEvent};
+use crate::engine::audio_thread::DAWEngineAudioThread;
+use crate::engine::events::from_engine::{
+    DAWEngineEvent, EngineDeactivatedInfo, PluginScannerEvent,
+};
+use crate::engine::events::to_engine::DAWEngineRequest;
+use crate::engine::sandboxed::plugin_scanner::{PluginScanner, ScannedPluginKey};
 use crate::graph::{
     AudioGraph, AudioGraphSaveState, Edge, NewPluginRes, PluginEdges, PluginInstanceID,
 };
+use crate::plugin::host_request::HostInfo;
 use crate::plugin::{PluginFactory, PluginSaveState};
-use crate::plugin_scanner::PluginScanner;
-use crate::thread_id::SharedThreadIDs;
-use crate::ActivateEngineSettings;
-use crate::{host_request::HostInfo, plugin_scanner::ScannedPluginKey};
+use crate::utils::thread_id::SharedThreadIDs;
 
 static ENGINE_THREAD_UPDATE_INTERVAL: Duration = Duration::from_millis(10);
 
-pub(crate) struct RustyDAWEngine {
+pub(crate) struct DAWEngineMainThread {
     audio_graph: Option<AudioGraph>,
     plugin_scanner: PluginScanner,
     event_tx: Sender<DAWEngineEvent>,
@@ -38,7 +39,7 @@ pub(crate) struct RustyDAWEngine {
     process_thread_handle: Option<JoinHandle<()>>,
 }
 
-impl RustyDAWEngine {
+impl DAWEngineMainThread {
     pub(crate) fn new(
         host_info: HostInfo,
         mut internal_plugins: Vec<Box<dyn PluginFactory>>,
@@ -461,12 +462,14 @@ impl RustyDAWEngine {
                     self.process_thread_handle = None;
 
                     // TODO: Try to recover save state?
-                    self.event_tx.send(DAWEngineEvent::EngineDeactivated(
-                        EngineDeactivatedInfo::EngineCrashed {
-                            error_msg: Box::new(e),
-                            recovered_save_state: None,
-                        },
-                    ));
+                    self.event_tx
+                        .send(DAWEngineEvent::EngineDeactivated(
+                            EngineDeactivatedInfo::EngineCrashed {
+                                error_msg: Box::new(e),
+                                recovered_save_state: None,
+                            },
+                        ))
+                        .unwrap();
 
                     // Audio graph is in an invalid state. Drop it and have the user restore
                     // from the last working save state.
@@ -477,7 +480,7 @@ impl RustyDAWEngine {
     }
 }
 
-impl Drop for RustyDAWEngine {
+impl Drop for DAWEngineMainThread {
     fn drop(&mut self) {
         if let Some(run_process_thread) = self.run_process_thread.take() {
             run_process_thread.store(false, Ordering::Relaxed);
@@ -496,24 +499,8 @@ impl Drop for RustyDAWEngine {
     }
 }
 
-pub struct EngineActivatedInfo {
-    /// The realtime-safe channel for the audio thread to interface with
-    /// the engine.
-    ///
-    /// Send this to the audio thread to be run.
-    ///
-    /// When a `DAWEngineEvent::EngineDeactivated` event is recieved, send
-    /// a signal to the audio thread to drop this.
-    pub audio_thread: DAWEngineAudioThread,
-
-    /// The ID for the input to the audio graph. Use this to connect any
-    /// plugins to system inputs.
-    pub graph_in_node_id: PluginInstanceID,
-
-    /// The ID for the output to the audio graph. Use this to connect any
-    /// plugins to system outputs.
-    pub graph_out_node_id: PluginInstanceID,
-
+#[derive(Debug, Clone, Copy)]
+pub struct ActivateEngineSettings {
     pub sample_rate: SampleRate,
     pub min_frames: u32,
     pub max_frames: u32,
@@ -521,19 +508,15 @@ pub struct EngineActivatedInfo {
     pub num_audio_out_channels: u16,
 }
 
-impl std::fmt::Debug for EngineActivatedInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut f = f.debug_struct("EngineActivatedInfo");
-
-        f.field("graph_in_node_id", &self.graph_in_node_id);
-        f.field("graph_out_node_id", &self.graph_out_node_id);
-        f.field("sample_rate", &self.sample_rate);
-        f.field("min_frames", &self.min_frames);
-        f.field("max_frames", &self.max_frames);
-        f.field("num_audio_in_channels", &self.num_audio_in_channels);
-        f.field("num_audio_out_channels", &self.num_audio_out_channels);
-
-        f.finish()
+impl Default for ActivateEngineSettings {
+    fn default() -> Self {
+        Self {
+            sample_rate: SampleRate::default(),
+            min_frames: 1,
+            max_frames: 512,
+            num_audio_in_channels: 2,
+            num_audio_out_channels: 2,
+        }
     }
 }
 
@@ -584,4 +567,45 @@ pub struct ModifyGraphRes {
 
     ///
     pub updated_plugin_edges: Vec<(PluginInstanceID, PluginEdges)>,
+}
+
+pub struct EngineActivatedInfo {
+    /// The realtime-safe channel for the audio thread to interface with
+    /// the engine.
+    ///
+    /// Send this to the audio thread to be run.
+    ///
+    /// When a `DAWEngineEvent::EngineDeactivated` event is recieved, send
+    /// a signal to the audio thread to drop this.
+    pub audio_thread: DAWEngineAudioThread,
+
+    /// The ID for the input to the audio graph. Use this to connect any
+    /// plugins to system inputs.
+    pub graph_in_node_id: PluginInstanceID,
+
+    /// The ID for the output to the audio graph. Use this to connect any
+    /// plugins to system outputs.
+    pub graph_out_node_id: PluginInstanceID,
+
+    pub sample_rate: SampleRate,
+    pub min_frames: u32,
+    pub max_frames: u32,
+    pub num_audio_in_channels: u16,
+    pub num_audio_out_channels: u16,
+}
+
+impl std::fmt::Debug for EngineActivatedInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut f = f.debug_struct("EngineActivatedInfo");
+
+        f.field("graph_in_node_id", &self.graph_in_node_id);
+        f.field("graph_out_node_id", &self.graph_out_node_id);
+        f.field("sample_rate", &self.sample_rate);
+        f.field("min_frames", &self.min_frames);
+        f.field("max_frames", &self.max_frames);
+        f.field("num_audio_in_channels", &self.num_audio_in_channels);
+        f.field("num_audio_out_channels", &self.num_audio_out_channels);
+
+        f.finish()
+    }
 }

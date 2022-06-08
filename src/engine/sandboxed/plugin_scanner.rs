@@ -5,9 +5,9 @@ use std::{collections::HashMap, error::Error};
 
 use crate::graph::plugin_host::PluginInstanceHost;
 use crate::graph::shared_pool::{PluginInstanceID, PluginInstanceType};
-use crate::host_request::HostRequest;
+use crate::plugin::host_request::HostRequest;
 use crate::plugin::{PluginDescriptor, PluginFactory, PluginSaveState};
-use crate::thread_id::SharedThreadIDs;
+use crate::utils::thread_id::SharedThreadIDs;
 use crate::HostInfo;
 
 #[cfg(feature = "clap-host")]

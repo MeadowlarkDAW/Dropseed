@@ -6,7 +6,7 @@ use clap_sys::events::clap_event_header as RawClapEventHeader;
 use clap_sys::events::clap_input_events as RawClapInputEvents;
 use clap_sys::events::clap_output_events as RawClapOutputEvents;
 
-use crate::plugin::event_queue::AllocatedEvent;
+use crate::plugin::events::event_queue::AllocatedEvent;
 use crate::plugin::events::{
     EventMidi, EventMidi2, EventMidiSysex, EventNote, EventNoteExpression, EventParamGesture,
     EventParamMod, EventParamValue, EventTransport,
