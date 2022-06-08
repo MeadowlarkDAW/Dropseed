@@ -62,15 +62,15 @@ pub enum DAWEngineEvent {
 
 #[derive(Debug)]
 /// Sent whenever the engine is deactivated.
-    ///
-    /// The DAWEngineAudioThread sent in a previous EngineActivated event is now
-    /// invalidated. Please drop it and wait for a new EngineActivated event to
-    /// replace it.
-    ///
-    /// To keep using the audio graph, you must reactivate the engine with
-    /// `DAWEngineRequest::ActivateEngine`, and then restore the audio graph
-    /// from an existing save state if you wish using
-    /// `DAWEngineRequest::RestoreFromSaveState`.
+///
+/// The DAWEngineAudioThread sent in a previous EngineActivated event is now
+/// invalidated. Please drop it and wait for a new EngineActivated event to
+/// replace it.
+///
+/// To keep using the audio graph, you must reactivate the engine with
+/// `DAWEngineRequest::ActivateEngine`, and then restore the audio graph
+/// from an existing save state if you wish using
+/// `DAWEngineRequest::RestoreFromSaveState`.
 pub enum EngineDeactivatedInfo {
     /// The engine was deactivated gracefully after recieving a
     /// `DAWEngineRequest::DeactivateEngine` request.

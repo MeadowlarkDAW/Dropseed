@@ -175,7 +175,7 @@ impl Schedule {
                         }
 
                         #[cfg(not(debug_assertions))]
-                        {
+                        unsafe {
                             *out_part.get_unchecked_mut((i * audio_out_channels) + ch_i) =
                                 *buffer.get_unchecked(i);
                         }
@@ -188,7 +188,7 @@ impl Schedule {
                         }
 
                         #[cfg(not(debug_assertions))]
-                        {
+                        unsafe {
                             *out_part.get_unchecked_mut((i * audio_out_channels) + ch_i) = 0.0;
                         }
                     }

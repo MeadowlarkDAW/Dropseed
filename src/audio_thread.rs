@@ -280,6 +280,8 @@ impl DAWEngineProcessThread {
                 self.in_temp_buffer.extend_from_slice(slice_1);
                 self.in_temp_buffer.extend_from_slice(slice_2);
 
+                chunk.commit_all();
+
                 num_samples / self.in_channels
             };
 
