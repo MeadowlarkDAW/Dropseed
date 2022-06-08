@@ -76,7 +76,7 @@ pub struct PluginDescriptor {
 }
 
 /// The methods of an audio plugin which are used to create new instances of the plugin.
-pub trait PluginFactory {
+pub trait PluginFactory: Send {
     fn description(&self) -> PluginDescriptor;
 
     /// Create a new instance of this plugin.
@@ -93,7 +93,7 @@ pub trait PluginFactory {
         host: HostRequest,
         plugin_id: PluginInstanceID,
         coll_handle: &basedrop::Handle,
-    ) -> Result<Box<dyn PluginMainThread>, Box<dyn Error>>;
+    ) -> Result<Box<dyn PluginMainThread>, Box<dyn Error + Send>>;
 }
 
 /// The methods of an audio plugin instance which run in the "main" thread.
@@ -111,7 +111,11 @@ pub trait PluginMainThread {
     ///
     /// `[main-thread & !active_state]`
     #[allow(unused)]
-    fn init(&mut self, _preset: (), coll_handle: &basedrop::Handle) -> Result<(), Box<dyn Error>> {
+    fn init(
+        &mut self,
+        _preset: (),
+        coll_handle: &basedrop::Handle,
+    ) -> Result<(), Box<dyn Error + Send>> {
         Ok(())
     }
 
@@ -132,7 +136,7 @@ pub trait PluginMainThread {
         min_frames: u32,
         max_frames: u32,
         coll_handle: &basedrop::Handle,
-    ) -> Result<Box<dyn PluginAudioThread>, Box<dyn Error>>;
+    ) -> Result<Box<dyn PluginAudioThread>, Box<dyn Error + Send>>;
 
     /// Deactivate the plugin. When this is called it also means that the `PluginAudioThread`
     /// counterpart has/will be dropped.
@@ -158,7 +162,7 @@ pub trait PluginMainThread {
     #[allow(unused)]
     fn audio_ports_ext(
         &mut self,
-    ) -> Result<&ext::audio_ports::PluginAudioPortsExt, Box<dyn Error>> {
+    ) -> Result<&ext::audio_ports::PluginAudioPortsExt, Box<dyn Error + Send>> {
         Ok(&ext::audio_ports::EMPTY_AUDIO_PORTS_CONFIG)
     }
 

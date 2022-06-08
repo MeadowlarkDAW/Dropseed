@@ -61,28 +61,34 @@ impl std::fmt::Debug for Schedule {
 }
 
 impl Schedule {
-    #[cfg(feature = "cpal-backend")]
-    pub fn process_cpal_interleaved_output_only<T: cpal::Sample>(
+    pub fn process_interleaved(
         &mut self,
-        num_out_channels: usize,
-        out: &mut [T],
+        audio_in: &[f32],
+        audio_in_channels: usize,
+        audio_out: &mut [f32],
+        audio_out_channels: usize,
     ) {
-        if num_out_channels == 0 || out.is_empty() {
-            for smp in out.iter_mut() {
-                *smp = T::from(&0.0);
-            }
-
-            return;
+        if audio_in_channels != 0 && audio_out_channels != 0 {
+            debug_assert_eq!(
+                audio_in.len() / audio_in_channels,
+                audio_out.len() / audio_out_channels
+            );
         }
 
-        // Get the number of frames in this process cycle
-        let total_frames = out.len() / num_out_channels;
+        let total_frames = if audio_in_channels > 0 {
+            let total_frames = audio_in.len() / audio_in_channels;
 
-        if total_frames * num_out_channels != out.len() {
-            log::warn!("The given cpal output buffer with {} total samples is not a multiple of {} channels", out.len(), num_out_channels);
-            for smp in out[(total_frames * num_out_channels)..].iter_mut() {
-                *smp = T::from(&0.0);
-            }
+            debug_assert_eq!(audio_out.len(), audio_out_channels * total_frames);
+
+            total_frames
+        } else if audio_out_channels > 0 {
+            audio_out.len() / audio_out_channels
+        } else {
+            return;
+        };
+
+        if total_frames == 0 {
+            return;
         }
 
         let mut processed_frames = 0;
@@ -94,16 +100,49 @@ impl Schedule {
                 frames,
             };
 
-            // We are ignoring sytem inputs with the CPAL backend for now.
-            for buffer in self.graph_audio_in.iter() {
-                // SAFETY
-                // - These buffers are only ever borrowed in the audio thread.
-                // - The schedule verifier has ensured that no data races can occur between parallel
-                // audio threads due to aliasing buffer pointers.
-                // - `proc_info.frames` will always be less than or equal to the allocated size of
-                // all process audio buffers.
-                unsafe {
-                    buffer.clear(proc_info.frames);
+            for (ch_i, in_buffer) in self.graph_audio_in.iter().enumerate() {
+                if ch_i < audio_in_channels {
+                    // SAFETY
+                    // - These buffers are only ever borrowed in the audio thread.
+                    // - The schedule verifier has ensured that no data races can occur between parallel
+                    // audio threads due to aliasing buffer pointers.
+                    // - `frames` will always be less than or equal to the allocated size of
+                    // all process audio buffers.
+                    let mut buffer_ref = unsafe { in_buffer.borrow_mut() };
+
+                    #[cfg(debug_assertions)]
+                    let buffer = &mut buffer_ref[0..frames];
+                    #[cfg(not(debug_assertions))]
+                    let buffer =
+                        unsafe { std::slice::from_raw_parts_mut(buffer_ref.as_mut_ptr(), frames) };
+
+                    for i in 0..proc_info.frames {
+                        #[cfg(debug_assertions)]
+                        {
+                            buffer[i] = audio_in[(i * audio_in_channels) + ch_i];
+                        }
+
+                        #[cfg(not(debug_assertions))]
+                        unsafe {
+                            *buffer.get_unchecked_mut(i) =
+                                *audio_in.get_unchecked((i * audio_in_channels) + ch_i);
+                        }
+                    }
+
+                    let mut is_constant = true;
+                    let first_val = buffer[0];
+                    for i in 0..frames {
+                        if buffer[i] != first_val {
+                            is_constant = false;
+                            break;
+                        }
+                    }
+
+                    in_buffer.set_constant(is_constant);
+                } else {
+                    unsafe {
+                        in_buffer.clear(frames);
+                    }
                 }
             }
 
@@ -111,33 +150,47 @@ impl Schedule {
                 task.process(&proc_info)
             }
 
-            let out_part = &mut out[(processed_frames * num_out_channels)
-                ..((processed_frames + frames) * num_out_channels)];
-            for ch_i in 0..num_out_channels {
+            let out_part = &mut audio_out[(processed_frames * audio_out_channels)
+                ..((processed_frames + frames) * audio_out_channels)];
+            for ch_i in 0..audio_out_channels {
                 if let Some(buffer) = self.graph_audio_out.get(ch_i) {
                     // SAFETY
                     // - These buffers are only ever borrowed in the audio thread.
                     // - The schedule verifier has ensured that no data races can occur between parallel
                     // audio threads due to aliasing buffer pointers.
-                    // - `proc_info.frames` will always be less than or equal to the allocated size of
+                    // - `frames` will always be less than or equal to the allocated size of
                     // all process audio buffers.
                     let mut buffer_ref = unsafe { buffer.borrow_mut() };
 
                     #[cfg(debug_assertions)]
-                    let buffer = &mut buffer_ref[0..proc_info.frames];
+                    let buffer = &mut buffer_ref[0..frames];
                     #[cfg(not(debug_assertions))]
-                    let buffer = unsafe {
-                        std::slice::from_raw_parts_mut(buffer_ref.as_mut_ptr(), proc_info.frames)
-                    };
+                    let buffer =
+                        unsafe { std::slice::from_raw_parts_mut(buffer_ref.as_mut_ptr(), frames) };
 
                     for i in 0..frames {
-                        // TODO: Optimize with unsafe bounds checking?
-                        out_part[(i * num_out_channels) + ch_i] = T::from(&buffer[i]);
+                        #[cfg(debug_assertions)]
+                        {
+                            out_part[(i * audio_out_channels) + ch_i] = buffer[i];
+                        }
+
+                        #[cfg(not(debug_assertions))]
+                        {
+                            *out_part.get_unchecked_mut((i * audio_out_channels) + ch_i) =
+                                *buffer.get_unchecked(i);
+                        }
                     }
                 } else {
                     for i in 0..frames {
-                        // TODO: Optimize with unsafe bounds checking?
-                        out_part[(i * num_out_channels) + ch_i] = T::from(&0.0);
+                        #[cfg(debug_assertions)]
+                        {
+                            out_part[(i * audio_out_channels) + ch_i] = 0.0;
+                        }
+
+                        #[cfg(not(debug_assertions))]
+                        {
+                            *out_part.get_unchecked_mut((i * audio_out_channels) + ch_i) = 0.0;
+                        }
                     }
                 }
             }
@@ -159,7 +212,7 @@ struct ScheduleWrapper {
 unsafe impl Send for ScheduleWrapper {}
 unsafe impl Sync for ScheduleWrapper {}
 
-pub struct SharedSchedule {
+pub(crate) struct SharedSchedule {
     schedule: Shared<SharedCell<ScheduleWrapper>>,
     thread_ids: SharedThreadIDs,
     current_audio_thread_id: Option<ThreadId>,
@@ -210,11 +263,12 @@ impl SharedSchedule {
         ));
     }
 
-    #[cfg(feature = "cpal-backend")]
-    pub fn process_cpal_interleaved_output_only<T: cpal::Sample>(
+    pub(crate) fn process_interleaved(
         &mut self,
-        num_out_channels: usize,
-        out: &mut [T],
+        audio_in: &[f32],
+        audio_in_channels: usize,
+        audio_out: &mut [f32],
+        audio_out_channels: usize,
     ) {
         let latest_schedule = self.schedule.get();
 
@@ -234,6 +288,6 @@ impl SharedSchedule {
                 .set_external_audio_thread_id(std::thread::current().id(), &self.coll_handle);
         }
 
-        schedule.process_cpal_interleaved_output_only(num_out_channels, out);
+        schedule.process_interleaved(audio_in, audio_in_channels, audio_out, audio_out_channels);
     }
 }

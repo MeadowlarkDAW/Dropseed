@@ -1,6 +1,8 @@
 //mod clap_plugin_host;
 
+mod audio_thread;
 mod engine;
+mod engine_handle;
 mod event;
 mod fixed_point;
 mod graph;
@@ -14,13 +16,16 @@ mod clap;
 pub mod plugin;
 pub mod reducing_queue;
 
-pub use engine::{EdgeReq, ModifyGraphRequest, ModifyGraphRes, PluginIDReq, RustyDAWEngine};
+pub use audio_thread::DAWEngineAudioThread;
+pub use engine::{EdgeReq, ModifyGraphRequest, ModifyGraphRes, PluginIDReq};
+pub use engine_handle::{
+    ActivateEngineSettings, DAWEngineCrashHandler, DAWEngineHandle, DAWEngineRequest,
+};
 pub use event::{DAWEngineEvent, PluginEvent, PluginScannerEvent};
 pub use fixed_point::FixedPoint64;
 pub use graph::shared_pool::PluginInstanceID;
 pub use graph::{
-    Edge, ParamGestureInfo, ParamModifiedInfo, PluginActivationStatus, PluginEdges,
-    PluginParamsExt, SharedSchedule,
+    Edge, ParamGestureInfo, ParamModifiedInfo, PluginActivationStatus, PluginEdges, PluginParamsExt,
 };
 pub use host_request::{HostInfo, HostRequest};
 pub use plugin::audio_buffer::{AudioPortBuffer, AudioPortBufferMut};

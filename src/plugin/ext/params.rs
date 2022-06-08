@@ -117,6 +117,9 @@ pub struct ParamInfo {
     pub(crate) cookie: *const c_void,
 }
 
+unsafe impl Send for ParamInfo {}
+unsafe impl Sync for ParamInfo {}
+
 impl ParamInfo {
     /// Create info for a parameter.
     ///

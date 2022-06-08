@@ -1,13 +1,11 @@
 use basedrop::Shared;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::atomic::Ordering;
 use std::{collections::HashMap, error::Error};
 
 use crate::graph::plugin_host::PluginInstanceHost;
 use crate::graph::shared_pool::{PluginInstanceID, PluginInstanceType};
 use crate::host_request::HostRequest;
-use crate::host_request::RequestFlags;
 use crate::plugin::{PluginDescriptor, PluginFactory, PluginSaveState};
 use crate::thread_id::SharedThreadIDs;
 use crate::HostInfo;
@@ -165,7 +163,7 @@ impl PluginScanner {
 
         self.scanned_external_plugins.clear();
         let mut scanned_plugins: Vec<ScannedPlugin> = Vec::new();
-        let mut failed_plugins: Vec<(PathBuf, Box<dyn Error>)> = Vec::new();
+        let mut failed_plugins: Vec<(PathBuf, Box<dyn Error + Send>)> = Vec::new();
 
         #[cfg(feature = "clap-host")]
         {
@@ -282,7 +280,7 @@ impl PluginScanner {
     pub fn scan_internal_plugin(
         &mut self,
         factory: Box<dyn PluginFactory>,
-    ) -> Result<ScannedPluginKey, Box<dyn Error>> {
+    ) -> Result<ScannedPluginKey, Box<dyn Error + Send>> {
         let description = factory.description();
 
         let key =
@@ -433,13 +431,13 @@ pub(crate) struct CreatePluginResult {
 #[derive(Debug)]
 pub struct RescanPluginDirectoriesRes {
     pub scanned_plugins: Vec<ScannedPlugin>,
-    pub failed_plugins: Vec<(PathBuf, Box<dyn Error>)>,
+    pub failed_plugins: Vec<(PathBuf, Box<dyn Error + Send>)>,
 }
 
 #[derive(Debug)]
 pub enum NewPluginInstanceError {
-    FactoryFailedToCreateNewInstance(String, Box<dyn Error>),
-    PluginFailedToInit(String, Box<dyn Error>),
+    FactoryFailedToCreateNewInstance(String, Box<dyn Error + Send>),
+    PluginFailedToInit(String, Box<dyn Error + Send>),
     NotFound(String),
     FormatNotFound(String, PluginFormat),
 }

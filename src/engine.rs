@@ -1,6 +1,6 @@
 use audio_graph::DefaultPortType;
 use basedrop::{Collector, Shared};
-use crossbeam::channel::{self, Receiver, Sender};
+use crossbeam::channel::{Receiver, Sender};
 use fnv::FnvHashSet;
 use rusty_daw_core::SampleRate;
 use std::error::Error;
@@ -9,62 +9,56 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
+use std::thread::JoinHandle;
 use std::time::Duration;
 
+use crate::audio_thread::DAWEngineAudioThread;
+use crate::engine_handle::DAWEngineRequest;
 use crate::event::{DAWEngineEvent, PluginScannerEvent};
-use crate::graph::plugin_host::OnIdleResult;
+use crate::graph::schedule::SharedSchedule;
 use crate::graph::{
-    AudioGraph, AudioGraphSaveState, Edge, NewPluginRes, PluginActivationStatus, PluginEdges,
-    PluginInstanceID, SharedSchedule,
+    AudioGraph, AudioGraphSaveState, Edge, NewPluginRes, PluginEdges, PluginInstanceID,
 };
 use crate::plugin::{PluginFactory, PluginSaveState};
 use crate::plugin_scanner::PluginScanner;
 use crate::thread_id::SharedThreadIDs;
 use crate::{host_request::HostInfo, plugin_scanner::ScannedPluginKey};
 
-pub struct RustyDAWEngine {
+static ENGINE_THREAD_UPDATE_INTERVAL: Duration = Duration::from_millis(10);
+
+pub(crate) struct RustyDAWEngine {
     audio_graph: Option<AudioGraph>,
     plugin_scanner: PluginScanner,
-    //garbage_coll_handle: Option<std::thread::JoinHandle<()>>,
-    //garbage_coll_run: Arc<AtomicBool>,
     event_tx: Sender<DAWEngineEvent>,
+    handle_to_engine_rx: Receiver<DAWEngineRequest>,
     thread_ids: SharedThreadIDs,
     collector: basedrop::Collector,
     host_info: Shared<HostInfo>,
+    run_process_thread: Option<Arc<AtomicBool>>,
+    process_thread_handle: Option<JoinHandle<()>>,
 }
 
 impl RustyDAWEngine {
-    pub fn new(
+    pub(crate) fn new(
         host_info: HostInfo,
         mut internal_plugins: Vec<Box<dyn PluginFactory>>,
-    ) -> (Self, Receiver<DAWEngineEvent>, Vec<Result<ScannedPluginKey, Box<dyn Error>>>) {
+        handle_to_engine_rx: Receiver<DAWEngineRequest>,
+        event_tx: Sender<DAWEngineEvent>,
+    ) -> (Self, Vec<Result<ScannedPluginKey, Box<dyn Error + Send>>>) {
         // Set up and run garbage collector wich collects and safely drops garbage from
         // the audio thread.
         let collector = Collector::new();
 
-        /*
-        let coll_handle = collector.handle();
-        let garbage_coll_run = Arc::new(AtomicBool::new(true));
-        let garbage_coll_handle = run_garbage_collector_thread(
-            collector,
-            garbage_collect_interval,
-            Arc::clone(&garbage_coll_run),
-        );
-        */
-
         let host_info = Shared::new(&collector.handle(), host_info);
 
-        // TODO: Set this in the sandbox thread once we have plugin sandboxing implemented.
         let thread_ids =
             SharedThreadIDs::new(Some(std::thread::current().id()), None, &collector.handle());
 
         let mut plugin_scanner =
             PluginScanner::new(collector.handle(), Shared::clone(&host_info), thread_ids.clone());
 
-        let (event_tx, event_rx) = channel::unbounded::<DAWEngineEvent>();
-
         // Scan the user's internal plugins.
-        let internal_plugins_res: Vec<Result<ScannedPluginKey, Box<dyn Error>>> =
+        let internal_plugins_res: Vec<Result<ScannedPluginKey, Box<dyn Error + Send>>> =
             internal_plugins.drain(..).map(|p| plugin_scanner.scan_internal_plugin(p)).collect();
 
         (
@@ -74,20 +68,38 @@ impl RustyDAWEngine {
                 //garbage_coll_handle: Some(garbage_coll_handle),
                 //garbage_coll_run,
                 event_tx,
+                handle_to_engine_rx,
                 thread_ids,
                 collector,
                 //coll_handle,
                 host_info,
+                run_process_thread: None,
+                process_thread_handle: None,
             },
-            event_rx,
             internal_plugins_res,
         )
     }
 
-    pub fn get_graph_input_node_key(&self) {}
+    pub fn run(&mut self, run: Arc<AtomicBool>) {
+        while run.load(Ordering::Relaxed) {
+            // TODO: Poll events from handle.
+
+            if let Some(audio_graph) = &mut self.audio_graph {
+                let recompile = audio_graph.on_idle(Some(&mut self.event_tx));
+
+                if recompile {
+                    self.compile_audio_graph();
+                }
+            }
+
+            self.collector.collect();
+
+            std::thread::sleep(ENGINE_THREAD_UPDATE_INTERVAL);
+        }
+    }
 
     #[cfg(feature = "clap-host")]
-    pub fn add_clap_scan_directory<P: Into<PathBuf>>(&mut self, path: P) {
+    fn add_clap_scan_directory<P: Into<PathBuf>>(&mut self, path: P) {
         let path: PathBuf = path.into();
         if self.plugin_scanner.add_clap_scan_directory(path.clone()) {
             self.event_tx.send(PluginScannerEvent::ClapScanPathAdded(path).into()).unwrap();
@@ -95,19 +107,19 @@ impl RustyDAWEngine {
     }
 
     #[cfg(feature = "clap-host")]
-    pub fn remove_clap_scan_directory<P: Into<PathBuf>>(&mut self, path: P) {
+    fn remove_clap_scan_directory<P: Into<PathBuf>>(&mut self, path: P) {
         let path: PathBuf = path.into();
         if self.plugin_scanner.remove_clap_scan_directory(path.clone()) {
             self.event_tx.send(PluginScannerEvent::ClapScanPathRemoved(path).into()).unwrap();
         }
     }
 
-    pub fn rescan_plugin_directories(&mut self) {
+    fn rescan_plugin_directories(&mut self) {
         let res = self.plugin_scanner.rescan_plugin_directories();
         self.event_tx.send(PluginScannerEvent::RescanFinished(res).into()).unwrap();
     }
 
-    pub fn activate_engine(
+    fn activate_engine(
         &mut self,
         sample_rate: SampleRate,
         min_frames: u32,
@@ -160,8 +172,33 @@ impl RustyDAWEngine {
         if let Some(audio_graph) = &self.audio_graph {
             log::info!("Successfully activated RustyDAW engine");
 
-            let info = EngineActivatedInfo {
+            let (audio_thread, mut process_thread) = DAWEngineAudioThread::new(
+                num_audio_in_channels as usize,
+                num_audio_out_channels as usize,
+                &self.collector.handle(),
                 shared_schedule,
+                sample_rate,
+            );
+
+            let run_process_thread = Arc::new(AtomicBool::new(true));
+
+            let run_process_thread_clone = Arc::clone(&run_process_thread);
+
+            if let Some(run_process_thread) = self.run_process_thread.take() {
+                // Just to be sure.
+                run_process_thread.store(false, Ordering::Relaxed);
+            }
+            self.run_process_thread = Some(run_process_thread);
+
+            // TODO: Spawn a high priority thread.
+            let process_thread_handle = std::thread::spawn(move || {
+                process_thread.run(run_process_thread_clone);
+            });
+
+            self.process_thread_handle = Some(process_thread_handle);
+
+            let info = EngineActivatedInfo {
+                audio_thread,
                 graph_in_node_id: audio_graph.graph_in_node_id().clone(),
                 graph_out_node_id: audio_graph.graph_out_node_id().clone(),
                 sample_rate,
@@ -178,7 +215,7 @@ impl RustyDAWEngine {
         }
     }
 
-    pub fn modify_graph(&mut self, mut req: ModifyGraphRequest) {
+    fn modify_graph(&mut self, mut req: ModifyGraphRequest) {
         if let Some(audio_graph) = &mut self.audio_graph {
             let mut affected_plugins: FnvHashSet<PluginInstanceID> = FnvHashSet::default();
 
@@ -309,7 +346,7 @@ impl RustyDAWEngine {
         }
     }
 
-    pub fn deactivate_engine(&mut self) {
+    fn deactivate_engine(&mut self) {
         if self.audio_graph.is_none() {
             log::warn!("Ignored request to deactivate engine: Engine is already deactivated");
             return;
@@ -321,10 +358,15 @@ impl RustyDAWEngine {
 
         self.audio_graph = None;
 
+        if let Some(run_process_thread) = self.run_process_thread.take() {
+            run_process_thread.store(false, Ordering::Relaxed);
+        }
+        self.process_thread_handle = None;
+
         self.event_tx.send(DAWEngineEvent::EngineDeactivated(Ok(save_state))).unwrap();
     }
 
-    pub fn restore_audio_graph_from_save_state(&mut self, save_state: &AudioGraphSaveState) {
+    fn restore_audio_graph_from_save_state(&mut self, save_state: &AudioGraphSaveState) {
         if self.audio_graph.is_none() {
             log::warn!(
                 "Ignored request to restore audio graph from save state: Engine is deactivated"
@@ -363,7 +405,7 @@ impl RustyDAWEngine {
         }
     }
 
-    pub fn request_latest_save_state(&mut self) {
+    fn request_latest_save_state(&mut self) {
         if self.audio_graph.is_none() {
             log::warn!(
                 "Ignored request for the latest audio graph save state: Engine is deactivated"
@@ -377,20 +419,6 @@ impl RustyDAWEngine {
         let save_state = self.audio_graph.as_mut().unwrap().collect_save_state();
 
         self.event_tx.send(DAWEngineEvent::NewSaveState(save_state)).unwrap();
-    }
-
-    /// Call this method periodically (every other frame or so). This is needed to properly
-    /// handle the state of plugins.
-    pub fn on_idle(&mut self) {
-        if let Some(audio_graph) = &mut self.audio_graph {
-            let recompile = audio_graph.on_idle(Some(&mut self.event_tx));
-
-            if recompile {
-                self.compile_audio_graph();
-            }
-        }
-
-        self.collector.collect();
     }
 
     fn compile_audio_graph(&mut self) {
@@ -415,35 +443,32 @@ impl RustyDAWEngine {
 
 impl Drop for RustyDAWEngine {
     fn drop(&mut self) {
+        if let Some(run_process_thread) = self.run_process_thread.take() {
+            run_process_thread.store(false, Ordering::Relaxed);
+
+            if let Some(process_thread_handle) = self.process_thread_handle.take() {
+                if let Err(e) = process_thread_handle.join() {
+                    log::error!("Failed to join process thread handle: {:?}", e);
+                }
+            }
+        }
+
         // Make sure all of the stuff in the audio thread gets dropped properly.
         let _ = self.audio_graph;
 
         self.collector.collect();
-
-        /*
-        self.garbage_coll_run.store(false, Ordering::Relaxed);
-        if let Some(handle) = self.garbage_coll_handle.take() {
-            if let Err(e) = handle.join() {
-                log::error!("Error while stopping garbage collector thread: {:?}", e);
-            }
-        }
-        */
     }
 }
 
-#[derive(Debug)]
 pub struct EngineActivatedInfo {
-    /// The realtime-safe shared audio graph schedule.
+    /// The realtime-safe channel for the audio thread to interface with
+    /// the engine.
     ///
     /// Send this to the audio thread to be run.
     ///
-    /// This will automatically sync with any changes in the audio
-    /// graph engine, so no further schedules need to be sent to
-    /// the audio thread (until the engine is deactivated).
-    ///
     /// When a `DAWEngineEvent::EngineDeactivated` event is recieved, send
-    /// a signal to the audio thread to drop this schedule.
-    pub shared_schedule: SharedSchedule,
+    /// a signal to the audio thread to drop this.
+    pub audio_thread: DAWEngineAudioThread,
 
     /// The ID for the input to the audio graph. Use this to connect any
     /// plugins to system inputs.
@@ -458,6 +483,22 @@ pub struct EngineActivatedInfo {
     pub max_frames: u32,
     pub num_audio_in_channels: u16,
     pub num_audio_out_channels: u16,
+}
+
+impl std::fmt::Debug for EngineActivatedInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut f = f.debug_struct("EngineActivatedInfo");
+
+        f.field("graph_in_node_id", &self.graph_in_node_id);
+        f.field("graph_out_node_id", &self.graph_out_node_id);
+        f.field("sample_rate", &self.sample_rate);
+        f.field("min_frames", &self.min_frames);
+        f.field("max_frames", &self.max_frames);
+        f.field("num_audio_in_channels", &self.num_audio_in_channels);
+        f.field("num_audio_out_channels", &self.num_audio_out_channels);
+
+        f.finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

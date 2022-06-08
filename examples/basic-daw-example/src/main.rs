@@ -4,9 +4,9 @@ use crossbeam::channel::Receiver;
 use eframe::egui;
 use rusty_daw_core::SampleRate;
 use rusty_daw_engine::{
-    DAWEngineEvent, Edge, EdgeReq, HostInfo, ModifyGraphRequest, PluginActivationStatus,
-    PluginEdges, PluginEvent, PluginIDReq, PluginInstanceID, PluginScannerEvent, PortType,
-    RustyDAWEngine, ScannedPlugin, SharedSchedule,
+    DAWEngineAudioThread, DAWEngineEvent, DAWEngineHandle, Edge, EdgeReq, HostInfo,
+    ModifyGraphRequest, PluginActivationStatus, PluginEdges, PluginEvent, PluginIDReq,
+    PluginInstanceID, PluginScannerEvent, PortType, ScannedPlugin,
 };
 use std::time::Duration;
 
@@ -37,7 +37,7 @@ fn main() {
     let num_out_channels = usize::from(config.channels());
     let sample_rate: SampleRate = config.sample_rate().0.into();
 
-    let mut shared_schedule: Option<SharedSchedule> = None;
+    let mut audio_thread: Option<DAWEngineAudioThread> = None;
 
     let cpal_stream = device
         .build_output_stream(

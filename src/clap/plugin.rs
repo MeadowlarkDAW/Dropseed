@@ -70,7 +70,7 @@ pub(crate) fn entry_init(
     plugin_path: &PathBuf,
     thread_ids: SharedThreadIDs,
     coll_handle: &basedrop::Handle,
-) -> Result<Vec<ClapPluginFactory>, Box<dyn Error>> {
+) -> Result<Vec<ClapPluginFactory>, Box<dyn Error + Send>> {
     log::trace!("clap entry init at path {:?}", plugin_path);
 
     // "Safe" because we acknowledge the risk of running foreign code in external
@@ -78,49 +78,70 @@ pub(crate) fn entry_init(
     //
     // TODO: We should use sandboxing to make this even more safe and to
     // gaurd against plugin crashes from bringing down the whole application.
-    let lib = unsafe { libloading::Library::new(plugin_path)? };
+    let lib = unsafe {
+        match libloading::Library::new(plugin_path) {
+            Ok(lib) => lib,
+            Err(e) => {
+                return Err(Box::new(e));
+            }
+        }
+    };
 
     // Safe because this is the correct type for this symbol.
-    let entry: libloading::Symbol<*const RawClapEntry> = unsafe { lib.get(b"clap_entry\0")? };
+    let entry: libloading::Symbol<*const RawClapEntry> = unsafe {
+        match lib.get(b"clap_entry\0") {
+            Ok(entry) => entry,
+            Err(e) => {
+                return Err(Box::new(e));
+            }
+        }
+    };
 
     // Safe because we are storing the library in this struct itself, ensuring
     // that the lifetime of this doesn't outlive the lifetime of the library.
     let raw_entry = unsafe { *entry.into_raw() };
 
     if raw_entry.is_null() {
-        return Err(
-            format!("Plugin from path {:?} has a null pointer for raw_entry", plugin_path).into()
-        );
+        return Err(StringError(format!(
+            "Plugin from path {:?} has a null pointer for raw_entry",
+            plugin_path
+        ))
+        .into());
     }
 
     // Safe because we checked that this was not null.
     let clap_version = unsafe { (*raw_entry).clap_version };
 
     if !clap_sys::version::clap_version_is_compatible(clap_version) {
-        return Err(format!(
+        return Err(StringError(format!(
             "Plugin from path {:?} has an incompatible clap version {}.{}.{}. Host version is {}.{}.{}",
             plugin_path, clap_version.major, clap_version.minor, clap_version.revision,
             clap_sys::version::CLAP_VERSION_MAJOR, clap_sys::version::CLAP_VERSION_MINOR, clap_sys::version::CLAP_VERSION_REVISION,
-        )
+        ))
         .into());
     }
 
     let plugin_path_parent_folder = plugin_path
         .parent()
         .map(|p| p.to_path_buf())
-        .ok_or(format!("Plugin path {:?} cannot be in the root path", plugin_path))?;
+        .ok_or(StringError(format!("Plugin path {:?} cannot be in the root path", plugin_path)))?;
 
-    let c_path = CString::new(plugin_path_parent_folder.to_string_lossy().to_string())?;
+    let c_path = match CString::new(plugin_path_parent_folder.to_string_lossy().to_string()) {
+        Ok(c_path) => c_path,
+        Err(e) => {
+            return Err(Box::new(e));
+        }
+    };
 
     // Safe because this is the correct format of this function as described in the
     // CLAP spec.
     let init_res = unsafe { ((&*raw_entry).init)(c_path.as_ptr()) };
 
     if !init_res {
-        return Err(format!(
+        return Err(StringError(format!(
             "Plugin from path {:?} returned false while calling clap_plugin_entry.init()",
             plugin_path
-        )
+        ))
         .into());
     }
 
@@ -130,10 +151,10 @@ pub(crate) fn entry_init(
         as *const RawClapPluginFactory;
 
     if raw_factory.is_null() {
-        return Err(format!(
+        return Err(StringError(format!(
             "Plugin from path {:?} returned null while calling clap_plugin_entry.get_factory()",
             plugin_path
-        )
+        ))
         .into());
     }
 
@@ -144,10 +165,10 @@ pub(crate) fn entry_init(
     let num_plugins = unsafe { ((&*raw_factory).get_plugin_count)(raw_factory) };
 
     if num_plugins == 0 {
-        return Err(format!(
+        return Err(StringError(format!(
             "Plugin from path {:?} returned 0 while calling clap_plugin_factory.get_plugin_count()",
             plugin_path
-        )
+        ))
         .into());
     }
 
@@ -160,7 +181,12 @@ pub(crate) fn entry_init(
 
         log::trace!("clap plugin instance parse descriptor {:?}", plugin_path);
 
-        let descriptor = parse_clap_plugin_descriptor(raw_descriptor, plugin_path, i)?;
+        let descriptor = match parse_clap_plugin_descriptor(raw_descriptor, plugin_path, i) {
+            Ok(descriptor) => descriptor,
+            Err(e) => {
+                return Err(StringError(e).into());
+            }
+        };
 
         let id = Shared::new(coll_handle, descriptor.id.clone());
 
@@ -207,7 +233,7 @@ impl PluginFactory for ClapPluginFactory {
         host_request: HostRequest,
         plugin_id: PluginInstanceID,
         main_thread_coll_handle: &basedrop::Handle,
-    ) -> Result<Box<dyn PluginMainThread>, Box<dyn Error>> {
+    ) -> Result<Box<dyn PluginMainThread>, Box<dyn Error + Send>> {
         log::trace!("clap plugin factory new {}", &*self.id);
 
         let mut clap_host_request = ClapHostRequest::new(
@@ -228,10 +254,10 @@ impl PluginFactory for ClapPluginFactory {
         clap_host_request.plugin_created();
 
         if raw_plugin.is_null() {
-            return Err(format!(
+            return Err(StringError(format!(
                 "Plugin with ID {} returned null while calling clap_plugin_factory.create_plugin()",
                 &self.descriptor.id
-            )
+            ))
             .into());
         }
 
@@ -241,10 +267,10 @@ impl PluginFactory for ClapPluginFactory {
                 ((&*raw_plugin).destroy)(raw_plugin);
             }
 
-            return Err(format!(
+            return Err(StringError(format!(
                 "Plugin with ID {} returned false while calling clap_plug.init()",
                 &self.descriptor.id
-            )
+            ))
             .into());
         }
 
@@ -322,11 +348,14 @@ pub(crate) struct ClapPluginMainThread {
 impl ClapPluginMainThread {
     fn parse_audio_ports_extension(
         &self,
-    ) -> Result<ext::audio_ports::PluginAudioPortsExt, Box<dyn Error>> {
+    ) -> Result<ext::audio_ports::PluginAudioPortsExt, Box<dyn Error + Send>> {
         log::trace!("clap plugin instance parse audio ports extension {}", &*self.shared_plugin.id);
 
         if self.shared_plugin.activated.load(Ordering::Relaxed) {
-            return Err("Cannot get audio ports extension while plugin is active".into());
+            return Err(StringError(
+                "Cannot get audio ports extension while plugin is active".into(),
+            )
+            .into());
         }
 
         use clap_sys::ext::audio_ports::clap_audio_port_info as RawAudioPortInfo;
@@ -374,11 +403,11 @@ impl ClapPluginMainThread {
                 )
             };
             if !res {
-                return Err(format!("Failed to get audio port extension from clap plugin instance {}: plugin returned false on call to clap_plugin_audio_ports.get(plugin, {}, true, info)", &*self.shared_plugin.id, i).into());
+                return Err(StringError(format!("Failed to get audio port extension from clap plugin instance {}: plugin returned false on call to clap_plugin_audio_ports.get(plugin, {}, true, info)", &*self.shared_plugin.id, i)).into());
             }
 
             if raw_audio_port_info.channel_count == 0 {
-                return Err(format!("Failed to get audio port extension from clap plugin instance {}: the input port at index {} has 0 channels", &*self.shared_plugin.id, i).into());
+                return Err(StringError(format!("Failed to get audio port extension from clap plugin instance {}: the input port at index {} has 0 channels", &*self.shared_plugin.id, i)).into());
             }
 
             raw_in_info.push(raw_audio_port_info);
@@ -404,11 +433,11 @@ impl ClapPluginMainThread {
                 )
             };
             if !res {
-                return Err(format!("Failed to get audio port extension from clap plugin instance {}: plugin returned false on call to clap_plugin_audio_ports.get(plugin, {}, false, info)", &*self.shared_plugin.id, i).into());
+                return Err(StringError(format!("Failed to get audio port extension from clap plugin instance {}: plugin returned false on call to clap_plugin_audio_ports.get(plugin, {}, false, info)", &*self.shared_plugin.id, i)).into());
             }
 
             if raw_audio_port_info.channel_count == 0 {
-                return Err(format!("Failed to get audio port extension from clap plugin instance {}: the output port at index {} has 0 channels", &*self.shared_plugin.id, i).into());
+                return Err(StringError(format!("Failed to get audio port extension from clap plugin instance {}: the output port at index {} has 0 channels", &*self.shared_plugin.id, i)).into());
             }
 
             raw_out_info.push(raw_audio_port_info);
@@ -521,7 +550,11 @@ impl PluginMainThread for ClapPluginMainThread {
     ///
     /// `[main-thread & !active_state]`
     #[allow(unused)]
-    fn init(&mut self, _preset: (), coll_handle: &basedrop::Handle) -> Result<(), Box<dyn Error>> {
+    fn init(
+        &mut self,
+        _preset: (),
+        coll_handle: &basedrop::Handle,
+    ) -> Result<(), Box<dyn Error + Send>> {
         log::trace!("clap plugin instance init {}", &*self.shared_plugin.id);
 
         let res =
@@ -530,10 +563,10 @@ impl PluginMainThread for ClapPluginMainThread {
         if res {
             Ok(())
         } else {
-            Err(format!(
+            Err(StringError(format!(
                 "Plugin with ID {} returned false on call to clap_plugin.init()",
                 &*self.shared_plugin.id
-            )
+            ))
             .into())
         }
     }
@@ -553,9 +586,9 @@ impl PluginMainThread for ClapPluginMainThread {
         min_frames: u32,
         max_frames: u32,
         _coll_handle: &basedrop::Handle,
-    ) -> Result<Box<dyn PluginAudioThread>, Box<dyn Error>> {
+    ) -> Result<Box<dyn PluginAudioThread>, Box<dyn Error + Send>> {
         if self.shared_plugin.activated.load(Ordering::Relaxed) {
-            return Err("Plugin already activated".into());
+            return Err(StringError("Plugin already activated".into()).into());
         }
 
         log::trace!("clap plugin instance activate {}", &*self.shared_plugin.id);
@@ -581,10 +614,10 @@ impl PluginMainThread for ClapPluginMainThread {
                 task_version: std::u64::MAX,
             }))
         } else {
-            return Err(format!(
+            return Err(StringError(format!(
                 "Plugin with ID {} returned false on call to clap_plugin.activate()",
                 &*self.shared_plugin.id
-            )
+            ))
             .into());
         }
     }
@@ -629,7 +662,7 @@ impl PluginMainThread for ClapPluginMainThread {
     /// [main-thread & !active_state]
     fn audio_ports_ext(
         &mut self,
-    ) -> Result<&ext::audio_ports::PluginAudioPortsExt, Box<dyn Error>> {
+    ) -> Result<&ext::audio_ports::PluginAudioPortsExt, Box<dyn Error + Send>> {
         match self.parse_audio_ports_extension() {
             Ok(audio_ports_ext) => {
                 self.audio_ports_ext = Some(audio_ports_ext);
@@ -957,4 +990,27 @@ fn parse_clap_plugin_descriptor(
     // TODO: features
 
     Ok(PluginDescriptor { id, name, version, vendor, description, url, manual_url, support_url })
+}
+
+#[derive(Debug)]
+struct StringError(String);
+
+impl Error for StringError {}
+
+impl std::fmt::Display for StringError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", &self.0)
+    }
+}
+
+impl From<String> for StringError {
+    fn from(s: String) -> Self {
+        StringError(s)
+    }
+}
+
+impl From<StringError> for Box<dyn Error + Send> {
+    fn from(e: StringError) -> Self {
+        Box::new(e)
+    }
 }

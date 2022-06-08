@@ -3,7 +3,6 @@ use rusty_daw_core::SampleRate;
 use smallvec::SmallVec;
 use std::error::Error;
 use std::fmt::Debug;
-use std::sync::atomic::AtomicBool;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
     Arc,
@@ -64,8 +63,6 @@ pub struct PluginParamsExt {
 
     ui_to_audio_param_value_tx: Option<ReducFnvProducer<ParamID, MainToAudioParamValue>>,
     ui_to_audio_param_mod_tx: Option<ReducFnvProducer<ParamID, MainToAudioParamValue>>,
-
-    ui_to_main_param_display_requested: Arc<AtomicBool>,
 }
 
 impl Debug for PluginParamsExt {
@@ -102,10 +99,6 @@ impl PluginParamsExt {
         } else {
             log::warn!("Ignored request to set parameter mod amount: plugin has no parameters");
         }
-    }
-
-    pub fn request_formatting_values(&mut self, do_format: bool) {
-        self.ui_to_main_param_display_requested.store(do_format, Ordering::SeqCst);
     }
 }
 
@@ -777,10 +770,10 @@ pub enum ActivatePluginError {
     NotLoaded,
     AlreadyActive,
     RestartScheduled,
-    PluginFailedToGetAudioPortsExt(Box<dyn Error>),
+    PluginFailedToGetAudioPortsExt(Box<dyn Error + Send>),
     PluginFailedToGetParamInfo(usize),
     PluginFailedToGetParamValue(ParamID),
-    PluginSpecific(Box<dyn Error>),
+    PluginSpecific(Box<dyn Error + Send>),
 }
 
 impl Error for ActivatePluginError {}
@@ -813,8 +806,8 @@ impl std::fmt::Display for ActivatePluginError {
     }
 }
 
-impl From<Box<dyn Error>> for ActivatePluginError {
-    fn from(e: Box<dyn Error>) -> Self {
+impl From<Box<dyn Error + Send>> for ActivatePluginError {
+    fn from(e: Box<dyn Error + Send>) -> Self {
         ActivatePluginError::PluginSpecific(e)
     }
 }

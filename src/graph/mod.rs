@@ -8,14 +8,14 @@ use smallvec::SmallVec;
 use std::error::Error;
 
 pub(crate) mod plugin_host;
+pub(crate) mod schedule;
 pub(crate) mod shared_pool;
 
 mod compiler;
 mod save_state;
-mod schedule;
 mod verifier;
 
-use schedule::Schedule;
+use schedule::{Schedule, SharedSchedule};
 use shared_pool::{PluginInstanceHostEntry, SharedBufferPool, SharedPluginPool};
 use verifier::Verifier;
 
@@ -30,7 +30,6 @@ use crate::ParamID;
 pub use compiler::GraphCompilerError;
 pub use plugin_host::{ActivatePluginError, ParamGestureInfo, ParamModifiedInfo, PluginParamsExt};
 pub use save_state::{AudioGraphSaveState, EdgeSaveState};
-pub use schedule::SharedSchedule;
 pub use shared_pool::PluginInstanceID;
 pub use verifier::VerifyScheduleError;
 
