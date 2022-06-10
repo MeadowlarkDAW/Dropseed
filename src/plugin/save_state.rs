@@ -1,4 +1,4 @@
-use crate::engine::sandboxed::plugin_scanner::ScannedPluginKey;
+use crate::engine::plugin_scanner::ScannedPluginKey;
 
 #[derive(Debug, Clone)]
 pub struct PluginSaveState {

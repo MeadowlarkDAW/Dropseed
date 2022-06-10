@@ -4,8 +4,8 @@ use std::error::Error;
 use std::path::PathBuf;
 
 use crate::{
-    engine::sandboxed::main_thread::{EngineActivatedInfo, ModifyGraphRes},
-    engine::sandboxed::plugin_scanner::RescanPluginDirectoriesRes,
+    engine::main_thread::{EngineActivatedInfo, ModifyGraphRes},
+    engine::plugin_scanner::RescanPluginDirectoriesRes,
     graph::{
         plugin_host::PluginParamsExt, ActivatePluginError, AudioGraphSaveState, ParamModifiedInfo,
         PluginInstanceID,

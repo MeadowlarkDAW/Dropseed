@@ -12,7 +12,7 @@ use std::{
 
 use crate::graph::schedule::SharedSchedule;
 
-static PROCESS_THREAD_POLL_INTERVAL: Duration = Duration::from_micros(20);
+static PROCESS_THREAD_POLL_INTERVAL: Duration = Duration::from_micros(5);
 
 pub(crate) struct DAWEngineProcessThread {
     to_audio_thread_audio_out_tx: Producer<f32>,
@@ -55,11 +55,12 @@ impl DAWEngineProcessThread {
     }
 
     pub fn run(&mut self, run: Arc<AtomicBool>, max_block_size: u32, sample_rate: SampleRate) {
+        /*
         let _rt_priority_handle = match audio_thread_priority::get_current_thread_info() {
             Ok(thread_info) => {
                 match audio_thread_priority::promote_thread_to_real_time(
                     thread_info,
-                    max_block_size,
+                    max_block_size * 16,
                     sample_rate.as_u32(),
                 ) {
                     Ok(h) => {
@@ -77,6 +78,7 @@ impl DAWEngineProcessThread {
                 None
             }
         };
+        */
 
         while run.load(Ordering::Relaxed) {
             let num_frames = if let Some(num_frames_wanted) = &self.num_frames_wanted {

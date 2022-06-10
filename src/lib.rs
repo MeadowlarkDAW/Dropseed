@@ -15,10 +15,10 @@ pub use engine::events::from_engine::{
 };
 pub use engine::events::to_engine::DAWEngineRequest;
 pub use engine::handle::DAWEngineHandle;
-pub use engine::sandboxed::main_thread::{
+pub use engine::main_thread::{
     ActivateEngineSettings, EdgeReq, ModifyGraphRequest, ModifyGraphRes, PluginIDReq,
 };
-pub use engine::sandboxed::plugin_scanner::{ScannedPlugin, ScannedPluginKey};
+pub use engine::plugin_scanner::{ScannedPlugin, ScannedPluginKey};
 pub use graph::shared_pool::PluginInstanceID;
 pub use graph::{
     AudioGraphSaveState, Edge, ParamGestureInfo, ParamModifiedInfo, PluginActivationStatus,

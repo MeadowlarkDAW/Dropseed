@@ -9,9 +9,7 @@ use std::sync::{
     Arc,
 };
 
-#[cfg(debug_assertions)]
 use maybe_atomic_refcell::{MaybeAtomicRef, MaybeAtomicRefMut};
-#[cfg(debug_assertions)]
 use smallvec::SmallVec;
 
 use clap_sys::entry::clap_plugin_entry as RawClapEntry;

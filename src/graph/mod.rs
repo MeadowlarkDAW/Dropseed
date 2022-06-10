@@ -21,7 +21,7 @@ use shared_pool::{PluginInstanceHostEntry, SharedBufferPool, SharedPluginPool};
 use verifier::Verifier;
 
 use crate::engine::events::from_engine::{DAWEngineEvent, PluginEvent};
-use crate::engine::sandboxed::plugin_scanner::{NewPluginInstanceError, PluginScanner};
+use crate::engine::plugin_scanner::{NewPluginInstanceError, PluginScanner};
 use crate::graph::plugin_host::PluginInstanceHost;
 use crate::graph::shared_pool::SharedPluginHostAudioThread;
 use crate::plugin::ext::audio_ports::PluginAudioPortsExt;

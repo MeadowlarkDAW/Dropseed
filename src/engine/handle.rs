@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use crate::engine::events::from_engine::DAWEngineEvent;
 use crate::engine::events::to_engine::DAWEngineRequest;
-use crate::engine::sandboxed::main_thread::DAWEngineMainThread;
-use crate::engine::sandboxed::plugin_scanner::ScannedPluginKey;
+use crate::engine::main_thread::DAWEngineMainThread;
+use crate::engine::plugin_scanner::ScannedPluginKey;
 use crate::plugin::host_request::HostInfo;
 use crate::plugin::PluginFactory;
 

@@ -8,13 +8,13 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-use super::sandboxed::process_thread::DAWEngineProcessThread;
+use super::process_thread::DAWEngineProcessThread;
 use crate::graph::schedule::SharedSchedule;
 
 // Allocate enough for at-least 3 seconds of buffer time.
 static ALLOCATED_FRAMES_PER_CHANNEL: usize = 192_000 * 3;
 
-static AUDIO_THREAD_POLL_INTERVAL: Duration = Duration::from_micros(20);
+static AUDIO_THREAD_POLL_INTERVAL: Duration = Duration::from_micros(5);
 
 /// Make sure we have a bit of time to copy the engine's output buffer to the
 /// audio thread's output buffer.
@@ -227,6 +227,8 @@ impl DAWEngineAudioThread {
 
             std::thread::sleep(AUDIO_THREAD_POLL_INTERVAL);
         }
+
+        log::trace!("underrun");
 
         // The engine took too long to process.
         clear_output(out);

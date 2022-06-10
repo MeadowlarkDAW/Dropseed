@@ -58,11 +58,9 @@ impl SharedThreadIDs {
         }
     }
 
-    /*
     pub fn set_external_main_thread_id(&self, id: ThreadId, coll_handle: &basedrop::Handle) {
         self.external_main_thread_id.set(Shared::new(coll_handle, Some(id)));
     }
-    */
 
     pub fn set_external_audio_thread_id(&self, id: ThreadId, coll_handle: &basedrop::Handle) {
         self.external_audio_thread_id.set(Shared::new(coll_handle, Some(id)));

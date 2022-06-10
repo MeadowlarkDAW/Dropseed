@@ -6,6 +6,7 @@ use std::sync::{
     Arc,
 };
 
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ParamID(pub(crate) u32);
 

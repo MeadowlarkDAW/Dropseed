@@ -8,302 +8,135 @@
 //! the spec such as plugin description and audio port configuration.
 
 use bitflags::bitflags;
+use std::hash::Hash;
+
+use clap_sys::events::clap_event_flags as ClapEventFlags;
+use clap_sys::events::clap_event_header as ClapEventHeader;
+use clap_sys::events::clap_event_midi as ClapEventMidi;
+use clap_sys::events::clap_event_midi2 as ClapEventMidi2;
+use clap_sys::events::clap_event_midi_sysex as ClapEventMidiSysex;
+use clap_sys::events::clap_event_note as ClapEventNote;
+use clap_sys::events::clap_event_note_expression as ClapEventNoteExpression;
+use clap_sys::events::clap_event_param_gesture as ClapEventParamGesture;
+use clap_sys::events::clap_event_param_mod as ClapEventParamMod;
+use clap_sys::events::clap_event_param_value as ClapEventParamValue;
+use clap_sys::events::clap_event_transport as ClapEventTransport;
+use clap_sys::events::clap_transport_flags as ClapTransportFlags;
 
 use crate::{FixedPoint64, ParamID};
 
 pub mod event_queue;
 
-pub enum PluginEvent<'a> {
-    Note(&'a EventNote),
-    NoteExpression(&'a EventNoteExpression),
-    ParamValue(&'a EventParamValue),
-    ParamMod(&'a EventParamMod),
-    ParamGesture(&'a EventParamGesture),
-    Transport(&'a EventTransport),
-    Midi(&'a EventMidi),
-    MidiSysex(&'a EventMidiSysex),
-    Midi2(&'a EventMidi2),
-}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EventBeatTime(pub(crate) FixedPoint64);
 
-#[repr(u16)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NoteEventType {
-    /// Represents a key pressed event.
-    NoteOn = 0,
-    /// Represents a key released event.
-    NoteOff = 1,
-    /// This is meant to choke the voice(s), like in a drum machine when a closed hihat
-    /// chokes an open hihat.
-    NoteChoke = 2,
-    /// This is sent by the plugin to the host. The port, channel and key are those given
-    /// by the host in the `NoteOn` event. In other words, this event is matched against the
-    /// plugin's note input port. `NoteEnd` is only requiered if the plugin marked at least
-    /// one of its parameters as polyphonic.
-    ///
-    /// When using polyphonic modulations, the host has to allocate and release voices for its
-    /// polyphonic modulator. Yet only the plugin effectively knows when the host should terminate
-    /// a voice. `NoteEnd` solves that issue in a non-intrusive and cooperative way.
-    ///
-    /// This assumes that the host will allocate a unique voice on a `NoteOn` event for a given port,
-    /// channel and key. This voice will run until the plugin will instruct the host to terminate
-    /// it by sending a `NoteEnd` event.
-    ///
-    /// Consider the following sequence:
-    /// - process()
-    ///    - Host->Plugin NoteOn(port:0, channel:0, key:16, time:t0)
-    ///    - Host->Plugin NoteOn(port:0, channel:0, key:64, time:t0)
-    ///    - Host->Plugin NoteOff(port:0, channel:0, key:16, t1)
-    ///    - Host->Plugin NoteOff(port:0, channel:0, key:64, t1)
-    ///         - on t2, both notes did terminate
-    ///    - Host->Plugin NoteOn(port:0, channel:0, key:64, t3)
-    ///         - Here the plugin finished to process all the frames and will tell the host
-    ///         to terminate the voice on key 16 but not 64, because a note has been started at t3
-    ///    - Plugin->Host NoteEnd(port:0, channel:0, key:16, time:ignored)
-    NoteEnd = 3,
-}
-
-#[repr(u16)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ParamGestureEventType {
-    /// Indicates that a parameter gesture has begun.
-    ParamGestureBegin = 7,
-    /// Indicates that a parameter gesture has ended.
-    ParamGestureEnd = 8,
-}
-
-/// Some of the following events overlap, a note on can be expressed with:
-/// - `EventType::NoteOn`
-/// - `EventType::Midi`
-/// - `EventType::Midi2`
-///
-/// The preferred way of sending a note event is to use `EventType::Note*`.
-///
-/// The same event must not be sent twice: it is forbidden to send the same note on
-/// encoded with both `EventType::NoteOn` and `EventType::Midi`.
-///
-/// The plugins are encouraged to be able to handle note events encoded as raw midi or midi2,
-/// or implement clap_plugin_event_filter and reject raw midi and midi2 events.
-#[repr(u16)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EventType {
-    /// Represents a key pressed event.
-    NoteOn = 0,
-    /// Represents a key released event.
-    NoteOff = 1,
-    /// This is meant to choke the voice(s), like in a drum machine when a closed hihat
-    /// chokes an open hihat.
-    NoteChoke = 2,
-    /// This is sent by the plugin to the host. The port, channel and key are those given
-    /// by the host in the `NoteOn` event. In other words, this event is matched against the
-    /// plugin's note input port. `NoteEnd` is only requiered if the plugin marked at least
-    /// one of its parameters as polyphonic.
-    ///
-    /// When using polyphonic modulations, the host has to allocate and release voices for its
-    /// polyphonic modulator. Yet only the plugin effectively knows when the host should terminate
-    /// a voice. `NoteEnd` solves that issue in a non-intrusive and cooperative way.
-    ///
-    /// This assumes that the host will allocate a unique voice on a `NoteOn` event for a given port,
-    /// channel and key. This voice will run until the plugin will instruct the host to terminate
-    /// it by sending a `NoteEnd` event.
-    ///
-    /// Consider the following sequence:
-    /// - process()
-    ///    - Host->Plugin NoteOn(port:0, channel:0, key:16, time:t0)
-    ///    - Host->Plugin NoteOn(port:0, channel:0, key:64, time:t0)
-    ///    - Host->Plugin NoteOff(port:0, channel:0, key:16, t1)
-    ///    - Host->Plugin NoteOff(port:0, channel:0, key:64, t1)
-    ///         - on t2, both notes did terminate
-    ///    - Host->Plugin NoteOn(port:0, channel:0, key:64, t3)
-    ///         - Here the plugin finished to process all the frames and will tell the host
-    ///         to terminate the voice on key 16 but not 64, because a note has been started at t3
-    ///    - Plugin->Host NoteEnd(port:0, channel:0, key:16, time:ignored)
-    NoteEnd = 3,
-
-    /// Represents a note expression.
-    NoteExpression = 4,
-
-    /// `ParamValue` sets the parameter's value.
-    ///
-    /// The value heard is: param_value + param_mod.
-    ///
-    /// In case of a concurrent global value/modulation versus a polyphonic one,
-    /// the voice should only use the polyphonic one and the polyphonic modulation
-    /// amount will already include the monophonic signal.
-    ParamValue = 5,
-    /// `ParamMod` sets the parameter's modulation amount.
-    ///
-    /// The value heard is: param_value + param_mod.
-    ///
-    /// In case of a concurrent global value/modulation versus a polyphonic one,
-    /// the voice should only use the polyphonic one and the polyphonic modulation
-    /// amount will already include the monophonic signal.
-    ParamMod = 6,
-
-    /// Indicates that a parameter gesture has begun.
-    ParamGestureBegin = 7,
-    /// Indicates that a parameter gesture has ended.
-    ParamGestureEnd = 8,
-
-    /// Update the transport info.
-    Transport = 9,
-    /// Raw midi event.
-    Midi = 10,
-    /// Raw midi sysex event.  
-    MidiSysex = 11,
-    /// Raw midi 2 event.
-    Midi2 = 12,
-}
-
-impl EventType {
+impl EventBeatTime {
     #[inline]
-    pub fn from_u16(val: u16) -> Option<Self> {
-        match val {
-            0 => Some(EventType::NoteOn),
-            1 => Some(EventType::NoteOff),
-            2 => Some(EventType::NoteChoke),
-            3 => Some(EventType::NoteEnd),
-            4 => Some(EventType::NoteExpression),
-            5 => Some(EventType::ParamValue),
-            6 => Some(EventType::ParamMod),
-            7 => Some(EventType::ParamGestureBegin),
-            8 => Some(EventType::ParamGestureEnd),
-            9 => Some(EventType::Transport),
-            10 => Some(EventType::Midi),
-            11 => Some(EventType::MidiSysex),
-            12 => Some(EventType::Midi2),
-            _ => None,
-        }
+    pub fn from_f64(val: f64) -> Self {
+        Self(FixedPoint64::from_f64(val))
     }
 
     #[inline]
-    pub fn as_u16(&self) -> u16 {
-        match self {
-            EventType::NoteOn => 0,
-            EventType::NoteOff => 1,
-            EventType::NoteChoke => 2,
-            EventType::NoteEnd => 3,
-            EventType::NoteExpression => 4,
-            EventType::ParamValue => 5,
-            EventType::ParamMod => 6,
-            EventType::ParamGestureBegin => 7,
-            EventType::ParamGestureEnd => 8,
-            EventType::Transport => 9,
-            EventType::Midi => 10,
-            EventType::MidiSysex => 11,
-            EventType::Midi2 => 12,
-        }
+    pub fn as_f64(&self) -> f64 {
+        self.0.as_f64()
     }
 }
 
-impl From<NoteEventType> for EventType {
-    fn from(e: NoteEventType) -> Self {
-        match e {
-            NoteEventType::NoteOn => EventType::NoteOn,
-            NoteEventType::NoteOff => EventType::NoteOff,
-            NoteEventType::NoteChoke => EventType::NoteChoke,
-            NoteEventType::NoteEnd => EventType::NoteEnd,
-        }
+impl From<f64> for EventBeatTime {
+    fn from(v: f64) -> Self {
+        Self::from_f64(v)
     }
 }
 
-impl From<ParamGestureEventType> for EventType {
-    fn from(e: ParamGestureEventType) -> Self {
-        match e {
-            ParamGestureEventType::ParamGestureBegin => EventType::ParamGestureBegin,
-            ParamGestureEventType::ParamGestureEnd => EventType::ParamGestureEnd,
-        }
+impl From<EventBeatTime> for f64 {
+    fn from(v: EventBeatTime) -> Self {
+        v.as_f64()
     }
 }
 
-/// The header of an event.
-///
-/// This must be the first attribute of every event.
-#[repr(C)]
-#[derive(Copy, Clone, PartialEq)]
-pub struct EventHeader {
-    /// Event size including this header (in bytes).
-    pub(crate) size: u32,
-    /// Time at which the event happens.
-    pub time: u32,
-    /// Event space, see clap_host_event_registry. (TODO)
-    pub space_id: u16,
-    event_type: u16,
-    flags: u32,
-}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EventSecTime(pub(crate) FixedPoint64);
 
-impl EventHeader {
-    pub(crate) fn event_type(&self) -> Option<EventType> {
-        EventType::from_u16(self.event_type)
+impl EventSecTime {
+    #[inline]
+    pub fn from_f64(val: f64) -> Self {
+        Self(FixedPoint64::from_f64(val))
     }
 
-    pub fn flags(&self) -> EventFlags {
-        EventFlags::from_bits_truncate(self.flags)
+    #[inline]
+    pub fn as_f64(&self) -> f64 {
+        self.0.as_f64()
     }
 }
 
-unsafe impl bytemuck::Pod for EventHeader {}
-unsafe impl bytemuck::Zeroable for EventHeader {}
+impl From<f64> for EventSecTime {
+    fn from(v: f64) -> Self {
+        Self::from_f64(v)
+    }
+}
+
+impl From<EventSecTime> for f64 {
+    fn from(v: EventSecTime) -> Self {
+        v.as_f64()
+    }
+}
 
 bitflags! {
-    pub struct EventFlags: u32 {
-        /// Indicate a live momentary event.
-        const IS_LIVE = 1 << 0;
+    pub struct EventFlags: ClapEventFlags {
+        // Indicate a live user event, for example a user turning a physical knob
+        // or playing a physical key.
+        const EVENT_IS_LIVE = clap_sys::events::CLAP_EVENT_IS_LIVE;
 
-        /// Indicate that the event should not be recorded.
-        ///
-        /// For example this is useful when a parameter changes because of a MIDI CC,
-        /// because if the host records both the MIDI CC automation and the parameter
-        /// automation there will be a conflict.
-        const CLAP_EVENT_DONT_RECORD = 1 << 1;
+        // Indicate that the event should not be recorded.
+        // For example this is useful when a parameter changes because of a MIDI CC,
+        // because if the host records both the MIDI CC automation and the parameter
+        // automation there will be a conflict.
+        const EVENT_DONT_RECORD = clap_sys::events::CLAP_EVENT_DONT_RECORD;
     }
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, PartialEq)]
-pub struct EventNote {
-    pub header: EventHeader,
-
-    /// Target a specific note id, or -1 for global.
-    pub note_id: i32,
-
-    pub port_index: i16,
-
-    /// [0..15]
-    pub channel: i16,
-
-    /// [0..127]
-    pub key: i16,
-
-    /// [0.0, 1.0]
-    pub velocity: f64,
+#[repr(u16)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventNoteType {
+    NoteOn = clap_sys::events::CLAP_EVENT_NOTE_ON,
+    NoteOff = clap_sys::events::CLAP_EVENT_NOTE_OFF,
+    NoteChoke = clap_sys::events::CLAP_EVENT_NOTE_CHOKE,
+    NoteEnd = clap_sys::events::CLAP_EVENT_NOTE_END,
 }
 
+#[derive(Clone, Copy)]
+pub struct EventNote(ClapEventNote);
+
 impl EventNote {
-    /// - time: Time at which the event happens.
-    /// - note_id: Target a specific note id, or -1 for global.
-    /// - port_index: Target a specific port index, or -1 for global.
-    /// - channel: Target a specific channel, or -1 for global.
-    /// - key: Target a specific key, or -1 for global.
-    /// - velocity: [0.0, 1.0]
+    /// Construct a new note event
+    ///
+    /// - `time`: sample offset within the buffer for this event
+    /// - `space_id`: event_space, see clap_host_event_registry
+    /// - `event_flags`: see `EventFlags`
+    /// - `event_type`: see `EventNoteType`
+    /// - `note_id`:  -1 if unspecified, otherwise >=0
+    /// - `port_index`:  The index of the port
+    /// - `channel`: `[0..15]`
+    /// - `key`: `[0..127]`
+    /// - `velocity`: `[0.0, 1.0]`
     pub fn new(
         time: u32,
         space_id: u16,
-        event_type: NoteEventType,
         event_flags: EventFlags,
+        event_type: EventNoteType,
         note_id: i32,
         port_index: i16,
         channel: i16,
         key: i16,
         velocity: f64,
     ) -> Self {
-        let event_type: EventType = event_type.into();
-
-        Self {
-            header: EventHeader {
-                size: std::mem::size_of::<EventNote>() as u32,
+        Self(ClapEventNote {
+            header: ClapEventHeader {
+                size: std::mem::size_of::<ClapEventNote>() as u32,
                 time,
                 space_id,
-                event_type: event_type.as_u16(),
+                // Safe because this enum is represented with u16
+                type_: unsafe { *(&event_type as *const EventNoteType as *const u16) },
                 flags: event_flags.bits(),
             },
             note_id,
@@ -311,157 +144,207 @@ impl EventNote {
             channel,
             key,
             velocity,
-        }
+        })
+    }
+
+    /// Sample offset within the buffer for this event.
+    pub fn time(&self) -> u32 {
+        self.0.header.time
+    }
+
+    /// Event_space, see clap_host_event_registry.
+    pub fn space_id(&self) -> u16 {
+        self.0.header.space_id
+    }
+
+    pub fn event_flags(&self) -> EventFlags {
+        EventFlags::from_bits_truncate(self.0.header.flags)
+    }
+
+    pub fn event_type(&self) -> EventNoteType {
+        // Safe because this enum is represented with u16, and the constructor
+        // and the event queue ensures that this is a valid value.
+        unsafe { *(&self.0.header.type_ as *const u16 as *const EventNoteType) }
+    }
+
+    /// -1 if unspecified, otherwise >=0
+    pub fn note_id(&self) -> i32 {
+        self.0.note_id
+    }
+
+    pub fn port_index(&self) -> i16 {
+        self.0.port_index
+    }
+
+    /// `[0..15]`
+    pub fn channel(&self) -> i16 {
+        self.0.channel
+    }
+
+    /// `[0..127]`
+    pub fn key(&self) -> i16 {
+        self.0.key
+    }
+
+    /// `[0.0, 1.0]`
+    pub fn velocity(&self) -> f64 {
+        self.0.velocity
     }
 }
 
-unsafe impl bytemuck::Pod for EventNote {}
-unsafe impl bytemuck::Zeroable for EventNote {}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteExpressionType {
+    Known(NoteExpression),
+    Unkown(i32),
+}
+
+impl NoteExpressionType {
+    #[inline]
+    pub fn from_i32(val: i32) -> Self {
+        if val >= 0 && val <= clap_sys::events::CLAP_NOTE_EXPRESSION_PRESSURE {
+            // Safe because this enum is represented with an i32, and we checked that the
+            // value is within range.
+            NoteExpressionType::Known(unsafe { *(&val as *const i32 as *const NoteExpression) })
+        } else {
+            NoteExpressionType::Unkown(val)
+        }
+    }
+
+    #[inline]
+    pub fn to_i32(&self) -> i32 {
+        match self {
+            NoteExpressionType::Known(val) => {
+                // Safe because this enum is represented with an i32.
+                unsafe { *(val as *const NoteExpression as *const i32) }
+            }
+            NoteExpressionType::Unkown(val) => *val,
+        }
+    }
+}
 
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoteExpression {
-    /// with 0.0 < x <= 4.0, plain = 20.0 * log(x)
-    Volume = 0,
+    /// `[0.0, 4.0]`, plain = 20.0 * log(x)
+    Volume = clap_sys::events::CLAP_NOTE_EXPRESSION_VOLUME,
     /// pan, 0.0 left, 0.5 center, 1.0 right
-    Pan = 1,
-    /// Relative tuning in semitone, from -120.0 to +120.0
-    Tuning = 2,
-    /// [0.0, 1.0]
-    Vibrato = 3,
-    /// [0.0, 1.0]
-    Expression = 4,
-    /// [0.0, 1.0]
-    Brightness = 5,
-    /// [0.0, 1.0]
-    Pressure = 6,
+    Pan = clap_sys::events::CLAP_NOTE_EXPRESSION_PAN,
+    /// relative tuning in semitone, from -120.0 to +120.0
+    Tuning = clap_sys::events::CLAP_NOTE_EXPRESSION_TUNING,
+    /// `[0.0, 1.0]`
+    Vibrato = clap_sys::events::CLAP_NOTE_EXPRESSION_VIBRATO,
+    /// `[0.0, 1.0]`
+    Expression = clap_sys::events::CLAP_NOTE_EXPRESSION_EXPRESSION,
+    /// `[0.0, 1.0]`
+    Brightness = clap_sys::events::CLAP_NOTE_EXPRESSION_BRIGHTNESS,
+    /// `[0.0, 1.0]`
+    Pressure = clap_sys::events::CLAP_NOTE_EXPRESSION_PRESSURE,
 }
 
-impl NoteExpression {
-    #[inline]
-    pub fn from_i32(val: i32) -> Option<Self> {
-        match val {
-            0 => Some(NoteExpression::Volume),
-            1 => Some(NoteExpression::Pan),
-            2 => Some(NoteExpression::Tuning),
-            3 => Some(NoteExpression::Vibrato),
-            4 => Some(NoteExpression::Expression),
-            5 => Some(NoteExpression::Brightness),
-            6 => Some(NoteExpression::Pressure),
-            _ => None,
-        }
-    }
-
-    #[inline]
-    pub fn as_i32(&self) -> i32 {
-        match self {
-            NoteExpression::Volume => 0,
-            NoteExpression::Pan => 1,
-            NoteExpression::Tuning => 2,
-            NoteExpression::Vibrato => 3,
-            NoteExpression::Expression => 4,
-            NoteExpression::Brightness => 5,
-            NoteExpression::Pressure => 6,
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, PartialEq)]
-pub struct EventNoteExpression {
-    pub header: EventHeader,
-
-    /// Use `NoteExpression::from_i32()` to extract this value.
-    pub(crate) expression_id: i32,
-
-    /// Target a specific note id, or -1 for global.
-    pub note_id: i32,
-    /// Target a specific port index, or -1 for global.
-    pub port_index: i16,
-    /// Target a specific channel, or -1 for global.
-    pub channel: i16,
-    /// Target a specific key, or -1 for global.
-    pub key: i16,
-
-    /// See `NoteExpression` for the range.
-    pub value: f64,
-}
+#[derive(Clone, Copy)]
+pub struct EventNoteExpression(ClapEventNoteExpression);
 
 impl EventNoteExpression {
-    pub fn expression_id(&self) -> Option<NoteExpression> {
-        NoteExpression::from_i32(self.expression_id)
-    }
-
-    /// - time: Time at which the event happens.
-    /// - note_id: Target a specific note id, or -1 for global.
-    /// - port_index: Target a specific port index, or -1 for global.
-    /// - channel: Target a specific channel, or -1 for global.
-    /// - key: Target a specific key, or -1 for global.
-    /// - value: See `NoteExpression` for the range.
+    /// Construct a new note event
+    ///
+    /// - `time`: sample offset within the buffer for this event
+    /// - `space_id`: event_space, see clap_host_event_registry
+    /// - `event_flags`: see `EventFlags`
+    /// - `expression_id`: see `NoteExpressionType`
+    /// - `note_id`:  -1 if unspecified, otherwise >=0
+    /// - `port_index`:  The index of the port
+    /// - `channel`: `[0..15]`
+    /// - `key`: `[0..127]`
+    /// - `value`: see `NoteExpression` for range
     pub fn new(
         time: u32,
         space_id: u16,
         event_flags: EventFlags,
-        expression_id: NoteExpression,
+        expression_id: NoteExpressionType,
         note_id: i32,
         port_index: i16,
         channel: i16,
         key: i16,
         value: f64,
     ) -> Self {
-        Self {
-            header: EventHeader {
-                size: std::mem::size_of::<EventNoteExpression>() as u32,
+        Self(ClapEventNoteExpression {
+            header: ClapEventHeader {
+                size: std::mem::size_of::<ClapEventNoteExpression>() as u32,
                 time,
                 space_id,
-                event_type: EventType::NoteExpression.as_u16(),
+                // Safe because this enum is represented with u16
+                type_: clap_sys::events::CLAP_EVENT_NOTE_EXPRESSION,
                 flags: event_flags.bits(),
             },
-            expression_id: expression_id.as_i32(),
+            expression_id: expression_id.to_i32(),
             note_id,
             port_index,
             channel,
             key,
             value,
-        }
+        })
+    }
+
+    /// Sample offset within the buffer for this event.
+    pub fn time(&self) -> u32 {
+        self.0.header.time
+    }
+
+    /// Event_space, see clap_host_event_registry.
+    pub fn space_id(&self) -> u16 {
+        self.0.header.space_id
+    }
+
+    pub fn event_flags(&self) -> EventFlags {
+        EventFlags::from_bits_truncate(self.0.header.flags)
+    }
+
+    pub fn expression_id(&self) -> NoteExpressionType {
+        NoteExpressionType::from_i32(self.0.expression_id)
+    }
+
+    /// -1 if unspecified, otherwise >=0
+    pub fn note_id(&self) -> i32 {
+        self.0.note_id
+    }
+
+    pub fn port_index(&self) -> i16 {
+        self.0.port_index
+    }
+
+    /// `[0..15]`
+    pub fn channel(&self) -> i16 {
+        self.0.channel
+    }
+
+    /// `[0..127]`
+    pub fn key(&self) -> i16 {
+        self.0.key
+    }
+
+    pub fn value(&self) -> f64 {
+        self.0.value
     }
 }
 
-unsafe impl bytemuck::Pod for EventNoteExpression {}
-unsafe impl bytemuck::Zeroable for EventNoteExpression {}
+#[derive(Clone, Copy)]
+pub struct EventParamValue(ClapEventParamValue);
 
-#[repr(C)]
-#[derive(Copy, Clone, PartialEq)]
-pub struct EventParamValue {
-    pub header: EventHeader,
-
-    /// Target parameter.
-    pub param_id: ParamID,
-
-    /// (Reserved for the CLAP plugin host)
-    pub _cookie: *const std::ffi::c_void,
-
-    /// Target a specific note id, or -1 for global.
-    pub note_id: i32,
-    /// Target a specific port index, or -1 for global.
-    pub port_index: i16,
-    /// Target a specific channel, or -1 for global.
-    pub channel: i16,
-    /// Target a specific key, or -1 for global.
-    pub key: i16,
-
-    pub value: f64,
-}
+unsafe impl Send for EventParamValue {}
+unsafe impl Sync for EventParamValue {}
 
 impl EventParamValue {
-    /// - time: Time at which the event happens.
+    /// Construct a new note event
     ///
-    /// - param_id: Target parameter.
-    /// - note_id: Target a specific note id, or -1 for global.
-    /// - port_index: Target a specific port index, or -1 for global.
-    /// - channel: Target a specific channel, or -1 for global.
-    /// - key: Target a specific key, or -1 for global.
-    /// - value: See `NoteExpression` for the range.
+    /// - `time`: sample offset within the buffer for this event
+    /// - `space_id`: event_space, see clap_host_event_registry
+    /// - `event_flags`: see `EventFlags`
+    /// - `param_id`: the ID of the parameter
+    /// - `note_id`:  -1 if unspecified, otherwise >=0
+    /// - `port_index`:  The index of the port
+    /// - `channel`: `[0..15]`
+    /// - `key`: `[0..127]`
+    /// - `value`: the plain value of the parameter
     pub fn new(
         time: u32,
         space_id: u16,
@@ -473,60 +356,86 @@ impl EventParamValue {
         key: i16,
         value: f64,
     ) -> Self {
-        Self {
-            header: EventHeader {
-                size: std::mem::size_of::<EventParamValue>() as u32,
+        Self(ClapEventParamValue {
+            header: ClapEventHeader {
+                size: std::mem::size_of::<ClapEventParamValue>() as u32,
                 time,
                 space_id,
-                event_type: EventType::ParamValue.as_u16(),
+                // Safe because this enum is represented with u16
+                type_: clap_sys::events::CLAP_EVENT_PARAM_VALUE,
                 flags: event_flags.bits(),
             },
-            param_id,
-            _cookie: std::ptr::null(),
+            param_id: param_id.0,
+            cookie: std::ptr::null_mut(),
             note_id,
             port_index,
             channel,
             key,
             value,
-        }
+        })
+    }
+
+    /// Sample offset within the buffer for this event.
+    pub fn time(&self) -> u32 {
+        self.0.header.time
+    }
+
+    /// Event_space, see clap_host_event_registry.
+    pub fn space_id(&self) -> u16 {
+        self.0.header.space_id
+    }
+
+    pub fn event_flags(&self) -> EventFlags {
+        EventFlags::from_bits_truncate(self.0.header.flags)
+    }
+
+    pub fn param_id(&self) -> ParamID {
+        ParamID(self.0.param_id)
+    }
+
+    /// -1 if unspecified, otherwise >=0
+    pub fn note_id(&self) -> i32 {
+        self.0.note_id
+    }
+
+    pub fn port_index(&self) -> i16 {
+        self.0.port_index
+    }
+
+    /// `[0..15]`
+    pub fn channel(&self) -> i16 {
+        self.0.channel
+    }
+
+    /// `[0..127]`
+    pub fn key(&self) -> i16 {
+        self.0.key
+    }
+
+    /// The plain value of the parameter.
+    pub fn value(&self) -> f64 {
+        self.0.value
     }
 }
 
-unsafe impl bytemuck::Pod for EventParamValue {}
-unsafe impl bytemuck::Zeroable for EventParamValue {}
+#[derive(Clone, Copy)]
+pub struct EventParamMod(ClapEventParamMod);
 
-#[repr(C)]
-#[derive(Copy, Clone, PartialEq)]
-pub struct EventParamMod {
-    pub header: EventHeader,
-
-    /// Target parameter.
-    pub param_id: ParamID,
-
-    /// (Reserved for the CLAP plugin host)
-    pub _cookie: *const std::ffi::c_void,
-
-    /// Target a specific note id, or -1 for global.
-    pub note_id: i32,
-    /// Target a specific port index, or -1 for global.
-    pub port_index: i16,
-    /// Target a specific channel, or -1 for global.
-    pub channel: i16,
-    /// Target a specific key, or -1 for global.
-    pub key: i16,
-
-    /// Modulation amount.
-    pub amount: f64,
-}
+unsafe impl Send for EventParamMod {}
+unsafe impl Sync for EventParamMod {}
 
 impl EventParamMod {
-    /// - time: Time at which the event happens.
-    /// - param_id: Target parameter.
-    /// - note_id: Target a specific note id, or -1 for global.
-    /// - port_index: Target a specific port index, or -1 for global.
-    /// - channel: Target a specific channel, or -1 for global.
-    /// - key: Target a specific key, or -1 for global.
-    /// - amount: Modulation amount.
+    /// Construct a new note event
+    ///
+    /// - `time`: sample offset within the buffer for this event
+    /// - `space_id`: event_space, see clap_host_event_registry
+    /// - `event_flags`: see `EventFlags`
+    /// - `param_id`: the ID of the parameter
+    /// - `note_id`:  -1 if unspecified, otherwise >=0
+    /// - `port_index`:  The index of the port
+    /// - `channel`: `[0..15]`
+    /// - `key`: `[0..127]`
+    /// - `amount`: modulation amount
     pub fn new(
         time: u32,
         space_id: u16,
@@ -538,194 +447,302 @@ impl EventParamMod {
         key: i16,
         amount: f64,
     ) -> Self {
-        Self {
-            header: EventHeader {
-                size: std::mem::size_of::<EventParamMod>() as u32,
+        Self(ClapEventParamMod {
+            header: ClapEventHeader {
+                size: std::mem::size_of::<ClapEventParamMod>() as u32,
                 time,
                 space_id,
-                event_type: EventType::ParamMod.as_u16(),
+                // Safe because this enum is represented with u16
+                type_: clap_sys::events::CLAP_EVENT_PARAM_MOD,
                 flags: event_flags.bits(),
             },
-            param_id,
-            _cookie: std::ptr::null(),
+            param_id: param_id.0,
+            cooke: std::ptr::null_mut(),
             note_id,
             port_index,
             channel,
             key,
             amount,
-        }
+        })
+    }
+
+    /// Sample offset within the buffer for this event.
+    pub fn time(&self) -> u32 {
+        self.0.header.time
+    }
+
+    /// Event_space, see clap_host_event_registry.
+    pub fn space_id(&self) -> u16 {
+        self.0.header.space_id
+    }
+
+    pub fn event_flags(&self) -> EventFlags {
+        EventFlags::from_bits_truncate(self.0.header.flags)
+    }
+
+    pub fn param_id(&self) -> ParamID {
+        ParamID(self.0.param_id)
+    }
+
+    /// -1 if unspecified, otherwise >=0
+    pub fn note_id(&self) -> i32 {
+        self.0.note_id
+    }
+
+    pub fn port_index(&self) -> i16 {
+        self.0.port_index
+    }
+
+    /// `[0..15]`
+    pub fn channel(&self) -> i16 {
+        self.0.channel
+    }
+
+    /// `[0..127]`
+    pub fn key(&self) -> i16 {
+        self.0.key
+    }
+
+    /// Modulation amount.
+    pub fn amount(&self) -> f64 {
+        self.0.amount
     }
 }
 
-unsafe impl bytemuck::Pod for EventParamMod {}
-unsafe impl bytemuck::Zeroable for EventParamMod {}
-
-#[repr(C)]
-#[derive(Copy, Clone, PartialEq)]
-pub struct EventParamGesture {
-    pub header: EventHeader,
-
-    /// Target parameter.
-    pub param_id: ParamID,
+#[repr(u16)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParamGestureType {
+    GestureBegin = clap_sys::events::CLAP_EVENT_PARAM_GESTURE_BEGIN,
+    GestureEnd = clap_sys::events::CLAP_EVENT_PARAM_GESTURE_END,
 }
 
+#[derive(Clone, Copy)]
+pub struct EventParamGesture(ClapEventParamGesture);
+
 impl EventParamGesture {
-    /// - time: Time at which the event happens.
-    /// - param_id: Target parameter.
+    /// Construct a new note event
+    ///
+    /// - `time`: sample offset within the buffer for this event
+    /// - `space_id`: event_space, see clap_host_event_registry
+    /// - `event_flags`: see `EventFlags`
+    /// - `gesture`: the type of gesture
+    /// - `param_id`: the ID of the parameter
     pub fn new(
         time: u32,
         space_id: u16,
-        event_type: ParamGestureEventType,
         event_flags: EventFlags,
+        gesture_type: ParamGestureType,
         param_id: ParamID,
     ) -> Self {
-        let event_type: EventType = event_type.into();
-
-        Self {
-            header: EventHeader {
-                size: std::mem::size_of::<EventParamGesture>() as u32,
+        Self(ClapEventParamGesture {
+            header: ClapEventHeader {
+                size: std::mem::size_of::<ClapEventParamGesture>() as u32,
                 time,
                 space_id,
-                event_type: event_type.as_u16(),
+                // Safe because this enum is represented with u16
+                type_: unsafe { *(&gesture_type as *const ParamGestureType as *const u16) },
                 flags: event_flags.bits(),
             },
-            param_id,
-        }
+            param_id: param_id.0,
+        })
+    }
+
+    /// Sample offset within the buffer for this event.
+    pub fn time(&self) -> u32 {
+        self.0.header.time
+    }
+
+    /// Event_space, see clap_host_event_registry.
+    pub fn space_id(&self) -> u16 {
+        self.0.header.space_id
+    }
+
+    pub fn event_flags(&self) -> EventFlags {
+        EventFlags::from_bits_truncate(self.0.header.flags)
+    }
+
+    pub fn gesture_type(&self) -> ParamGestureType {
+        // Safe because this enum is represented with u16, and the constructor
+        // and the event queue ensures that this is a valid value.
+        unsafe { *(&self.0.header.type_ as *const u16 as *const ParamGestureType) }
     }
 
     pub fn is_begin(&self) -> bool {
-        if let Some(event_type) = EventType::from_u16(self.header.event_type) {
-            event_type == EventType::ParamGestureBegin
-        } else {
-            false
-        }
+        self.gesture_type() == ParamGestureType::GestureBegin
+    }
+
+    pub fn param_id(&self) -> ParamID {
+        ParamID(self.0.param_id)
     }
 }
-
-unsafe impl bytemuck::Pod for EventParamGesture {}
-unsafe impl bytemuck::Zeroable for EventParamGesture {}
 
 bitflags! {
-    pub struct TransportFlags: u32 {
-        const HAS_TEMPO = 1 << 0;
-        const HAS_BEATS_TIMELINE = 1 << 1;
-        const HAS_SECONDS_TIMELINE = 1 << 2;
-        const HAS_TIME_SIGNATURE = 1 << 3;
-        const IS_PLAYING = 1 << 4;
-        const IS_RECORDING = 1 << 5;
-        const IS_LOOP_ACTIVE = 1 << 6;
-        const IS_WITHIN_PRE_ROLL = 1 << 7;
+    pub struct TransportFlags: ClapTransportFlags {
+        const HAS_TEMPO = clap_sys::events::CLAP_TRANSPORT_HAS_TEMPO;
+        const HAS_BEATS_TIMELINE = clap_sys::events::CLAP_TRANSPORT_HAS_BEATS_TIMELINE;
+        const HAS_SECONDS_TIMELINE = clap_sys::events::CLAP_TRANSPORT_HAS_SECONDS_TIMELINE;
+        const HAS_TIME_SIGNATURE = clap_sys::events::CLAP_TRANSPORT_HAS_TIME_SIGNATURE;
+        const IS_PLAYING = clap_sys::events::CLAP_TRANSPORT_IS_PLAYING;
+        const IS_RECORDING = clap_sys::events::CLAP_TRANSPORT_IS_RECORDING;
+        const IS_LOOP_ACTIVE = clap_sys::events::CLAP_TRANSPORT_IS_LOOP_ACTIVE;
+        const IS_WITHIN_PRE_ROLL = clap_sys::events::CLAP_TRANSPORT_IS_WITHIN_PRE_ROLL;
     }
 }
 
-pub type BeatTime = FixedPoint64;
-pub type SecTime = FixedPoint64;
-
-#[repr(C)]
-#[derive(Copy, Clone, PartialEq)]
-pub struct EventTransport {
-    pub header: EventHeader,
-
-    pub(crate) flags: u32,
-
-    /// Position in beats.
-    pub song_pos_beats: BeatTime,
-    /// Position in seconds.
-    pub song_pos_seconds: SecTime,
-
-    /// The tempo in bpm.
-    pub tempo: f64,
-    /// Tempo increment for each samples and until the next
-    /// time info event.
-    pub tempo_inc: f64,
-
-    pub loop_start_beats: BeatTime,
-    pub loop_end_beats: BeatTime,
-    pub loop_start_seconds: SecTime,
-    pub loop_end_seconds: SecTime,
-
-    /// Start pos of the current bar.
-    pub bar_start: BeatTime,
-    /// Bar at song pos 0 has the number 0.
-    pub bar_number: i32,
-
-    /// Time signature numerator.
-    pub tsig_num: i16,
-    /// Time signature denominator.
-    pub tsig_denom: i16,
-}
+#[derive(Clone, Copy)]
+pub struct EventTransport(ClapEventTransport);
 
 impl EventTransport {
-    pub fn transport_flags(&self) -> TransportFlags {
-        TransportFlags::from_bits_truncate(self.flags)
-    }
-
-    /// - time: Time at which the event happens.
-    /// - song_pos_beats: Position in beats.
-    /// - song_pos_seconds: Position in seconds.
-    /// - tempo: The tempo in bpm.
-    /// - tempo_inc: Tempo increment for each samples and until the next time info event.
-    /// - bar_start: Start pos of the current bar.
-    /// - bar_number: Bar at song pos 0 has the number 0.
-    /// - tsig_num: Time signature numerator.
-    /// - tsig_denom: Time signature denominator.
+    /// Construct a new note event
+    ///
+    /// - `time`: sample offset within the buffer for this event
+    /// - `space_id`: event_space, see clap_host_event_registry
+    /// - `event_flags`: see `EventFlags`
+    /// - `transport_flags`: see `TransportFlags`
+    /// - `song_pos_beats`: position in beats
+    /// - `song_pos_seconds`: position in seconds
+    /// - `tempo`: in bpm
+    /// - `tempo_inc`: tempo increment for each sample until the next time info event
+    /// - `loop_start_beats`: position of the loop start point in beats
+    /// - `loop_end_beats`: position of the loop end point in beats
+    /// - `loop_start_seconds`: position of the loop start point in seconds
+    /// - `loop_end_seconds`: position of the loop end point in seconds
+    /// - `bar_start`: start position of the current bar in beats
+    /// - `bar_number`: bar at song pos 0 has the number 0
+    /// - `tsig_num`: time signature numerator
+    /// - `tsig_denom`: time signature denominator
     pub fn new(
         time: u32,
         space_id: u16,
         event_flags: EventFlags,
         transport_flags: TransportFlags,
-        song_pos_beats: BeatTime,
-        song_pos_seconds: SecTime,
+        song_pos_beats: EventBeatTime,
+        song_pos_seconds: EventSecTime,
         tempo: f64,
         tempo_inc: f64,
-        loop_start_beats: BeatTime,
-        loop_end_beats: BeatTime,
-        loop_start_seconds: SecTime,
-        loop_end_seconds: SecTime,
-        bar_start: BeatTime,
+        loop_start_beats: EventBeatTime,
+        loop_end_beats: EventBeatTime,
+        loop_start_seconds: EventSecTime,
+        loop_end_seconds: EventSecTime,
+        bar_start: EventBeatTime,
         bar_number: i32,
-        tsig_num: i16,
-        tsig_denom: i16,
+        tsig_num: u16,
+        tsig_denom: u16,
     ) -> Self {
-        Self {
-            header: EventHeader {
-                size: std::mem::size_of::<EventTransport>() as u32,
+        Self(ClapEventTransport {
+            header: ClapEventHeader {
+                size: std::mem::size_of::<ClapEventTransport>() as u32,
                 time,
                 space_id,
-                event_type: EventType::Transport.as_u16(),
+                type_: clap_sys::events::CLAP_EVENT_TRANSPORT,
                 flags: event_flags.bits(),
             },
             flags: transport_flags.bits(),
-            song_pos_beats,
-            song_pos_seconds,
+            song_pos_beats: song_pos_beats.0 .0,
+            song_pos_seconds: song_pos_seconds.0 .0,
             tempo,
             tempo_inc,
-            loop_start_beats,
-            loop_end_beats,
-            loop_start_seconds,
-            loop_end_seconds,
-            bar_start,
+            loop_start_beats: loop_start_beats.0 .0,
+            loop_end_beats: loop_end_beats.0 .0,
+            loop_start_seconds: loop_start_seconds.0 .0,
+            loop_end_seconds: loop_end_seconds.0 .0,
+            bar_start: bar_start.0 .0,
             bar_number,
             tsig_num,
             tsig_denom,
-        }
+        })
+    }
+
+    /// Sample offset within the buffer for this event.
+    pub fn time(&self) -> u32 {
+        self.0.header.time
+    }
+
+    /// Event_space, see clap_host_event_registry.
+    pub fn space_id(&self) -> u16 {
+        self.0.header.space_id
+    }
+
+    pub fn event_flags(&self) -> EventFlags {
+        EventFlags::from_bits_truncate(self.0.header.flags)
+    }
+
+    pub fn transport_flags(&self) -> TransportFlags {
+        TransportFlags::from_bits_truncate(self.0.flags)
+    }
+
+    /// position in beats
+    pub fn song_pos_beats(&self) -> EventBeatTime {
+        EventBeatTime(FixedPoint64(self.0.song_pos_beats))
+    }
+
+    /// position in seconds
+    pub fn song_pos_seconds(&self) -> EventSecTime {
+        EventSecTime(FixedPoint64(self.0.song_pos_seconds))
+    }
+
+    /// in bpm
+    pub fn tempo(&self) -> f64 {
+        self.0.tempo
+    }
+
+    /// tempo increment for each sample until the next time info event
+    pub fn tempo_inc(&self) -> f64 {
+        self.0.tempo_inc
+    }
+
+    /// position of the loop start point in beats
+    pub fn loop_start_beats(&self) -> EventBeatTime {
+        EventBeatTime(FixedPoint64(self.0.loop_start_beats))
+    }
+
+    /// position of the loop end point in beats
+    pub fn loop_end_beats(&self) -> EventBeatTime {
+        EventBeatTime(FixedPoint64(self.0.loop_end_beats))
+    }
+
+    /// position of the loop start point in seconds
+    pub fn loop_start_seconds(&self) -> EventSecTime {
+        EventSecTime(FixedPoint64(self.0.loop_start_seconds))
+    }
+
+    /// position of the loop end point in seconds
+    pub fn loop_end_seconds(&self) -> EventSecTime {
+        EventSecTime(FixedPoint64(self.0.loop_end_seconds))
+    }
+
+    /// start position of the current bar in beats
+    pub fn bar_start(&self) -> EventBeatTime {
+        EventBeatTime(FixedPoint64(self.0.bar_start))
+    }
+
+    /// bar at song pos 0 has the number 0
+    pub fn bar_number(&self) -> i32 {
+        self.0.bar_number
+    }
+
+    /// time signature numerator
+    pub fn tsig_num(&self) -> u16 {
+        self.0.tsig_num
+    }
+
+    /// time signature denominator
+    pub fn tsig_denom(&self) -> u16 {
+        self.0.tsig_denom
     }
 }
 
-unsafe impl bytemuck::Pod for EventTransport {}
-unsafe impl bytemuck::Zeroable for EventTransport {}
-
-#[repr(C)]
-#[derive(Copy, Clone, PartialEq)]
-pub struct EventMidi {
-    pub header: EventHeader,
-
-    pub port_index: u16,
-    pub data: [u8; 3],
-}
+#[derive(Clone, Copy)]
+pub struct EventMidi(ClapEventMidi);
 
 impl EventMidi {
-    /// - time: Time at which the event happens.
+    /// Construct a new note event
+    ///
+    /// - `time`: sample offset within the buffer for this event
+    /// - `space_id`: event_space, see clap_host_event_registry
+    /// - `event_flags`: see `EventFlags`
+    /// - `port_index`: the index of the MIDI port
+    /// - `data`: the raw MIDI data
     pub fn new(
         time: u32,
         space_id: u16,
@@ -733,79 +750,119 @@ impl EventMidi {
         port_index: u16,
         data: [u8; 3],
     ) -> Self {
-        Self {
-            header: EventHeader {
-                size: std::mem::size_of::<EventMidi>() as u32,
+        Self(ClapEventMidi {
+            header: ClapEventHeader {
+                size: std::mem::size_of::<ClapEventMidi>() as u32,
                 time,
                 space_id,
-                event_type: EventType::Midi.as_u16(),
+                // Safe because this enum is represented with u16
+                type_: clap_sys::events::CLAP_EVENT_MIDI,
                 flags: event_flags.bits(),
             },
             port_index,
             data,
-        }
+        })
+    }
+
+    /// Sample offset within the buffer for this event.
+    pub fn time(&self) -> u32 {
+        self.0.header.time
+    }
+
+    /// Event_space, see clap_host_event_registry.
+    pub fn space_id(&self) -> u16 {
+        self.0.header.space_id
+    }
+
+    pub fn event_flags(&self) -> EventFlags {
+        EventFlags::from_bits_truncate(self.0.header.flags)
+    }
+
+    /// The index of the MIDI port.
+    pub fn port_index(&self) -> u16 {
+        self.0.port_index
+    }
+
+    /// The raw MIDI data.
+    pub fn data(&self) -> [u8; 3] {
+        self.0.data
     }
 }
 
-unsafe impl bytemuck::Pod for EventMidi {}
-unsafe impl bytemuck::Zeroable for EventMidi {}
+#[derive(Clone, Copy)]
+pub struct EventMidiSysex(ClapEventMidiSysex);
 
-#[repr(C)]
-#[derive(Copy, Clone, PartialEq)]
-pub struct EventMidiSysex {
-    pub header: EventHeader,
-
-    pub port_index: u16,
-
-    /// Raw Midi buffer.
-    pub buffer: *const u8,
-    /// Size of `buffer` in bytes.
-    pub size: u32,
-}
+unsafe impl Send for EventMidiSysex {}
+unsafe impl Sync for EventMidiSysex {}
 
 impl EventMidiSysex {
-    /// - time: Time at which the event happens.
-    /// - buffer: Raw Midi buffer.
-    /// - size: Size of `buffer` in bytes.
-    pub fn new(
+    /// Construct a new note event
+    ///
+    /// - `time`: sample offset within the buffer for this event
+    /// - `space_id`: event_space, see clap_host_event_registry
+    /// - `event_flags`: see `EventFlags`
+    /// - `port_index`: the index of the MIDI port
+    /// - `buffer_pointer`: the pointer to the raw data buffer
+    /// - `buffer_size`: the size of the raw data buffer in bytes
+    pub unsafe fn new(
         time: u32,
         space_id: u16,
         event_flags: EventFlags,
         port_index: u16,
-        buffer: *const u8,
-        size: u32,
+        buffer_pointer: *const u8,
+        buffer_size: u32,
     ) -> Self {
-        Self {
-            header: EventHeader {
-                size: std::mem::size_of::<EventMidiSysex>() as u32,
+        Self(ClapEventMidiSysex {
+            header: ClapEventHeader {
+                size: std::mem::size_of::<ClapEventMidiSysex>() as u32,
                 time,
                 space_id,
-                event_type: EventType::MidiSysex.as_u16(),
+                // Safe because this enum is represented with u16
+                type_: clap_sys::events::CLAP_EVENT_MIDI_SYSEX,
                 flags: event_flags.bits(),
             },
             port_index,
-            buffer,
-            size,
-        }
+            buffer: buffer_pointer,
+            size: buffer_size,
+        })
+    }
+
+    /// Sample offset within the buffer for this event.
+    pub fn time(&self) -> u32 {
+        self.0.header.time
+    }
+
+    /// Event_space, see clap_host_event_registry.
+    pub fn space_id(&self) -> u16 {
+        self.0.header.space_id
+    }
+
+    pub fn event_flags(&self) -> EventFlags {
+        EventFlags::from_bits_truncate(self.0.header.flags)
+    }
+
+    /// The index of the MIDI port.
+    pub fn port_index(&self) -> u16 {
+        self.0.port_index
+    }
+
+    /// The raw MIDI data.
+    pub fn data(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.0.buffer, self.0.size as usize) }
     }
 }
 
-unsafe impl bytemuck::Pod for EventMidiSysex {}
-unsafe impl bytemuck::Zeroable for EventMidiSysex {}
-
-#[repr(C)]
-#[derive(Copy, Clone, PartialEq)]
-pub struct EventMidi2 {
-    pub header: EventHeader,
-
-    pub port_index: u16,
-    pub data: [u32; 4],
-}
+#[derive(Clone, Copy)]
+pub struct EventMidi2(ClapEventMidi2);
 
 impl EventMidi2 {
-    /// - time: Time at which the event happens.
-    /// - buffer: Raw Midi buffer.
-    /// - size: Size of `buffer` in bytes.
+    /// Construct a new note event
+    ///
+    /// - `time`: sample offset within the buffer for this event
+    /// - `space_id`: event_space, see clap_host_event_registry
+    /// - `event_flags`: see `EventFlags`
+    /// - `port_index`: the index of the MIDI2 port
+    /// - `data`: the raw MIDI2 data
     pub fn new(
         time: u32,
         space_id: u16,
@@ -813,19 +870,54 @@ impl EventMidi2 {
         port_index: u16,
         data: [u32; 4],
     ) -> Self {
-        Self {
-            header: EventHeader {
-                size: std::mem::size_of::<EventMidi2>() as u32,
+        Self(ClapEventMidi2 {
+            header: ClapEventHeader {
+                size: std::mem::size_of::<ClapEventMidi2>() as u32,
                 time,
                 space_id,
-                event_type: EventType::Midi2.as_u16(),
+                // Safe because this enum is represented with u16
+                type_: clap_sys::events::CLAP_EVENT_MIDI2,
                 flags: event_flags.bits(),
             },
             port_index,
             data,
-        }
+        })
+    }
+
+    /// Sample offset within the buffer for this event.
+    pub fn time(&self) -> u32 {
+        self.0.header.time
+    }
+
+    /// Event_space, see clap_host_event_registry.
+    pub fn space_id(&self) -> u16 {
+        self.0.header.space_id
+    }
+
+    pub fn event_flags(&self) -> EventFlags {
+        EventFlags::from_bits_truncate(self.0.header.flags)
+    }
+
+    /// The index of the MIDI2 port.
+    pub fn port_index(&self) -> u16 {
+        self.0.port_index
+    }
+
+    /// The raw MIDI2 data.
+    pub fn data(&self) -> [u32; 4] {
+        self.0.data
     }
 }
 
-unsafe impl bytemuck::Pod for EventMidi2 {}
-unsafe impl bytemuck::Zeroable for EventMidi2 {}
+#[derive(Clone, Copy)]
+pub enum PluginEvent {
+    Note(EventNote),
+    NoteExpression(EventNoteExpression),
+    ParamValue(EventParamValue),
+    ParamMod(EventParamMod),
+    ParamGesture(EventParamGesture),
+    Transport(EventTransport),
+    Midi(EventMidi),
+    MidiSysex(EventMidiSysex),
+    Midi2(EventMidi2),
+}

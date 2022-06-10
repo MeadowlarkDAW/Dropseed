@@ -21,7 +21,9 @@ const GRAPH_IN_CHANNELS: u16 = 2;
 const GRAPH_OUT_CHANNELS: u16 = 2;
 
 fn main() {
-    mowl::init().unwrap();
+    // Prefer to use a logging crate that is wait-free for threads printing
+    // out to the log.
+    fast_log::init(fast_log::Config::new().console().level(log::LevelFilter::Trace)).unwrap();
 
     let (to_audio_thread_tx, mut from_gui_rx) =
         ringbuf::RingBuffer::<UIToAudioThreadMsg>::new(10).split();
@@ -245,22 +247,17 @@ impl BasicDawExampleGUI {
                                     new_audio_ports,
                                     new_params,
                                     new_param_values,
-                                } => {
-                                    dbg!(&new_params);
-                                    EffectRackPluginState {
-                                        plugin_name,
-                                        plugin_id: new_plugin_res.plugin_id,
-                                        audio_ports_state: Some(AudioPortState::new(
-                                            new_audio_ports,
-                                        )),
-                                        params_state: Some(ParamsState::new(
-                                            new_params,
-                                            new_param_values,
-                                        )),
-                                        selected_port: Default::default(),
-                                        active: true,
-                                    }
-                                }
+                                } => EffectRackPluginState {
+                                    plugin_name,
+                                    plugin_id: new_plugin_res.plugin_id,
+                                    audio_ports_state: Some(AudioPortState::new(new_audio_ports)),
+                                    params_state: Some(ParamsState::new(
+                                        new_params,
+                                        new_param_values,
+                                    )),
+                                    selected_port: Default::default(),
+                                    active: true,
+                                },
                                 PluginActivationStatus::Inactive => EffectRackPluginState {
                                     plugin_name,
                                     plugin_id: new_plugin_res.plugin_id,
@@ -398,23 +395,42 @@ impl BasicDawExampleGUI {
                             .collect();
 
                         if let Some(engine_state) = &mut self.engine_state {
-                            let mut index = None;
+                            let mut index_1 = None;
                             for (i, p) in self.plugin_list.iter().enumerate() {
-                                if p.rdn() == "com.moist-plugins-gmbh-egui.gain-gui" {
-                                    index = Some(i);
+                                if p.rdn() == "com.github.free-audio.clap.synth" {
+                                    index_1 = Some(i);
                                     break;
                                 }
                             }
 
-                            if index.is_none() {
+                            if index_1.is_none() {
                                 continue;
                             }
 
+                            /*
+                            let mut index_2 = None;
+                            for (i, p) in self.plugin_list.iter().enumerate() {
+                                if p.rdn() == "com.moist-plugins-gmbh-egui.gain-gui" {
+                                    index_2 = Some(i);
+                                    break;
+                                }
+                            }
+
+                            if index_2.is_none() {
+                                continue;
+                            }
+                            */
+
                             let req = ModifyGraphRequest {
-                                add_plugin_instances: vec![(
-                                    self.plugin_list[index.unwrap()].key.clone(),
-                                    None,
-                                )],
+                                add_plugin_instances: vec![
+                                    (self.plugin_list[index_1.unwrap()].key.clone(), None),
+                                    /*
+                                    (
+                                        self.plugin_list[index_2.unwrap()].key.clone(),
+                                        None,
+                                    ),
+                                    */
+                                ],
                                 remove_plugin_instances: vec![],
                                 connect_new_edges: vec![
                                     EdgeReq {
@@ -435,6 +451,22 @@ impl BasicDawExampleGUI {
                                         src_channel: 1,
                                         dst_channel: 1,
                                     },
+                                    /*
+                                    EdgeReq {
+                                        edge_type: PortType::Audio,
+                                        src_plugin_id: PluginIDReq::Added(0),
+                                        dst_plugin_id: PluginIDReq::Added(1),
+                                        src_channel: 0,
+                                        dst_channel: 0,
+                                    },
+                                    EdgeReq {
+                                        edge_type: PortType::Audio,
+                                        src_plugin_id: PluginIDReq::Added(0),
+                                        dst_plugin_id: PluginIDReq::Added(1),
+                                        src_channel: 1,
+                                        dst_channel: 1,
+                                    },
+                                    */
                                     EdgeReq {
                                         edge_type: PortType::Audio,
                                         src_plugin_id: PluginIDReq::Added(0),

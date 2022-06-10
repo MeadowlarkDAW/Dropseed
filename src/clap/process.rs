@@ -86,6 +86,18 @@ impl ClapProcess {
         let audio_in_port_list = Pin::new(audio_in_port_list);
         let mut audio_out_port_list = Pin::new(audio_out_port_list);
 
+        let audio_inputs = if audio_in_port_list.is_empty() {
+            std::ptr::null()
+        } else {
+            (*audio_in_port_list).as_ptr()
+        };
+
+        let audio_outputs = if audio_out_port_list.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            (*audio_out_port_list).as_mut_ptr()
+        };
+
         let in_events = ClapInputEvents::new();
         let out_events = ClapOutputEvents::new();
 
@@ -94,8 +106,8 @@ impl ClapProcess {
                 steady_time: -1,
                 frames_count: 0,
                 transport: ptr::null(),
-                audio_inputs: (*audio_in_port_list).as_ptr(),
-                audio_outputs: (*audio_out_port_list).as_mut_ptr(),
+                audio_inputs,
+                audio_outputs,
                 audio_inputs_count: audio_in_port_list.len() as u32,
                 audio_outputs_count: audio_out_port_list.len() as u32,
                 in_events: in_events.raw(),

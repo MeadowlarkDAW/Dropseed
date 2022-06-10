@@ -24,7 +24,11 @@ use crate::{HostRequest, ParamID, ProcInfo, ProcessStatus};
 #[derive(Clone, Copy)]
 struct MainToAudioParamValue {
     value: f64,
+    cookie: *const std::ffi::c_void,
 }
+
+unsafe impl Sync for MainToAudioParamValue {}
+unsafe impl Send for MainToAudioParamValue {}
 
 impl ReducFnvValue for MainToAudioParamValue {}
 
@@ -81,7 +85,9 @@ impl PluginParamsExt {
                 if param_info.flags.contains(ParamInfoFlags::IS_READONLY) {
                     log::warn!("Ignored request to set parameter value: parameter with id {:?} is read only", &param_id);
                 } else {
-                    ui_to_audio_param_value_tx.set(param_id, MainToAudioParamValue { value });
+                    ui_to_audio_param_value_tx
+                        .set(param_id, MainToAudioParamValue { value, cookie: param_info.cookie });
+                    ui_to_audio_param_value_tx.producer_done();
                 }
             } else {
                 log::warn!(
@@ -96,7 +102,18 @@ impl PluginParamsExt {
 
     pub fn set_mod_amount(&mut self, param_id: ParamID, amount: f64) {
         if let Some(ui_to_audio_param_mod_tx) = &mut self.ui_to_audio_param_mod_tx {
-            ui_to_audio_param_mod_tx.set(param_id, MainToAudioParamValue { value: amount });
+            if let Some(param_info) = self.params.get(&param_id) {
+                ui_to_audio_param_mod_tx.set(
+                    param_id,
+                    MainToAudioParamValue { value: amount, cookie: param_info.cookie },
+                );
+                ui_to_audio_param_mod_tx.producer_done();
+            } else {
+                log::warn!(
+                    "Ignored request to set parameter mod amount: plugin has no parameter with id {:?}",
+                    &param_id
+                );
+            }
         } else {
             log::warn!("Ignored request to set parameter mod amount: plugin has no parameters");
         }
@@ -495,7 +512,7 @@ impl PluginInstanceHostAudioThread {
 
         if let Some(params_queue) = &mut self.param_queues {
             params_queue.ui_to_audio_param_value_rx.consume(|param_id, value| {
-                self.in_events.push(PluginEvent::ParamValue(&EventParamValue::new(
+                self.in_events.push(PluginEvent::ParamValue(EventParamValue::new(
                     // TODO: Finer values for `time` instead of just setting it to the first frame?
                     0,                   // time
                     0,                   // space_id
@@ -514,7 +531,7 @@ impl PluginInstanceHostAudioThread {
             });
 
             params_queue.ui_to_audio_param_mod_rx.consume(|param_id, value| {
-                self.in_events.push(PluginEvent::ParamMod(&EventParamMod::new(
+                self.in_events.push(PluginEvent::ParamMod(EventParamMod::new(
                     // TODO: Finer values for `time` instead of just setting it to the first frame?
                     0,                   // time
                     0,                   // space_id
@@ -596,7 +613,7 @@ impl PluginInstanceHostAudioThread {
                             // TODO: Use event.time for more accurate recording of automation.
 
                             let is_adjusting =
-                                self.is_adjusting_parameter.entry(event.param_id).or_insert(false);
+                                self.is_adjusting_parameter.entry(event.param_id()).or_insert(false);
 
                             if event.is_begin() {
                                 if *is_adjusting {
@@ -613,7 +630,7 @@ impl PluginInstanceHostAudioThread {
                                     gesture: Some(ParamGestureInfo { is_begin: true }),
                                 };
 
-                                queue.set_or_update(event.param_id, value);
+                                queue.set_or_update(event.param_id(), value);
                             } else {
                                 if !*is_adjusting {
                                     log::warn!(
@@ -629,18 +646,18 @@ impl PluginInstanceHostAudioThread {
                                     gesture: Some(ParamGestureInfo { is_begin: false }),
                                 };
 
-                                queue.set_or_update(event.param_id, value);
+                                queue.set_or_update(event.param_id(), value);
                             }
                         }
                         Ok(PluginEvent::ParamValue(event)) => {
                             // TODO: Use event.time for more accurate recording of automation.
 
                             let value = AudioToMainParamValue {
-                                value: Some(event.value),
+                                value: Some(event.value()),
                                 gesture: None,
                             };
 
-                            queue.set_or_update(event.param_id, value);
+                            queue.set_or_update(event.param_id(), value);
                         }
                         // TODO: Handle more output event types
                         _ => {}

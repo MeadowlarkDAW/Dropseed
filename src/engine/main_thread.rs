@@ -17,7 +17,7 @@ use crate::engine::events::from_engine::{
     DAWEngineEvent, EngineDeactivatedInfo, PluginScannerEvent,
 };
 use crate::engine::events::to_engine::DAWEngineRequest;
-use crate::engine::sandboxed::plugin_scanner::{PluginScanner, ScannedPluginKey};
+use crate::engine::plugin_scanner::{PluginScanner, ScannedPluginKey};
 use crate::graph::{
     AudioGraph, AudioGraphSaveState, Edge, NewPluginRes, PluginEdges, PluginInstanceID,
 };
@@ -53,7 +53,7 @@ impl DAWEngineMainThread {
         let host_info = Shared::new(&collector.handle(), host_info);
 
         let thread_ids =
-            SharedThreadIDs::new(Some(std::thread::current().id()), None, &collector.handle());
+            SharedThreadIDs::new(None, None, &collector.handle());
 
         let mut plugin_scanner =
             PluginScanner::new(collector.handle(), Shared::clone(&host_info), thread_ids.clone());
@@ -82,6 +82,9 @@ impl DAWEngineMainThread {
     }
 
     pub fn run(&mut self, run: Arc<AtomicBool>) {
+        self.thread_ids
+            .set_external_main_thread_id(std::thread::current().id(), &self.collector.handle());
+
         while run.load(Ordering::Relaxed) {
             while let Ok(msg) = self.handle_to_engine_rx.try_recv() {
                 match msg {
@@ -212,7 +215,6 @@ impl DAWEngineMainThread {
             }
             self.run_process_thread = Some(run_process_thread);
 
-            // TODO: Spawn a high priority thread.
             let process_thread_handle = std::thread::spawn(move || {
                 process_thread.run(run_process_thread_clone, max_frames, sample_rate);
             });

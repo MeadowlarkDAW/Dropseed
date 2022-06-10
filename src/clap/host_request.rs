@@ -161,7 +161,7 @@ unsafe extern "C" fn get_extension(
     }
 
     let extension_id = if let Some(Ok(extension_id)) =
-        c_char_ptr_to_maybe_str(extension_id, clap_sys::string_sizes::CLAP_MODULE_SIZE)
+        c_char_ptr_to_maybe_str(extension_id, clap_sys::string_sizes::CLAP_NAME_SIZE)
     {
         extension_id
     } else {
@@ -318,9 +318,9 @@ unsafe extern "C" fn is_audio_thread(clap_host: *const RawClapHost) -> bool {
     };
 
     if let Some(thread_id) = host_data.thread_ids.external_audio_thread_id() {
-        log::error!("external_main_thread_id is None");
         std::thread::current().id() == thread_id
     } else {
+        log::error!("external_audio_thread_id is None");
         false
     }
 }
@@ -362,22 +362,19 @@ unsafe extern "C" fn log(clap_host: *const RawClapHost, severity: i32, msg: *con
         return;
     };
 
-    // TODO: Colored printing for different log levels.
+    let level = match severity {
+        CLAP_LOG_DEBUG => log::Level::Debug,
+        CLAP_LOG_INFO => log::Level::Info,
+        CLAP_LOG_WARNING => log::Level::Warn,
+        CLAP_LOG_ERROR => log::Level::Error,
+        CLAP_LOG_FATAL => log::Level::Error,
+        CLAP_LOG_HOST_MISBEHAVING => log::Level::Error,
+        CLAP_LOG_PLUGIN_MISBEHAVING => log::Level::Error,
+        _ => log::Level::Debug,
+    };
 
-    print!("{}", &*host_data.plugin_log_name);
-
-    match severity {
-        CLAP_LOG_DEBUG => print!(" [DEBUG] "),
-        CLAP_LOG_INFO => print!(" [INFO] "),
-        CLAP_LOG_WARNING => print!(" [WARNING] "),
-        CLAP_LOG_ERROR => println!(" [ERROR] "),
-        CLAP_LOG_FATAL => print!(" [FATAL] "),
-        CLAP_LOG_HOST_MISBEHAVING => print!(" [HOST MISBEHAVING] "),
-        CLAP_LOG_PLUGIN_MISBEHAVING => print!(" [PLUGIN MISBEHAVING] "),
-        _ => print!(" [] "),
-    }
-
-    println!("{}", msg);
+    log::log!(level, "{}", &*host_data.plugin_log_name);
+    log::log!(level, "{}", msg);
 }
 
 /// ---  Parameters  -------------------------------------------------------------

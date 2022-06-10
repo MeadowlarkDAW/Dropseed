@@ -5,7 +5,7 @@ use maybe_atomic_refcell::{MaybeAtomicRef, MaybeAtomicRefCell, MaybeAtomicRefMut
 use std::hash::Hash;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::engine::sandboxed::plugin_scanner::PluginFormat;
+use crate::engine::plugin_scanner::PluginFormat;
 
 use super::plugin_host::{PluginInstanceHost, PluginInstanceHostAudioThread};
 use super::schedule::delay_comp_node::DelayCompNode;

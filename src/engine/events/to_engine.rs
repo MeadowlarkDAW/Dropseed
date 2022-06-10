@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::engine::sandboxed::main_thread::{ActivateEngineSettings, ModifyGraphRequest};
+use crate::engine::main_thread::{ActivateEngineSettings, ModifyGraphRequest};
 use crate::graph::AudioGraphSaveState;
 
 #[derive(Debug, Clone)]
