@@ -101,7 +101,7 @@ unsafe extern "C" fn get(list: *const RawClapInputEvents, index: u32) -> *const 
     };
 
     if let Some(event) = in_events.events.get(index as usize) {
-        event.raw_pointer()
+        event.raw_pointer() as *const RawClapEventHeader
     } else {
         ptr::null()
     }

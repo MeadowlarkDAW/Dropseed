@@ -397,7 +397,7 @@ impl BasicDawExampleGUI {
                         if let Some(engine_state) = &mut self.engine_state {
                             let mut index_1 = None;
                             for (i, p) in self.plugin_list.iter().enumerate() {
-                                if p.rdn() == "com.github.free-audio.clap.synth" {
+                                if p.rdn() == "com.moist-plugins-gmbh.sine" {
                                     index_1 = Some(i);
                                     break;
                                 }

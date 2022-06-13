@@ -104,6 +104,7 @@ pub enum EventNoteType {
     NoteEnd = clap_sys::events::CLAP_EVENT_NOTE_END,
 }
 
+#[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct EventNote(ClapEventNote);
 
@@ -241,6 +242,7 @@ pub enum NoteExpression {
     Pressure = clap_sys::events::CLAP_NOTE_EXPRESSION_PRESSURE,
 }
 
+#[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct EventNoteExpression(ClapEventNoteExpression);
 
@@ -327,6 +329,7 @@ impl EventNoteExpression {
     }
 }
 
+#[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct EventParamValue(ClapEventParamValue);
 
@@ -418,6 +421,7 @@ impl EventParamValue {
     }
 }
 
+#[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct EventParamMod(ClapEventParamMod);
 
@@ -516,6 +520,7 @@ pub enum ParamGestureType {
     GestureEnd = clap_sys::events::CLAP_EVENT_PARAM_GESTURE_END,
 }
 
+#[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct EventParamGesture(ClapEventParamGesture);
 
@@ -589,6 +594,7 @@ bitflags! {
     }
 }
 
+#[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct EventTransport(ClapEventTransport);
 
@@ -732,6 +738,7 @@ impl EventTransport {
     }
 }
 
+#[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct EventMidi(ClapEventMidi);
 
@@ -789,6 +796,7 @@ impl EventMidi {
     }
 }
 
+#[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct EventMidiSysex(ClapEventMidiSysex);
 
@@ -852,6 +860,7 @@ impl EventMidiSysex {
     }
 }
 
+#[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct EventMidi2(ClapEventMidi2);
 

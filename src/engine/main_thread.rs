@@ -52,8 +52,7 @@ impl DAWEngineMainThread {
 
         let host_info = Shared::new(&collector.handle(), host_info);
 
-        let thread_ids =
-            SharedThreadIDs::new(None, None, &collector.handle());
+        let thread_ids = SharedThreadIDs::new(None, None, &collector.handle());
 
         let mut plugin_scanner =
             PluginScanner::new(collector.handle(), Shared::clone(&host_info), thread_ids.clone());

@@ -1,3 +1,4 @@
+use std::ffi::c_void;
 use std::mem::MaybeUninit;
 
 use clap_sys::events::clap_event_header as ClapEventHeader;
@@ -52,77 +53,92 @@ impl EventQueue {
 }
 
 pub struct AllocatedEvent {
-    //pub(crate) data: [u8; std::mem::size_of::<EventTransport>()],
-    pub(crate) event: PluginEvent,
+    pub(crate) data: [u8; std::mem::size_of::<EventTransport>()],
 }
 
 impl AllocatedEvent {
     pub fn raw_pointer(&self) -> *const ClapEventHeader {
-        match self.event {
-            PluginEvent::Note(e) => &e.0.header,
-            PluginEvent::NoteExpression(e) => &e.0.header,
-            PluginEvent::ParamValue(e) => &e.0.header,
-            PluginEvent::ParamMod(e) => &e.0.header,
-            PluginEvent::ParamGesture(e) => &e.0.header,
-            PluginEvent::Transport(e) => &e.0.header,
-            PluginEvent::Midi(e) => &e.0.header,
-            PluginEvent::MidiSysex(e) => &e.0.header,
-            PluginEvent::Midi2(e) => &e.0.header,
-        }
+        self.data.as_ptr() as *const ClapEventHeader
     }
 
-    pub fn from_event(event: PluginEvent) -> Self {
-        /*
-        let raw_bytes = match event {
+    pub fn from_event(mut event: PluginEvent) -> Self {
+        let raw_bytes = match &mut event {
             PluginEvent::Note(e) => unsafe {
+                // While setting the size value here in each match arm is redundant, for some
+                // reason if we don't use the value `e` in each match arm, the
+                // `std::slice::from_raw_parts` doesn't work correctly when compiling in
+                // release mode. (we get garbage bytes)
+                //
+                // My guess for why this happens is something to do with how rust optimizes
+                // match statements, and it just so happens to work against us in this
+                // (albeit fringe) use case. It might be a bug in the rust compiler itself,
+                // but who knows.
+                e.0.header.size = std::mem::size_of::<ClapEventNote>() as u32;
+
                 std::slice::from_raw_parts(
                     &e.0 as *const ClapEventNote as *const u8,
                     std::mem::size_of::<ClapEventNote>(),
                 )
             },
             PluginEvent::NoteExpression(e) => unsafe {
+                e.0.header.size = std::mem::size_of::<ClapEventNoteExpression>() as u32;
+
                 std::slice::from_raw_parts(
                     &e.0 as *const ClapEventNoteExpression as *const u8,
                     std::mem::size_of::<ClapEventNoteExpression>(),
                 )
             },
             PluginEvent::ParamValue(e) => unsafe {
+                e.0.header.size = std::mem::size_of::<ClapEventParamValue>() as u32;
+
                 std::slice::from_raw_parts(
-                    (&e.0) as *const ClapEventParamValue as *const u8,
+                    &e.0 as *const ClapEventParamValue as *const u8,
                     std::mem::size_of::<ClapEventParamValue>(),
                 )
             },
             PluginEvent::ParamMod(e) => unsafe {
+                e.0.header.size = std::mem::size_of::<ClapEventParamMod>() as u32;
+
                 std::slice::from_raw_parts(
                     &e.0 as *const ClapEventParamMod as *const u8,
                     std::mem::size_of::<ClapEventParamMod>(),
                 )
             },
             PluginEvent::ParamGesture(e) => unsafe {
+                e.0.header.size = std::mem::size_of::<ClapEventParamGesture>() as u32;
+
                 std::slice::from_raw_parts(
                     &e.0 as *const ClapEventParamGesture as *const u8,
                     std::mem::size_of::<ClapEventParamGesture>(),
                 )
             },
             PluginEvent::Transport(e) => unsafe {
+                e.0.header.size = std::mem::size_of::<ClapEventTransport>() as u32;
+
                 std::slice::from_raw_parts(
                     &e.0 as *const ClapEventTransport as *const u8,
                     std::mem::size_of::<ClapEventTransport>(),
                 )
             },
             PluginEvent::Midi(e) => unsafe {
+                e.0.header.size = std::mem::size_of::<ClapEventMidi>() as u32;
+
                 std::slice::from_raw_parts(
                     &e.0 as *const ClapEventMidi as *const u8,
                     std::mem::size_of::<ClapEventMidi>(),
                 )
             },
             PluginEvent::MidiSysex(e) => unsafe {
+                e.0.header.size = std::mem::size_of::<ClapEventMidiSysex>() as u32;
+
                 std::slice::from_raw_parts(
                     &e.0 as *const ClapEventMidiSysex as *const u8,
                     std::mem::size_of::<ClapEventMidiSysex>(),
                 )
             },
             PluginEvent::Midi2(e) => unsafe {
+                e.0.header.size = std::mem::size_of::<ClapEventMidi2>() as u32;
+
                 std::slice::from_raw_parts(
                     &e.0 as *const ClapEventMidi2 as *const u8,
                     std::mem::size_of::<ClapEventMidi2>(),
@@ -135,17 +151,18 @@ impl AllocatedEvent {
         // This is safe because we ensure that only the correct number of bytes
         // will be read via the event.header.size value, which the constructor
         // of each event ensures is correct.
+        //let mut data: [u8; std::mem::size_of::<EventTransport>()] =
+        //unsafe { MaybeUninit::uninit().assume_init() };
         let mut data: [u8; std::mem::size_of::<EventTransport>()] =
-            unsafe { MaybeUninit::uninit().assume_init() };
+            [0; std::mem::size_of::<EventTransport>()];
 
         data[0..raw_bytes.len()].copy_from_slice(raw_bytes);
-        */
 
-        Self { event }
+        Self { data }
     }
 
     pub fn get(&self) -> Result<PluginEvent, ()> {
-        Ok(self.event)
+        Err(())
 
         /*
         // The event header is always the first bytes in every event.
