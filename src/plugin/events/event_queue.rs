@@ -53,7 +53,7 @@ impl EventQueue {
 }
 
 pub struct AllocatedEvent {
-    pub(crate) data: [u8; std::mem::size_of::<EventTransport>()],
+    pub(crate) data: [u8; std::mem::size_of::<ClapEventTransport>()],
 }
 
 impl AllocatedEvent {
@@ -146,15 +146,13 @@ impl AllocatedEvent {
             },
         };
 
-        debug_assert!(raw_bytes.len() <= std::mem::size_of::<EventTransport>());
+        debug_assert!(raw_bytes.len() <= std::mem::size_of::<ClapEventTransport>());
 
         // This is safe because we ensure that only the correct number of bytes
         // will be read via the event.header.size value, which the constructor
         // of each event ensures is correct.
-        //let mut data: [u8; std::mem::size_of::<EventTransport>()] =
-        //unsafe { MaybeUninit::uninit().assume_init() };
-        let mut data: [u8; std::mem::size_of::<EventTransport>()] =
-            [0; std::mem::size_of::<EventTransport>()];
+        let mut data: [u8; std::mem::size_of::<ClapEventTransport>()] =
+            unsafe { MaybeUninit::uninit().assume_init() };
 
         data[0..raw_bytes.len()].copy_from_slice(raw_bytes);
 
@@ -162,9 +160,6 @@ impl AllocatedEvent {
     }
 
     pub fn get(&self) -> Result<PluginEvent, ()> {
-        Err(())
-
-        /*
         // The event header is always the first bytes in every event.
         let header = unsafe { &*(self.data.as_ptr() as *const ClapEventHeader) };
 
@@ -214,6 +209,5 @@ impl AllocatedEvent {
             }))),
             _ => Err(()),
         }
-        */
     }
 }

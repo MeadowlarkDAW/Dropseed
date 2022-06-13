@@ -111,11 +111,6 @@ unsafe extern "C" fn try_push(
     list: *const RawClapOutputEvents,
     event: *const RawClapEventHeader,
 ) -> bool {
-    return true;
-
-    /*
-    println!("try push");
-
     use clap_sys::events::{
         CLAP_EVENT_MIDI, CLAP_EVENT_MIDI2, CLAP_EVENT_MIDI_SYSEX, CLAP_EVENT_NOTE_CHOKE,
         CLAP_EVENT_NOTE_END, CLAP_EVENT_NOTE_EXPRESSION, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON,
@@ -227,5 +222,4 @@ unsafe extern "C" fn try_push(
     out_events.events.push(AllocatedEvent { data });
 
     true
-    */
 }
