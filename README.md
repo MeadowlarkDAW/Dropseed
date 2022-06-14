@@ -1,4 +1,4 @@
-# Dropseed
-A modular DAW (Digital Audio Workstation) engine written in Rust
+# dropseed
+The DAW audio graph engine used in Meadowlark (placeholder)
 
 (WIP)

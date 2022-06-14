@@ -6,9 +6,9 @@ authors = ["Billy Messenger <BillyDM@tutamail.com>"]
 license = "GPL-3.0"
 keywords = ["audio", "graph", "daw", "plugin", "host"]
 categories = ["multimedia::audio"]
-description = "The RustyDAW DAW engine (placeholder)"
-documentation = "https://docs.rs/rusty-daw-engine"
-repository = "https://github.com/RustyDAW/rusty-daw-engine"
+description = "The DAW audio graph engine used in Meadowlark (placeholder)"
+documentation = "https://docs.rs/dropseed"
+repository = "https://github.com/MeadowlarkDAW/dropseed"
 readme = "README.md"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -25,7 +25,7 @@ members = [
 ]
 
 [dependencies]
-rusty-daw-core = "0.9"
+meadowlark-core-types = "0.1"
 audio-graph = { git = "https://github.com/MeadowlarkDAW/audio-graph", branch = "main" }
 clap-sys = { git = "https://github.com/glowcoil/clap-sys.git", rev = "362c89d22ef7aa7c30b0e8ffa2d9a0ee2dd7897b" }
 dirs = { version = "4.0", optional = true }
