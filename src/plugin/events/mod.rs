@@ -148,6 +148,13 @@ impl EventNote {
         })
     }
 
+    pub(crate) fn from_raw(mut event: ClapEventNote) -> Self {
+        // I don't trust the plugin to always set this correctly.
+        event.header.size = std::mem::size_of::<ClapEventNote>() as u32;
+
+        Self(event)
+    }
+
     /// Sample offset within the buffer for this event.
     pub fn time(&self) -> u32 {
         self.0.header.time
@@ -287,6 +294,13 @@ impl EventNoteExpression {
         })
     }
 
+    pub(crate) fn from_raw(mut event: ClapEventNoteExpression) -> Self {
+        // I don't trust the plugin to always set this correctly.
+        event.header.size = std::mem::size_of::<ClapEventNoteExpression>() as u32;
+
+        Self(event)
+    }
+
     /// Sample offset within the buffer for this event.
     pub fn time(&self) -> u32 {
         self.0.header.time
@@ -376,6 +390,13 @@ impl EventParamValue {
             key,
             value,
         })
+    }
+
+    pub(crate) fn from_raw(mut event: ClapEventParamValue) -> Self {
+        // I don't trust the plugin to always set this correctly.
+        event.header.size = std::mem::size_of::<ClapEventParamValue>() as u32;
+
+        Self(event)
     }
 
     /// Sample offset within the buffer for this event.
@@ -470,6 +491,13 @@ impl EventParamMod {
         })
     }
 
+    pub(crate) fn from_raw(mut event: ClapEventParamMod) -> Self {
+        // I don't trust the plugin to always set this correctly.
+        event.header.size = std::mem::size_of::<ClapEventParamMod>() as u32;
+
+        Self(event)
+    }
+
     /// Sample offset within the buffer for this event.
     pub fn time(&self) -> u32 {
         self.0.header.time
@@ -550,6 +578,13 @@ impl EventParamGesture {
             },
             param_id: param_id.0,
         })
+    }
+
+    pub(crate) fn from_raw(mut event: ClapEventParamGesture) -> Self {
+        // I don't trust the plugin to always set this correctly.
+        event.header.size = std::mem::size_of::<ClapEventParamGesture>() as u32;
+
+        Self(event)
     }
 
     /// Sample offset within the buffer for this event.
@@ -657,6 +692,13 @@ impl EventTransport {
             tsig_num,
             tsig_denom,
         })
+    }
+
+    pub(crate) fn from_raw(mut event: ClapEventTransport) -> Self {
+        // I don't trust the plugin to always set this correctly.
+        event.header.size = std::mem::size_of::<ClapEventTransport>() as u32;
+
+        Self(event)
     }
 
     /// Sample offset within the buffer for this event.
@@ -771,6 +813,13 @@ impl EventMidi {
         })
     }
 
+    pub(crate) fn from_raw(mut event: ClapEventMidi) -> Self {
+        // I don't trust the plugin to always set this correctly.
+        event.header.size = std::mem::size_of::<ClapEventMidi>() as u32;
+
+        Self(event)
+    }
+
     /// Sample offset within the buffer for this event.
     pub fn time(&self) -> u32 {
         self.0.header.time
@@ -835,6 +884,13 @@ impl EventMidiSysex {
         })
     }
 
+    pub(crate) fn from_raw(mut event: ClapEventMidiSysex) -> Self {
+        // I don't trust the plugin to always set this correctly.
+        event.header.size = std::mem::size_of::<ClapEventMidiSysex>() as u32;
+
+        Self(event)
+    }
+
     /// Sample offset within the buffer for this event.
     pub fn time(&self) -> u32 {
         self.0.header.time
@@ -893,6 +949,13 @@ impl EventMidi2 {
         })
     }
 
+    pub(crate) fn from_raw(mut event: ClapEventMidi2) -> Self {
+        // I don't trust the plugin to always set this correctly.
+        event.header.size = std::mem::size_of::<ClapEventMidi2>() as u32;
+
+        Self(event)
+    }
+
     /// Sample offset within the buffer for this event.
     pub fn time(&self) -> u32 {
         self.0.header.time
@@ -916,17 +979,4 @@ impl EventMidi2 {
     pub fn data(&self) -> [u32; 4] {
         self.0.data
     }
-}
-
-#[derive(Clone, Copy)]
-pub enum PluginEvent {
-    Note(EventNote),
-    NoteExpression(EventNoteExpression),
-    ParamValue(EventParamValue),
-    ParamMod(EventParamMod),
-    ParamGesture(EventParamGesture),
-    Transport(EventTransport),
-    Midi(EventMidi),
-    MidiSysex(EventMidiSysex),
-    Midi2(EventMidi2),
 }

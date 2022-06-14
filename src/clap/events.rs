@@ -3,10 +3,19 @@ use std::pin::Pin;
 use std::ptr;
 
 use clap_sys::events::clap_event_header as RawClapEventHeader;
+use clap_sys::events::clap_event_midi as RawClapEventMidi;
+use clap_sys::events::clap_event_midi2 as RawClapEventMidi2;
+use clap_sys::events::clap_event_midi_sysex as RawClapEventMidiSysex;
+use clap_sys::events::clap_event_note as RawClapEventNote;
+use clap_sys::events::clap_event_note_expression as RawClapEventNoteExpression;
+use clap_sys::events::clap_event_param_gesture as RawClapEventParamGesture;
+use clap_sys::events::clap_event_param_mod as RawClapEventParamMod;
+use clap_sys::events::clap_event_param_value as RawClapEventParamValue;
+use clap_sys::events::clap_event_transport as RawClapEventTransport;
 use clap_sys::events::clap_input_events as RawClapInputEvents;
 use clap_sys::events::clap_output_events as RawClapOutputEvents;
 
-use crate::plugin::events::event_queue::AllocatedEvent;
+use crate::plugin::events::event_queue::PluginEvent;
 use crate::plugin::events::{
     EventMidi, EventMidi2, EventMidiSysex, EventNote, EventNoteExpression, EventParamGesture,
     EventParamMod, EventParamValue, EventTransport,
@@ -128,98 +137,43 @@ unsafe extern "C" fn try_push(
         return false;
     }
 
-    let mut header = *event;
+    let header = *event;
 
-    let mut data: [u8; std::mem::size_of::<EventTransport>()] =
-        { std::mem::MaybeUninit::uninit().assume_init() };
-
-    match header.type_ {
+    let event: PluginEvent = match header.type_ {
         CLAP_EVENT_NOTE_ON | CLAP_EVENT_NOTE_OFF | CLAP_EVENT_NOTE_CHOKE | CLAP_EVENT_NOTE_END => {
-            header.size = std::mem::size_of::<EventNote>() as u32;
-
-            let event_bytes =
-                std::slice::from_raw_parts(event as *const u8, std::mem::size_of::<EventNote>());
-            data[0..std::mem::size_of::<EventNote>()].copy_from_slice(event_bytes);
+            EventNote::from_raw(*(event as *const RawClapEventNote)).into()
         }
         CLAP_EVENT_NOTE_EXPRESSION => {
-            header.size = std::mem::size_of::<EventNoteExpression>() as u32;
-
-            let event_bytes = std::slice::from_raw_parts(
-                event as *const u8,
-                std::mem::size_of::<EventNoteExpression>(),
-            );
-            data[0..std::mem::size_of::<EventNoteExpression>()].copy_from_slice(event_bytes);
+            EventNoteExpression::from_raw(*(event as *const RawClapEventNoteExpression)).into()
         }
         CLAP_EVENT_PARAM_VALUE => {
-            header.size = std::mem::size_of::<EventParamValue>() as u32;
-
-            let event_bytes = std::slice::from_raw_parts(
-                event as *const u8,
-                std::mem::size_of::<EventParamValue>(),
-            );
-            data[0..std::mem::size_of::<EventParamValue>()].copy_from_slice(event_bytes);
+            EventParamValue::from_raw(*(event as *const RawClapEventParamValue)).into()
         }
         CLAP_EVENT_PARAM_MOD => {
-            header.size = std::mem::size_of::<EventParamMod>() as u32;
-
-            let event_bytes = std::slice::from_raw_parts(
-                event as *const u8,
-                std::mem::size_of::<EventParamMod>(),
-            );
-            data[0..std::mem::size_of::<EventParamMod>()].copy_from_slice(event_bytes);
+            EventParamMod::from_raw(*(event as *const RawClapEventParamMod)).into()
         }
         CLAP_EVENT_PARAM_GESTURE_BEGIN | CLAP_EVENT_PARAM_GESTURE_END => {
-            header.size = std::mem::size_of::<EventParamGesture>() as u32;
-
-            let event_bytes = std::slice::from_raw_parts(
-                event as *const u8,
-                std::mem::size_of::<EventParamGesture>(),
-            );
-            data[0..std::mem::size_of::<EventParamGesture>()].copy_from_slice(event_bytes);
+            EventParamGesture::from_raw(*(event as *const RawClapEventParamGesture)).into()
         }
         CLAP_EVENT_TRANSPORT => {
-            header.size = std::mem::size_of::<EventTransport>() as u32;
-
-            let event_bytes = std::slice::from_raw_parts(
-                event as *const u8,
-                std::mem::size_of::<EventTransport>(),
-            );
-            data[0..std::mem::size_of::<EventTransport>()].copy_from_slice(event_bytes);
+            EventTransport::from_raw(*(event as *const RawClapEventTransport)).into()
         }
-        CLAP_EVENT_MIDI => {
-            header.size = std::mem::size_of::<EventMidi>() as u32;
-
-            let event_bytes =
-                std::slice::from_raw_parts(event as *const u8, std::mem::size_of::<EventMidi>());
-            data[0..std::mem::size_of::<EventMidi>()].copy_from_slice(event_bytes);
-        }
+        CLAP_EVENT_MIDI => EventMidi::from_raw(*(event as *const RawClapEventMidi)).into(),
         CLAP_EVENT_MIDI_SYSEX => {
-            header.size = std::mem::size_of::<EventMidiSysex>() as u32;
-
-            let event_bytes = std::slice::from_raw_parts(
-                event as *const u8,
-                std::mem::size_of::<EventMidiSysex>(),
-            );
-            data[0..std::mem::size_of::<EventMidiSysex>()].copy_from_slice(event_bytes);
+            EventMidiSysex::from_raw(*(event as *const RawClapEventMidiSysex)).into()
         }
-        CLAP_EVENT_MIDI2 => {
-            header.size = std::mem::size_of::<EventMidi2>() as u32;
-
-            let event_bytes =
-                std::slice::from_raw_parts(event as *const u8, std::mem::size_of::<EventMidi2>());
-            data[0..std::mem::size_of::<EventMidi2>()].copy_from_slice(event_bytes);
-        }
+        CLAP_EVENT_MIDI2 => EventMidi2::from_raw(*(event as *const RawClapEventMidi2)).into(),
         _ => {
             log::warn!("Received an unknown clap_event_header.type from plugin");
             return false;
         }
-    }
+    };
 
     if out_events.events.len() >= out_events.events.capacity() {
         log::warn!("Event queue has exceeded its capacity. This will cause an allocation on the audio thread.");
     }
 
-    out_events.events.push(AllocatedEvent { data });
+    out_events.events.push(event);
 
     true
 }

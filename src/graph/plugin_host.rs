@@ -9,8 +9,8 @@ use std::sync::{
 };
 
 use super::shared_pool::PluginInstanceID;
-use crate::plugin::events::event_queue::EventQueue;
-use crate::plugin::events::{EventFlags, EventParamMod, EventParamValue, PluginEvent};
+use crate::plugin::events::event_queue::{EventQueue, PluginEventRef};
+use crate::plugin::events::{EventFlags, EventParamMod, EventParamValue};
 use crate::plugin::ext::audio_ports::PluginAudioPortsExt;
 use crate::plugin::ext::params::{ParamInfo, ParamInfoFlags};
 use crate::plugin::host_request::RequestFlags;
@@ -24,7 +24,7 @@ use crate::{HostRequest, ParamID, ProcInfo, ProcessStatus};
 #[derive(Clone, Copy)]
 struct MainToAudioParamValue {
     value: f64,
-    cookie: *const std::ffi::c_void,
+    _cookie: *const std::ffi::c_void,
 }
 
 unsafe impl Sync for MainToAudioParamValue {}
@@ -86,7 +86,7 @@ impl PluginParamsExt {
                     log::warn!("Ignored request to set parameter value: parameter with id {:?} is read only", &param_id);
                 } else {
                     ui_to_audio_param_value_tx
-                        .set(param_id, MainToAudioParamValue { value, cookie: param_info.cookie });
+                        .set(param_id, MainToAudioParamValue { value, _cookie: param_info.cookie });
                     ui_to_audio_param_value_tx.producer_done();
                 }
             } else {
@@ -105,7 +105,7 @@ impl PluginParamsExt {
             if let Some(param_info) = self.params.get(&param_id) {
                 ui_to_audio_param_mod_tx.set(
                     param_id,
-                    MainToAudioParamValue { value: amount, cookie: param_info.cookie },
+                    MainToAudioParamValue { value: amount, _cookie: param_info.cookie },
                 );
                 ui_to_audio_param_mod_tx.producer_done();
             } else {
@@ -512,41 +512,47 @@ impl PluginInstanceHostAudioThread {
 
         if let Some(params_queue) = &mut self.param_queues {
             params_queue.ui_to_audio_param_value_rx.consume(|param_id, value| {
-                self.in_events.push(PluginEvent::ParamValue(EventParamValue::new(
-                    // TODO: Finer values for `time` instead of just setting it to the first frame?
-                    0,                   // time
-                    0,                   // space_id
-                    EventFlags::empty(), // event_flags
-                    *param_id,           // param_id
-                    // TODO: Note ID
-                    -1, // note_id
-                    // TODO: Port index
-                    -1, // port_index
-                    // TODO: Channel
-                    -1, // channel
-                    // TODO: Key
-                    -1,          // key
-                    value.value, // value
-                )))
+                self.in_events.push(
+                    EventParamValue::new(
+                        // TODO: Finer values for `time` instead of just setting it to the first frame?
+                        0,                   // time
+                        0,                   // space_id
+                        EventFlags::empty(), // event_flags
+                        *param_id,           // param_id
+                        // TODO: Note ID
+                        -1, // note_id
+                        // TODO: Port index
+                        -1, // port_index
+                        // TODO: Channel
+                        -1, // channel
+                        // TODO: Key
+                        -1,          // key
+                        value.value, // value
+                    )
+                    .into(),
+                )
             });
 
             params_queue.ui_to_audio_param_mod_rx.consume(|param_id, value| {
-                self.in_events.push(PluginEvent::ParamMod(EventParamMod::new(
-                    // TODO: Finer values for `time` instead of just setting it to the first frame?
-                    0,                   // time
-                    0,                   // space_id
-                    EventFlags::empty(), // event_flags
-                    *param_id,           // param_id
-                    // TODO: Note ID
-                    -1, // note_id
-                    // TODO: Port index
-                    -1, // port_index
-                    // TODO: Channel
-                    -1, // channel
-                    // TODO: Key
-                    -1,          // key
-                    value.value, // value
-                )))
+                self.in_events.push(
+                    EventParamMod::new(
+                        // TODO: Finer values for `time` instead of just setting it to the first frame?
+                        0,                   // time
+                        0,                   // space_id
+                        EventFlags::empty(), // event_flags
+                        *param_id,           // param_id
+                        // TODO: Note ID
+                        -1, // note_id
+                        // TODO: Port index
+                        -1, // port_index
+                        // TODO: Channel
+                        -1, // channel
+                        // TODO: Key
+                        -1,          // key
+                        value.value, // value
+                    )
+                    .into(),
+                )
             });
         }
 
@@ -609,7 +615,7 @@ impl PluginInstanceHostAudioThread {
             params_queue.audio_to_main_param_value_tx.produce(|mut queue| {
                 while let Some(out_event) = self.out_events.pop() {
                     match out_event.get() {
-                        Ok(PluginEvent::ParamGesture(event)) => {
+                        Ok(PluginEventRef::ParamGesture(event)) => {
                             // TODO: Use event.time for more accurate recording of automation.
 
                             let is_adjusting =
@@ -649,7 +655,7 @@ impl PluginInstanceHostAudioThread {
                                 queue.set_or_update(event.param_id(), value);
                             }
                         }
-                        Ok(PluginEvent::ParamValue(event)) => {
+                        Ok(PluginEventRef::ParamValue(event)) => {
                             // TODO: Use event.time for more accurate recording of automation.
 
                             let value = AudioToMainParamValue {
