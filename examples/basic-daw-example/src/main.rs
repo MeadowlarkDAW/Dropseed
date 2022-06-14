@@ -13,7 +13,7 @@ use rusty_daw_engine::{
 mod effect_rack_page;
 mod scanned_plugins_page;
 
-use effect_rack_page::{AudioPortState, EffectRackPluginState, EffectRackState, ParamsState};
+use effect_rack_page::{EffectRackPluginActiveState, EffectRackPluginState, EffectRackState};
 
 const MIN_BLOCK_SIZE: u32 = 1;
 const MAX_BLOCK_SIZE: u32 = 512;
@@ -242,54 +242,29 @@ impl BasicDawExampleGUI {
                             }
                             let plugin_name = found.unwrap();
 
-                            let effect_rack_plugin = match new_plugin_res.status {
+                            let active_state = match new_plugin_res.status {
                                 PluginActivationStatus::Activated {
-                                    new_audio_ports,
-                                    new_params,
+                                    new_handle,
                                     new_param_values,
-                                } => EffectRackPluginState {
-                                    plugin_name,
-                                    plugin_id: new_plugin_res.plugin_id,
-                                    audio_ports_state: Some(AudioPortState::new(new_audio_ports)),
-                                    params_state: Some(ParamsState::new(
-                                        new_params,
-                                        new_param_values,
-                                    )),
-                                    selected_port: Default::default(),
-                                    active: true,
-                                },
-                                PluginActivationStatus::Inactive => EffectRackPluginState {
-                                    plugin_name,
-                                    plugin_id: new_plugin_res.plugin_id,
-                                    audio_ports_state: None,
-                                    params_state: None,
-                                    selected_port: Default::default(),
-                                    active: false,
-                                },
+                                } => Some(EffectRackPluginActiveState::new(
+                                    new_handle,
+                                    new_param_values,
+                                )),
+                                PluginActivationStatus::Inactive => None,
                                 PluginActivationStatus::LoadError(e) => {
                                     println!("Plugin failed to load: {}", e);
-
-                                    EffectRackPluginState {
-                                        plugin_name,
-                                        plugin_id: new_plugin_res.plugin_id,
-                                        audio_ports_state: None,
-                                        params_state: None,
-                                        selected_port: Default::default(),
-                                        active: false,
-                                    }
+                                    None
                                 }
                                 PluginActivationStatus::ActivationError(e) => {
                                     println!("Plugin failed to activate: {}", e);
-
-                                    EffectRackPluginState {
-                                        plugin_name,
-                                        plugin_id: new_plugin_res.plugin_id,
-                                        audio_ports_state: None,
-                                        params_state: None,
-                                        selected_port: Default::default(),
-                                        active: false,
-                                    }
+                                    None
                                 }
+                            };
+
+                            let effect_rack_plugin = EffectRackPluginState {
+                                plugin_name,
+                                plugin_id: new_plugin_res.plugin_id,
+                                active_state,
                             };
 
                             engine_state.effect_rack_state.plugins.push(effect_rack_plugin);
@@ -299,10 +274,8 @@ impl BasicDawExampleGUI {
                             let effect_rack_plugin =
                                 engine_state.effect_rack_state.plugin_mut(&plugin_id).unwrap();
 
-                            if let Some(audio_ports_state) =
-                                &mut effect_rack_plugin.audio_ports_state
-                            {
-                                audio_ports_state.sync_with_new_edges(&plugin_edges);
+                            if let Some(active_state) = &mut effect_rack_plugin.active_state {
+                                active_state.audio_ports_state.sync_with_new_edges(&plugin_edges);
                             }
                         }
                     }
@@ -313,21 +286,12 @@ impl BasicDawExampleGUI {
                     // when the plugin restarts.
                     //
                     // Make sure your UI updates the port configuration on this plugin.
-                    PluginEvent::Activated {
-                        plugin_id,
-                        new_audio_ports,
-                        new_params,
-                        new_param_values,
-                    } => {
+                    PluginEvent::Activated { plugin_id, new_handle, new_param_values } => {
                         if let Some(engine_state) = &mut self.engine_state {
                             let effect_rack_plugin =
                                 engine_state.effect_rack_state.plugin_mut(&plugin_id).unwrap();
 
-                            effect_rack_plugin.active = true;
-                            effect_rack_plugin.audio_ports_state =
-                                Some(AudioPortState::new(new_audio_ports));
-                            effect_rack_plugin.params_state =
-                                Some(ParamsState::new(new_params, new_param_values));
+                            effect_rack_plugin.update_handle(new_handle, new_param_values);
                         }
                     }
 
@@ -346,9 +310,7 @@ impl BasicDawExampleGUI {
                             let effect_rack_plugin =
                                 engine_state.effect_rack_state.plugin_mut(&plugin_id).unwrap();
 
-                            effect_rack_plugin.active = false;
-                            effect_rack_plugin.audio_ports_state = None;
-                            effect_rack_plugin.params_state = None;
+                            effect_rack_plugin.set_inactive();
 
                             if let Err(e) = status {
                                 println!("Plugin failed to activate: {}", e);
@@ -361,8 +323,8 @@ impl BasicDawExampleGUI {
                             let effect_rack_plugin =
                                 engine_state.effect_rack_state.plugin_mut(&plugin_id).unwrap();
 
-                            if let Some(params_state) = &mut effect_rack_plugin.params_state {
-                                params_state.parameters_modified(&modified_params);
+                            if let Some(active_state) = &mut effect_rack_plugin.active_state {
+                                active_state.params_state.parameters_modified(&modified_params);
                             }
                         }
                     }

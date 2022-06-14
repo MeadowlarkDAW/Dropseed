@@ -31,7 +31,9 @@ use crate::utils::thread_id::SharedThreadIDs;
 use crate::ParamID;
 
 pub use compiler::GraphCompilerError;
-pub use plugin_host::{ActivatePluginError, ParamGestureInfo, ParamModifiedInfo, PluginParamsExt};
+pub use plugin_host::{
+    ActivatePluginError, ParamGestureInfo, ParamModifiedInfo, PluginHandle, PluginParamsExt,
+};
 pub use save_state::{AudioGraphSaveState, EdgeSaveState};
 pub use shared_pool::PluginInstanceID;
 pub use verifier::VerifyScheduleError;
@@ -249,19 +251,19 @@ impl AudioGraph {
             self.max_frames as u32,
             &self.coll_handle,
         ) {
-            Ok((plugin_audio_thread, new_audio_ports, new_params, new_param_values)) => (
+            Ok((plugin_audio_thread, new_handle, new_param_values)) => (
                 Some(SharedPluginHostAudioThread::new(plugin_audio_thread, &self.coll_handle)),
-                PluginActivationStatus::Activated { new_audio_ports, new_params, new_param_values },
+                PluginActivationStatus::Activated { new_handle, new_param_values },
             ),
             Err(e) => (None, PluginActivationStatus::ActivationError(e)),
         };
 
         entry.audio_thread = plugin_audio_thread;
 
-        if let PluginActivationStatus::Activated { new_audio_ports, .. } = &activation_status {
+        if let PluginActivationStatus::Activated { new_handle, .. } = &activation_status {
             // Update the number of channels (ports) in our abstract graph.
 
-            update_plugin_ports(&mut self.abstract_graph, entry, new_audio_ports);
+            update_plugin_ports(&mut self.abstract_graph, entry, new_handle.audio_ports());
         }
 
         Ok(activation_status)
@@ -767,8 +769,7 @@ impl AudioGraph {
                 }
                 OnIdleResult::PluginActivated(
                     plugin_audio_thread,
-                    audio_ports,
-                    params,
+                    new_handle,
                     new_param_values,
                 ) => {
                     plugin.audio_thread = Some(SharedPluginHostAudioThread::new(
@@ -776,7 +777,7 @@ impl AudioGraph {
                         &self.coll_handle,
                     ));
 
-                    update_plugin_ports(&mut self.abstract_graph, plugin, &audio_ports);
+                    update_plugin_ports(&mut self.abstract_graph, plugin, new_handle.audio_ports());
 
                     recompile_graph = true;
 
@@ -784,8 +785,7 @@ impl AudioGraph {
                         event_tx
                             .send(DAWEngineEvent::Plugin(PluginEvent::Activated {
                                 plugin_id: plugin.plugin_host.id.clone(),
-                                new_audio_ports: audio_ports,
-                                new_params: params,
+                                new_handle,
                                 new_param_values,
                             }))
                             .unwrap();
@@ -886,11 +886,7 @@ pub enum PluginActivationStatus {
     /// This means the plugin successfully activated and returned
     /// its new audio/event port configuration and its new
     /// parameter configuration.
-    Activated {
-        new_audio_ports: PluginAudioPortsExt,
-        new_params: PluginParamsExt,
-        new_param_values: FnvHashMap<ParamID, f64>,
-    },
+    Activated { new_handle: PluginHandle, new_param_values: FnvHashMap<ParamID, f64> },
 
     /// This means that the plugin loaded but did not activate yet. This
     /// can happen when the user loads a project with a deactivated

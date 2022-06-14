@@ -46,7 +46,7 @@ pub(crate) fn compile_graph(
                     entry.audio_in_channel_refs.len(),
                     entry.audio_out_channel_refs.len(),
                     entry.audio_thread.as_ref(),
-                    entry.plugin_host.audio_ports_ext.as_ref(),
+                    entry.plugin_host.audio_ports.as_ref(),
                 )
             } else {
                 return Err(GraphCompilerError::UnexpectedError(format!(

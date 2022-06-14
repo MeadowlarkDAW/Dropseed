@@ -62,6 +62,18 @@ pub struct ParamModifiedInfo {
     pub is_gesturing: bool,
 }
 
+#[derive(Debug)]
+pub struct PluginHandle {
+    pub params: PluginParamsExt,
+    pub(crate) audio_ports: PluginAudioPortsExt,
+}
+
+impl PluginHandle {
+    pub fn audio_ports(&self) -> &PluginAudioPortsExt {
+        &self.audio_ports
+    }
+}
+
 pub struct PluginParamsExt {
     /// (parameter info, initial value)
     pub params: FnvHashMap<ParamID, ParamInfo>,
@@ -134,7 +146,7 @@ struct ParamQueuesAudioThread {
 pub(crate) struct PluginInstanceHost {
     pub id: PluginInstanceID,
 
-    pub audio_ports_ext: Option<PluginAudioPortsExt>,
+    pub audio_ports: Option<PluginAudioPortsExt>,
 
     main_thread: Option<Box<dyn PluginMainThread>>,
 
@@ -165,7 +177,7 @@ impl PluginInstanceHost {
         Self {
             id,
             main_thread,
-            audio_ports_ext: None,
+            audio_ports: None,
             state: Arc::new(SharedPluginState::new()),
             save_state,
             param_queues: None,
@@ -199,12 +211,7 @@ impl PluginInstanceHost {
         max_frames: u32,
         coll_handle: &basedrop::Handle,
     ) -> Result<
-        (
-            PluginInstanceHostAudioThread,
-            PluginAudioPortsExt,
-            PluginParamsExt,
-            FnvHashMap<ParamID, f64>,
-        ),
+        (PluginInstanceHostAudioThread, PluginHandle, FnvHashMap<ParamID, f64>),
         ActivatePluginError,
     > {
         self.can_activate()?;
@@ -219,16 +226,18 @@ impl PluginInstanceHost {
             Ok(audio_ports) => audio_ports.clone(),
             Err(e) => {
                 self.state.set(PluginState::InactiveWithError);
+                self.audio_ports = None;
 
                 return Err(ActivatePluginError::PluginFailedToGetAudioPortsExt(e));
             }
         };
 
-        self.audio_ports_ext = Some(audio_ports.clone());
         if let Some(save_state) = &mut self.save_state {
             save_state.audio_in_out_channels =
                 (audio_ports.total_in_channels() as u16, audio_ports.total_out_channels() as u16);
         }
+
+        self.audio_ports = Some(audio_ports.clone());
 
         let num_params = plugin_main_thread.num_params() as usize;
         let mut params: FnvHashMap<ParamID, ParamInfo> = FnvHashMap::default();
@@ -311,8 +320,7 @@ impl PluginInstanceHost {
                         is_adjusting_parameter,
                         host_request: self.host_request.clone(),
                     },
-                    audio_ports,
-                    params_ext,
+                    PluginHandle { audio_ports, params: params_ext },
                     param_values,
                 ))
             }
@@ -392,11 +400,10 @@ impl PluginInstanceHost {
 
                     if self.host_request.reset_restart() {
                         match self.activate(sample_rate, min_frames, max_frames, coll_handle) {
-                            Ok((audio_thread, audio_ports, params, param_values)) => {
+                            Ok((audio_thread, ui_handle, param_values)) => {
                                 res = OnIdleResult::PluginActivated(
                                     audio_thread,
-                                    audio_ports,
-                                    params,
+                                    ui_handle,
                                     param_values,
                                 )
                             }
@@ -437,12 +444,7 @@ impl PluginInstanceHost {
 pub(crate) enum OnIdleResult {
     Ok,
     PluginDeactivated,
-    PluginActivated(
-        PluginInstanceHostAudioThread,
-        PluginAudioPortsExt,
-        PluginParamsExt,
-        FnvHashMap<ParamID, f64>,
-    ),
+    PluginActivated(PluginInstanceHostAudioThread, PluginHandle, FnvHashMap<ParamID, f64>),
     PluginReadyToRemove,
     PluginFailedToActivate(ActivatePluginError),
 }

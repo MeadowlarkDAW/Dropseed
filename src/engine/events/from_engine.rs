@@ -7,8 +7,8 @@ use crate::{
     engine::main_thread::{EngineActivatedInfo, ModifyGraphRes},
     engine::plugin_scanner::RescanPluginDirectoriesRes,
     graph::{
-        plugin_host::PluginParamsExt, ActivatePluginError, AudioGraphSaveState, ParamModifiedInfo,
-        PluginInstanceID,
+        plugin_host::{PluginHandle, PluginParamsExt},
+        ActivatePluginError, AudioGraphSaveState, ParamModifiedInfo, PluginInstanceID,
     },
     ParamID, PluginAudioPortsExt,
 };
@@ -91,8 +91,7 @@ pub enum PluginEvent {
     /// Make sure your UI updates the port configuration on this plugin.
     Activated {
         plugin_id: PluginInstanceID,
-        new_audio_ports: PluginAudioPortsExt,
-        new_params: PluginParamsExt,
+        new_handle: PluginHandle,
         new_param_values: FnvHashMap<ParamID, f64>,
     },
 

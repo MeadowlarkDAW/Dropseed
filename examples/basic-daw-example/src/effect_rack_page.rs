@@ -1,8 +1,8 @@
 use eframe::egui;
 use fnv::FnvHashMap;
 use rusty_daw_engine::{
-    plugin::ext::audio_ports::PluginAudioPortsExt, Edge, ParamID, ParamInfoFlags,
-    ParamModifiedInfo, PluginEdges, PluginInstanceID, PluginParamsExt, PortType,
+    Edge, ParamID, ParamInfoFlags, ParamModifiedInfo, PluginEdges, PluginHandle, PluginInstanceID,
+    PortType,
 };
 
 use super::BasicDawExampleGUI;
@@ -11,6 +11,7 @@ use super::BasicDawExampleGUI;
 pub enum PortChannel {
     AudioIn(usize),
     AudioOut(usize),
+    None,
 }
 
 impl Default for PortChannel {
@@ -20,20 +21,18 @@ impl Default for PortChannel {
 }
 
 pub struct AudioPortState {
-    audio_ports_state_ext: PluginAudioPortsExt,
-
     audio_in_edges: Vec<Vec<Edge>>,
     audio_out_edges: Vec<Vec<Edge>>,
 }
 
 impl AudioPortState {
-    pub fn new(audio_ports_state_ext: PluginAudioPortsExt) -> Self {
+    pub fn new(handle: &PluginHandle) -> Self {
         let audio_in_edges: Vec<Vec<Edge>> =
-            (0..audio_ports_state_ext.total_in_channels()).map(|_| Vec::new()).collect();
+            (0..handle.audio_ports().total_in_channels()).map(|_| Vec::new()).collect();
         let audio_out_edges: Vec<Vec<Edge>> =
-            (0..audio_ports_state_ext.total_out_channels()).map(|_| Vec::new()).collect();
+            (0..handle.audio_ports().total_out_channels()).map(|_| Vec::new()).collect();
 
-        Self { audio_ports_state_ext, audio_in_edges, audio_out_edges }
+        Self { audio_in_edges, audio_out_edges }
     }
 
     pub fn sync_with_new_edges(&mut self, edges: &PluginEdges) {
@@ -86,17 +85,27 @@ pub struct ParamState {
 }
 
 pub struct ParamsState {
-    params_ext: PluginParamsExt,
-
     params: FnvHashMap<ParamID, ParamState>,
 }
 
 impl ParamsState {
-    pub fn new(params_ext: PluginParamsExt, param_values: FnvHashMap<ParamID, f64>) -> Self {
-        let mut params: FnvHashMap<ParamID, ParamState> = FnvHashMap::default();
+    pub fn new(handle: &PluginHandle, param_values: FnvHashMap<ParamID, f64>) -> Self {
+        let mut new_self = Self { params: FnvHashMap::default() };
 
-        for info in params_ext.params.values() {
-            let _ = params.insert(
+        new_self.update_handle(handle, param_values);
+
+        new_self
+    }
+
+    pub fn update_handle(
+        &mut self,
+        new_handle: &PluginHandle,
+        param_values: FnvHashMap<ParamID, f64>,
+    ) {
+        self.params.clear();
+
+        for info in new_handle.params.params.values() {
+            let _ = self.params.insert(
                 info.stable_id,
                 ParamState {
                     id: info.stable_id,
@@ -112,8 +121,6 @@ impl ParamsState {
                 },
             );
         }
-
-        Self { params_ext, params }
     }
 
     pub fn parameters_modified(&mut self, modified_params: &[ParamModifiedInfo]) {
@@ -129,14 +136,42 @@ impl ParamsState {
     }
 }
 
+pub struct EffectRackPluginActiveState {
+    pub handle: PluginHandle,
+    pub audio_ports_state: AudioPortState,
+    pub params_state: ParamsState,
+
+    pub selected_port: PortChannel,
+}
+
+impl EffectRackPluginActiveState {
+    pub fn new(handle: PluginHandle, param_values: FnvHashMap<ParamID, f64>) -> Self {
+        let audio_ports_state = AudioPortState::new(&handle);
+        let params_state = ParamsState::new(&handle, param_values);
+
+        Self { handle, audio_ports_state, params_state, selected_port: PortChannel::None }
+    }
+}
+
 pub struct EffectRackPluginState {
     pub plugin_name: String,
     pub plugin_id: PluginInstanceID,
-    pub audio_ports_state: Option<AudioPortState>,
-    pub params_state: Option<ParamsState>,
 
-    pub active: bool,
-    pub selected_port: PortChannel,
+    pub active_state: Option<EffectRackPluginActiveState>,
+}
+
+impl EffectRackPluginState {
+    pub fn set_inactive(&mut self) {
+        self.active_state = None;
+    }
+
+    pub fn update_handle(
+        &mut self,
+        new_handle: PluginHandle,
+        param_values: FnvHashMap<ParamID, f64>,
+    ) {
+        self.active_state = Some(EffectRackPluginActiveState::new(new_handle, param_values));
+    }
 }
 
 pub struct EffectRackState {
@@ -200,7 +235,7 @@ pub(crate) fn show(app: &mut BasicDawExampleGUI, ui: &mut egui::Ui) {
                         .show(ui, |ui| {
                             // TODO: Let the user activate/deactive the plugin in this GUI.
 
-                            if plugin.active {
+                            if plugin.active_state.is_some() {
                                 ui.colored_label(egui::Color32::GREEN, "activated");
                             } else {
                                 ui.colored_label(egui::Color32::RED, "deactivated");
@@ -211,14 +246,11 @@ pub(crate) fn show(app: &mut BasicDawExampleGUI, ui: &mut egui::Ui) {
 
                             ui.separator();
 
-                            if let Some(audio_ports_state) = &plugin.audio_ports_state {
+                            if let Some(active_state) = &mut plugin.active_state {
                                 ui.label("audio in");
                                 let mut channel_i = 0;
-                                for (port_i, port) in audio_ports_state
-                                    .audio_ports_state_ext
-                                    .inputs
-                                    .iter()
-                                    .enumerate()
+                                for (port_i, port) in
+                                    active_state.handle.audio_ports().inputs.iter().enumerate()
                                 {
                                     ui.horizontal(|ui| {
                                         ui.label(
@@ -229,7 +261,7 @@ pub(crate) fn show(app: &mut BasicDawExampleGUI, ui: &mut egui::Ui) {
 
                                         for _ in 0..port.channels {
                                             ui.selectable_value(
-                                                &mut plugin.selected_port,
+                                                &mut active_state.selected_port,
                                                 PortChannel::AudioIn(channel_i),
                                                 &format!("{}", channel_i),
                                             );
@@ -243,11 +275,8 @@ pub(crate) fn show(app: &mut BasicDawExampleGUI, ui: &mut egui::Ui) {
 
                                 ui.label("audio out");
                                 let mut channel_i = 0;
-                                for (port_i, port) in audio_ports_state
-                                    .audio_ports_state_ext
-                                    .outputs
-                                    .iter()
-                                    .enumerate()
+                                for (port_i, port) in
+                                    active_state.handle.audio_ports().outputs.iter().enumerate()
                                 {
                                     ui.horizontal(|ui| {
                                         ui.label(
@@ -258,7 +287,7 @@ pub(crate) fn show(app: &mut BasicDawExampleGUI, ui: &mut egui::Ui) {
 
                                         for _ in 0..port.channels {
                                             ui.selectable_value(
-                                                &mut plugin.selected_port,
+                                                &mut active_state.selected_port,
                                                 PortChannel::AudioOut(channel_i),
                                                 &format!("{}", channel_i),
                                             );
@@ -273,10 +302,12 @@ pub(crate) fn show(app: &mut BasicDawExampleGUI, ui: &mut egui::Ui) {
                                 // TODO: Let the user add/remove connections in this GUI.
 
                                 ui.label("connections on port");
-                                match plugin.selected_port {
+                                match active_state.selected_port {
                                     PortChannel::AudioIn(channel_i) => {
-                                        if let Some(edges) =
-                                            audio_ports_state.audio_in_edges.get(channel_i)
+                                        if let Some(edges) = active_state
+                                            .audio_ports_state
+                                            .audio_in_edges
+                                            .get(channel_i)
                                         {
                                             for edge in edges.iter() {
                                                 ui.label(&format!(
@@ -287,8 +318,10 @@ pub(crate) fn show(app: &mut BasicDawExampleGUI, ui: &mut egui::Ui) {
                                         }
                                     }
                                     PortChannel::AudioOut(channel_i) => {
-                                        if let Some(edges) =
-                                            audio_ports_state.audio_out_edges.get(channel_i)
+                                        if let Some(edges) = active_state
+                                            .audio_ports_state
+                                            .audio_out_edges
+                                            .get(channel_i)
                                         {
                                             for edge in edges.iter() {
                                                 ui.label(&format!(
@@ -298,15 +331,14 @@ pub(crate) fn show(app: &mut BasicDawExampleGUI, ui: &mut egui::Ui) {
                                             }
                                         }
                                     }
+                                    PortChannel::None => {}
                                 }
 
                                 ui.separator();
-                            }
 
-                            if let Some(params_state) = &mut plugin.params_state {
                                 let mut values_to_set: Vec<(ParamID, f64)> = Vec::new();
 
-                                for param in params_state.params.values_mut() {
+                                for param in active_state.params_state.params.values_mut() {
                                     if param.is_hidden {
                                         continue;
                                     }
@@ -363,7 +395,7 @@ pub(crate) fn show(app: &mut BasicDawExampleGUI, ui: &mut egui::Ui) {
                                 }
 
                                 for (param_id, value) in values_to_set.drain(..) {
-                                    params_state.params_ext.set_value(param_id, value);
+                                    active_state.handle.params.set_value(param_id, value);
                                 }
                             }
                         });

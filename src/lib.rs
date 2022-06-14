@@ -22,7 +22,7 @@ pub use engine::plugin_scanner::{ScannedPlugin, ScannedPluginKey};
 pub use graph::shared_pool::PluginInstanceID;
 pub use graph::{
     AudioGraphSaveState, Edge, ParamGestureInfo, ParamModifiedInfo, PluginActivationStatus,
-    PluginEdges, PluginParamsExt,
+    PluginEdges, PluginHandle, PluginParamsExt,
 };
 pub use plugin::audio_buffer::{AudioPortBuffer, AudioPortBufferMut};
 pub use plugin::events::event_queue::EventQueue;
