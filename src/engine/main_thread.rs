@@ -11,6 +11,7 @@ use std::sync::{
 };
 use std::thread::JoinHandle;
 use std::time::Duration;
+use thread_priority::ThreadPriority;
 
 use crate::engine::audio_thread::DAWEngineAudioThread;
 use crate::engine::events::from_engine::{
@@ -24,6 +25,8 @@ use crate::graph::{
 use crate::plugin::host_request::HostInfo;
 use crate::plugin::{PluginFactory, PluginSaveState};
 use crate::utils::thread_id::SharedThreadIDs;
+
+use super::process_thread::PROCESS_THREAD_PRIORITY;
 
 static ENGINE_THREAD_UPDATE_INTERVAL: Duration = Duration::from_millis(10);
 
@@ -208,15 +211,24 @@ impl DAWEngineMainThread {
 
             let run_process_thread_clone = Arc::clone(&run_process_thread);
 
-            if let Some(run_process_thread) = self.run_process_thread.take() {
+            if let Some(old_run_process_thread) = self.run_process_thread.take() {
                 // Just to be sure.
-                run_process_thread.store(false, Ordering::Relaxed);
+                old_run_process_thread.store(false, Ordering::Relaxed);
             }
             self.run_process_thread = Some(run_process_thread);
 
-            let process_thread_handle = std::thread::spawn(move || {
-                process_thread.run(run_process_thread_clone, max_frames, sample_rate);
-            });
+            let process_thread_handle = thread_priority::spawn(
+                ThreadPriority::Crossplatform(PROCESS_THREAD_PRIORITY.try_into().unwrap()),
+                move |priority_res| {
+                    if let Err(e) = priority_res {
+                        log::error!("Failed to set process thread priority to 90 (in the range [0, 100]): {:?}", e);
+                    } else {
+                        log::info!("Successfully set process thread priority to 90 (in the range [0, 100])");
+                    }
+
+                    process_thread.run(run_process_thread_clone);
+                },
+            );
 
             self.process_thread_handle = Some(process_thread_handle);
 

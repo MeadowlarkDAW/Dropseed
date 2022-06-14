@@ -1,6 +1,5 @@
 use basedrop::Owned;
 use rtrb_basedrop::{Consumer, Producer};
-use rusty_daw_core::SampleRate;
 use std::time::Duration;
 use std::{
     mem::MaybeUninit,
@@ -11,6 +10,9 @@ use std::{
 };
 
 use crate::graph::schedule::SharedSchedule;
+
+/// [0; 100]
+pub(crate) static PROCESS_THREAD_PRIORITY: u8 = 90;
 
 static PROCESS_THREAD_POLL_INTERVAL: Duration = Duration::from_micros(5);
 
@@ -54,32 +56,7 @@ impl DAWEngineProcessThread {
         }
     }
 
-    pub fn run(&mut self, run: Arc<AtomicBool>, max_block_size: u32, sample_rate: SampleRate) {
-        /*
-        let _rt_priority_handle = match audio_thread_priority::get_current_thread_info() {
-            Ok(thread_info) => {
-                match audio_thread_priority::promote_thread_to_real_time(
-                    thread_info,
-                    max_block_size * 16,
-                    sample_rate.as_u32(),
-                ) {
-                    Ok(h) => {
-                        log::info!("Successfully promoted process thread to real-time");
-                        Some(h)
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to set realtime priority for process thread: {}", e);
-                        None
-                    }
-                }
-            }
-            Err(e) => {
-                log::warn!("Failed to set realtime priority for process thread: {}", e);
-                None
-            }
-        };
-        */
-
+    pub fn run(&mut self, run: Arc<AtomicBool>) {
         while run.load(Ordering::Relaxed) {
             let num_frames = if let Some(num_frames_wanted) = &self.num_frames_wanted {
                 let num_frames = num_frames_wanted.load(Ordering::SeqCst);

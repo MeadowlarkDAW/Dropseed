@@ -39,7 +39,7 @@ maybe_atomic_refcell = { version = "0.3", features = [] }
 atomic_refcell = "0.1"
 fnv = "1.0"
 log = "0.4"
-audio_thread_priority = "0.26.1"
+thread-priority = "0.8"
 cpal = { version = "0.13", optional = true }
 libloading = { version = "0.7", optional = true }
 globwalk = { version = "0.8", optional = true }
