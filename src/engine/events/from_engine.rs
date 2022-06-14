@@ -15,24 +15,24 @@ use crate::{
 
 #[derive(Debug)]
 #[non_exhaustive]
-pub enum DAWEngineEvent {
+pub enum DSEngineEvent {
     /// Sent whenever the engine is deactivated.
     ///
-    /// The DAWEngineAudioThread sent in a previous EngineActivated event is now
+    /// The DSEngineAudioThread sent in a previous EngineActivated event is now
     /// invalidated. Please drop it and wait for a new EngineActivated event to
     /// replace it.
     ///
     /// To keep using the audio graph, you must reactivate the engine with
-    /// `DAWEngineRequest::ActivateEngine`, and then restore the audio graph
+    /// `DSEngineRequest::ActivateEngine`, and then restore the audio graph
     /// from an existing save state if you wish using
-    /// `DAWEngineRequest::RestoreFromSaveState`.
+    /// `DSEngineRequest::RestoreFromSaveState`.
     EngineDeactivated(EngineDeactivatedInfo),
 
     /// This message is sent whenever the engine successfully activates.
     EngineActivated(EngineActivatedInfo),
 
     /// This message is sent after the user requests the latest save state from
-    /// calling `DAWEngineRequest::RequestLatestSaveState`.
+    /// calling `DSEngineRequest::RequestLatestSaveState`.
     ///
     /// Use the latest save state as a backup in case a plugin crashes or a bug
     /// in the audio graph compiler causes the audio graph to be in an invalid
@@ -63,17 +63,17 @@ pub enum DAWEngineEvent {
 #[derive(Debug)]
 /// Sent whenever the engine is deactivated.
 ///
-/// The DAWEngineAudioThread sent in a previous EngineActivated event is now
+/// The DSEngineAudioThread sent in a previous EngineActivated event is now
 /// invalidated. Please drop it and wait for a new EngineActivated event to
 /// replace it.
 ///
 /// To keep using the audio graph, you must reactivate the engine with
-/// `DAWEngineRequest::ActivateEngine`, and then restore the audio graph
+/// `DSEngineRequest::ActivateEngine`, and then restore the audio graph
 /// from an existing save state if you wish using
-/// `DAWEngineRequest::RestoreFromSaveState`.
+/// `DSEngineRequest::RestoreFromSaveState`.
 pub enum EngineDeactivatedInfo {
     /// The engine was deactivated gracefully after recieving a
-    /// `DAWEngineRequest::DeactivateEngine` request.
+    /// `DSEngineRequest::DeactivateEngine` request.
     DeactivatedGracefully { recovered_save_state: AudioGraphSaveState },
     /// The engine has crashed.
     EngineCrashed {
@@ -128,8 +128,8 @@ pub enum PluginScannerEvent {
     RescanFinished(RescanPluginDirectoriesRes),
 }
 
-impl From<PluginScannerEvent> for DAWEngineEvent {
+impl From<PluginScannerEvent> for DSEngineEvent {
     fn from(e: PluginScannerEvent) -> Self {
-        DAWEngineEvent::PluginScanner(e)
+        DSEngineEvent::PluginScanner(e)
     }
 }

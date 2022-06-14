@@ -9,12 +9,12 @@ mod clap;
 pub mod plugin;
 pub mod utils;
 
-pub use engine::audio_thread::DAWEngineAudioThread;
+pub use engine::audio_thread::DSEngineAudioThread;
 pub use engine::events::from_engine::{
-    DAWEngineEvent, EngineDeactivatedInfo, PluginEvent, PluginScannerEvent,
+    DSEngineEvent, EngineDeactivatedInfo, PluginEvent, PluginScannerEvent,
 };
-pub use engine::events::to_engine::DAWEngineRequest;
-pub use engine::handle::DAWEngineHandle;
+pub use engine::events::to_engine::DSEngineRequest;
+pub use engine::handle::DSEngineHandle;
 pub use engine::main_thread::{
     ActivateEngineSettings, EdgeReq, ModifyGraphRequest, ModifyGraphRes, PluginIDReq,
 };

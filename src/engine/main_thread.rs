@@ -2,7 +2,7 @@ use audio_graph::DefaultPortType;
 use basedrop::{Collector, Shared};
 use crossbeam::channel::{Receiver, Sender};
 use fnv::FnvHashSet;
-use rusty_daw_core::SampleRate;
+use meadowlark_core_types::SampleRate;
 use std::error::Error;
 use std::path::PathBuf;
 use std::sync::{
@@ -13,11 +13,11 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 use thread_priority::ThreadPriority;
 
-use crate::engine::audio_thread::DAWEngineAudioThread;
+use crate::engine::audio_thread::DSEngineAudioThread;
 use crate::engine::events::from_engine::{
-    DAWEngineEvent, EngineDeactivatedInfo, PluginScannerEvent,
+    DSEngineEvent, EngineDeactivatedInfo, PluginScannerEvent,
 };
-use crate::engine::events::to_engine::DAWEngineRequest;
+use crate::engine::events::to_engine::DSEngineRequest;
 use crate::engine::plugin_scanner::{PluginScanner, ScannedPluginKey};
 use crate::graph::{
     AudioGraph, AudioGraphSaveState, Edge, NewPluginRes, PluginEdges, PluginInstanceID,
@@ -30,11 +30,11 @@ use super::process_thread::PROCESS_THREAD_PRIORITY;
 
 static ENGINE_THREAD_UPDATE_INTERVAL: Duration = Duration::from_millis(10);
 
-pub(crate) struct DAWEngineMainThread {
+pub(crate) struct DSEngineMainThread {
     audio_graph: Option<AudioGraph>,
     plugin_scanner: PluginScanner,
-    event_tx: Sender<DAWEngineEvent>,
-    handle_to_engine_rx: Receiver<DAWEngineRequest>,
+    event_tx: Sender<DSEngineEvent>,
+    handle_to_engine_rx: Receiver<DSEngineRequest>,
     thread_ids: SharedThreadIDs,
     collector: basedrop::Collector,
     host_info: Shared<HostInfo>,
@@ -42,12 +42,12 @@ pub(crate) struct DAWEngineMainThread {
     process_thread_handle: Option<JoinHandle<()>>,
 }
 
-impl DAWEngineMainThread {
+impl DSEngineMainThread {
     pub(crate) fn new(
         host_info: HostInfo,
         mut internal_plugins: Vec<Box<dyn PluginFactory>>,
-        handle_to_engine_rx: Receiver<DAWEngineRequest>,
-        event_tx: Sender<DAWEngineEvent>,
+        handle_to_engine_rx: Receiver<DSEngineRequest>,
+        event_tx: Sender<DSEngineEvent>,
     ) -> (Self, Vec<Result<ScannedPluginKey, Box<dyn Error + Send>>>) {
         // Set up and run garbage collector wich collects and safely drops garbage from
         // the audio thread.
@@ -90,25 +90,25 @@ impl DAWEngineMainThread {
         while run.load(Ordering::Relaxed) {
             while let Ok(msg) = self.handle_to_engine_rx.try_recv() {
                 match msg {
-                    DAWEngineRequest::ModifyGraph(req) => self.modify_graph(req),
-                    DAWEngineRequest::ActivateEngine(settings) => self.activate_engine(settings),
-                    DAWEngineRequest::DeactivateEngine => self.deactivate_engine(),
-                    DAWEngineRequest::RestoreFromSaveState(save_state) => {
+                    DSEngineRequest::ModifyGraph(req) => self.modify_graph(req),
+                    DSEngineRequest::ActivateEngine(settings) => self.activate_engine(settings),
+                    DSEngineRequest::DeactivateEngine => self.deactivate_engine(),
+                    DSEngineRequest::RestoreFromSaveState(save_state) => {
                         self.restore_audio_graph_from_save_state(&save_state)
                     }
-                    DAWEngineRequest::RequestLatestSaveState => self.request_latest_save_state(),
+                    DSEngineRequest::RequestLatestSaveState => self.request_latest_save_state(),
 
                     #[cfg(feature = "clap-host")]
-                    DAWEngineRequest::AddClapScanDirectory(path) => {
+                    DSEngineRequest::AddClapScanDirectory(path) => {
                         self.add_clap_scan_directory(path)
                     }
 
                     #[cfg(feature = "clap-host")]
-                    DAWEngineRequest::RemoveClapScanDirectory(path) => {
+                    DSEngineRequest::RemoveClapScanDirectory(path) => {
                         self.remove_clap_scan_directory(path)
                     }
 
-                    DAWEngineRequest::RescanPluginDirectories => self.rescan_plugin_directories(),
+                    DSEngineRequest::RescanPluginDirectories => self.rescan_plugin_directories(),
                 }
             }
 
@@ -199,7 +199,7 @@ impl DAWEngineMainThread {
         if let Some(audio_graph) = &self.audio_graph {
             log::info!("Successfully activated RustyDAW engine");
 
-            let (audio_thread, mut process_thread) = DAWEngineAudioThread::new(
+            let (audio_thread, mut process_thread) = DSEngineAudioThread::new(
                 num_audio_in_channels as usize,
                 num_audio_out_channels as usize,
                 &self.collector.handle(),
@@ -243,7 +243,7 @@ impl DAWEngineMainThread {
                 num_audio_out_channels,
             };
 
-            self.event_tx.send(DAWEngineEvent::EngineActivated(info)).unwrap();
+            self.event_tx.send(DSEngineEvent::EngineActivated(info)).unwrap();
         } else {
             // If this happens then we did something very wrong.
             panic!("Unexpected error: Empty audio graph failed to compile a schedule.");
@@ -375,7 +375,7 @@ impl DAWEngineMainThread {
             // TODO: Compile audio graph in a separate thread?
             self.compile_audio_graph();
 
-            self.event_tx.send(DAWEngineEvent::AudioGraphModified(res)).unwrap();
+            self.event_tx.send(DSEngineEvent::AudioGraphModified(res)).unwrap();
         } else {
             log::warn!("Cannot modify audio graph: Engine is deactivated");
         }
@@ -399,7 +399,7 @@ impl DAWEngineMainThread {
         self.process_thread_handle = None;
 
         self.event_tx
-            .send(DAWEngineEvent::EngineDeactivated(EngineDeactivatedInfo::DeactivatedGracefully {
+            .send(DSEngineEvent::EngineDeactivated(EngineDeactivatedInfo::DeactivatedGracefully {
                 recovered_save_state: save_state,
             }))
             .unwrap();
@@ -417,7 +417,7 @@ impl DAWEngineMainThread {
 
         log::debug!("Save state: {:?}", save_state);
 
-        self.event_tx.send(DAWEngineEvent::AudioGraphCleared).unwrap();
+        self.event_tx.send(DSEngineEvent::AudioGraphCleared).unwrap();
 
         let (plugins_res, plugins_edges) = self
             .audio_graph
@@ -438,9 +438,9 @@ impl DAWEngineMainThread {
                 updated_plugin_edges: plugins_edges,
             };
 
-            self.event_tx.send(DAWEngineEvent::AudioGraphModified(res)).unwrap();
+            self.event_tx.send(DSEngineEvent::AudioGraphModified(res)).unwrap();
 
-            self.event_tx.send(DAWEngineEvent::NewSaveState(save_state)).unwrap();
+            self.event_tx.send(DSEngineEvent::NewSaveState(save_state)).unwrap();
         }
     }
 
@@ -457,7 +457,7 @@ impl DAWEngineMainThread {
         // TODO: Collect save state in a separate thread?
         let save_state = self.audio_graph.as_mut().unwrap().collect_save_state();
 
-        self.event_tx.send(DAWEngineEvent::NewSaveState(save_state)).unwrap();
+        self.event_tx.send(DSEngineEvent::NewSaveState(save_state)).unwrap();
     }
 
     fn compile_audio_graph(&mut self) {
@@ -476,7 +476,7 @@ impl DAWEngineMainThread {
 
                     // TODO: Try to recover save state?
                     self.event_tx
-                        .send(DAWEngineEvent::EngineDeactivated(
+                        .send(DSEngineEvent::EngineDeactivated(
                             EngineDeactivatedInfo::EngineCrashed {
                                 error_msg: Box::new(e),
                                 recovered_save_state: None,
@@ -493,7 +493,7 @@ impl DAWEngineMainThread {
     }
 }
 
-impl Drop for DAWEngineMainThread {
+impl Drop for DSEngineMainThread {
     fn drop(&mut self) {
         if let Some(run_process_thread) = self.run_process_thread.take() {
             run_process_thread.store(false, Ordering::Relaxed);
@@ -588,9 +588,9 @@ pub struct EngineActivatedInfo {
     ///
     /// Send this to the audio thread to be run.
     ///
-    /// When a `DAWEngineEvent::EngineDeactivated` event is recieved, send
+    /// When a `DSEngineEvent::EngineDeactivated` event is recieved, send
     /// a signal to the audio thread to drop this.
-    pub audio_thread: DAWEngineAudioThread,
+    pub audio_thread: DSEngineAudioThread,
 
     /// The ID for the input to the audio graph. Use this to connect any
     /// plugins to system inputs.

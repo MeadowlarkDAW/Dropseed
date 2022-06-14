@@ -7,7 +7,7 @@ use crate::graph::AudioGraphSaveState;
 /// A request to the engine.
 ///
 /// Note that the engine may decide to ignore invalid requests.
-pub enum DAWEngineRequest {
+pub enum DSEngineRequest {
     /// Modify the audio graph.
     ModifyGraph(ModifyGraphRequest),
 

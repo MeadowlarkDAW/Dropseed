@@ -1,4 +1,4 @@
-use rusty_daw_core::SampleRate;
+use meadowlark_core_types::SampleRate;
 use std::error::Error;
 
 pub mod audio_buffer;

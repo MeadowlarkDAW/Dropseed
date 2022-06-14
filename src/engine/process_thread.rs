@@ -16,7 +16,7 @@ pub(crate) static PROCESS_THREAD_PRIORITY: u8 = 90;
 
 static PROCESS_THREAD_POLL_INTERVAL: Duration = Duration::from_micros(5);
 
-pub(crate) struct DAWEngineProcessThread {
+pub(crate) struct DSEngineProcessThread {
     to_audio_thread_audio_out_tx: Producer<f32>,
     from_audio_thread_audio_in_rx: Consumer<f32>,
 
@@ -33,7 +33,7 @@ pub(crate) struct DAWEngineProcessThread {
     schedule: SharedSchedule,
 }
 
-impl DAWEngineProcessThread {
+impl DSEngineProcessThread {
     pub fn new(
         to_audio_thread_audio_out_tx: Producer<f32>,
         from_audio_thread_audio_in_rx: Consumer<f32>,

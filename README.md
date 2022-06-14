@@ -1,4 +1,4 @@
 # dropseed
-The DAW audio graph engine used in Meadowlark (placeholder)
+The DAW audio graph engine used in Meadowlark
 
 (WIP)

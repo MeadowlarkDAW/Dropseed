@@ -1,6 +1,6 @@
 use basedrop::Owned;
+use meadowlark_core_types::SampleRate;
 use rtrb_basedrop::{Consumer, Producer, RingBuffer};
-use rusty_daw_core::SampleRate;
 use std::fmt::Debug;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
@@ -8,7 +8,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-use super::process_thread::DAWEngineProcessThread;
+use super::process_thread::DSEngineProcessThread;
 use crate::graph::schedule::SharedSchedule;
 
 // Allocate enough for at-least 3 seconds of buffer time.
@@ -20,7 +20,7 @@ static AUDIO_THREAD_POLL_INTERVAL: Duration = Duration::from_micros(5);
 /// audio thread's output buffer.
 static COPY_OUT_TIME_WINDOW: Duration = Duration::from_micros(60);
 
-pub struct DAWEngineAudioThread {
+pub struct DSEngineAudioThread {
     to_engine_audio_in_tx: Producer<f32>,
     from_engine_audio_out_rx: Consumer<f32>,
 
@@ -35,9 +35,9 @@ pub struct DAWEngineAudioThread {
     num_frames_wanted: Option<Arc<AtomicU32>>,
 }
 
-impl Debug for DAWEngineAudioThread {
+impl Debug for DSEngineAudioThread {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut f = f.debug_struct("DAWEngineAudioThread");
+        let mut f = f.debug_struct("DSEngineAudioThread");
 
         f.field("in_channels", &self.in_channels);
         f.field("out_channels", &self.out_channels);
@@ -48,14 +48,14 @@ impl Debug for DAWEngineAudioThread {
     }
 }
 
-impl DAWEngineAudioThread {
+impl DSEngineAudioThread {
     pub(crate) fn new(
         in_channels: usize,
         out_channels: usize,
         coll_handle: &basedrop::Handle,
         schedule: SharedSchedule,
         sample_rate: SampleRate,
-    ) -> (Self, DAWEngineProcessThread) {
+    ) -> (Self, DSEngineProcessThread) {
         let (to_engine_audio_in_tx, from_audio_thread_audio_in_rx) =
             RingBuffer::<f32>::new(in_channels * ALLOCATED_FRAMES_PER_CHANNEL, coll_handle);
         let (to_audio_thread_audio_out_tx, from_engine_audio_out_rx) =
@@ -83,7 +83,7 @@ impl DAWEngineAudioThread {
                 sample_rate_recip,
                 num_frames_wanted,
             },
-            DAWEngineProcessThread::new(
+            DSEngineProcessThread::new(
                 to_audio_thread_audio_out_tx,
                 from_audio_thread_audio_in_rx,
                 num_frames_wanted_clone,

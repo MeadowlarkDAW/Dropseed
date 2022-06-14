@@ -1,9 +1,9 @@
-use eframe::egui;
-use fnv::FnvHashMap;
-use rusty_daw_engine::{
+use dropseed::{
     Edge, ParamID, ParamInfoFlags, ParamModifiedInfo, PluginEdges, PluginHandle, PluginInstanceID,
     PortType,
 };
+use eframe::egui;
+use fnv::FnvHashMap;
 
 use super::BasicDawExampleGUI;
 

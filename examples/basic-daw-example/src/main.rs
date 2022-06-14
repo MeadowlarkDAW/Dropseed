@@ -1,14 +1,13 @@
 use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::Stream;
 use crossbeam::channel::Receiver;
-use eframe::egui;
-use rusty_daw_core::SampleRate;
-use rusty_daw_engine::{
-    ActivateEngineSettings, DAWEngineAudioThread, DAWEngineEvent, DAWEngineHandle,
-    DAWEngineRequest, EdgeReq, EngineDeactivatedInfo, HostInfo, ModifyGraphRequest,
-    PluginActivationStatus, PluginEvent, PluginIDReq, PluginInstanceID, PluginScannerEvent,
-    PortType, ScannedPlugin,
+use dropseed::{
+    ActivateEngineSettings, DSEngineAudioThread, DSEngineEvent, DSEngineHandle, DSEngineRequest,
+    EdgeReq, EngineDeactivatedInfo, HostInfo, ModifyGraphRequest, PluginActivationStatus,
+    PluginEvent, PluginIDReq, PluginInstanceID, PluginScannerEvent, PortType, ScannedPlugin,
 };
+use eframe::egui;
+use meadowlark_core_types::SampleRate;
 
 mod effect_rack_page;
 mod scanned_plugins_page;
@@ -39,7 +38,7 @@ fn main() {
     let num_out_channels = usize::from(config.channels());
     let sample_rate: SampleRate = config.sample_rate().0.into();
 
-    let mut audio_thread: Option<DAWEngineAudioThread> = None;
+    let mut audio_thread: Option<DSEngineAudioThread> = None;
 
     let cpal_stream = device
         .build_output_stream(
@@ -69,14 +68,14 @@ fn main() {
 
     // ---  Initialize RustyDAW Engine  -------------------------------------------
 
-    let (mut engine_handle, engine_rx) = DAWEngineHandle::new(
+    let (mut engine_handle, engine_rx) = DSEngineHandle::new(
         HostInfo::new(String::from("RustyDAW integration test"), String::from("0.1.0"), None, None),
         Vec::new(),
     );
 
     dbg!(&engine_handle.internal_plugins_res);
 
-    engine_handle.send(DAWEngineRequest::ActivateEngine(Box::new(ActivateEngineSettings {
+    engine_handle.send(DSEngineRequest::ActivateEngine(Box::new(ActivateEngineSettings {
         sample_rate,
         min_frames: MIN_BLOCK_SIZE,
         max_frames: MAX_BLOCK_SIZE,
@@ -84,7 +83,7 @@ fn main() {
         num_audio_out_channels: GRAPH_OUT_CHANNELS,
     })));
 
-    engine_handle.send(DAWEngineRequest::RescanPluginDirectories);
+    engine_handle.send(DSEngineRequest::RescanPluginDirectories);
 
     // ---  Run the UI  -----------------------------------------------------------
 
@@ -108,7 +107,7 @@ fn main() {
 
 #[derive(Debug)]
 enum UIToAudioThreadMsg {
-    NewEngineAudioThread(DAWEngineAudioThread),
+    NewEngineAudioThread(DSEngineAudioThread),
     DropEngineAudioThread,
 }
 
@@ -120,8 +119,8 @@ pub struct EngineState {
 }
 
 struct BasicDawExampleGUI {
-    engine_handle: DAWEngineHandle,
-    engine_rx: Receiver<DAWEngineEvent>,
+    engine_handle: DSEngineHandle,
+    engine_rx: Receiver<DSEngineEvent>,
 
     to_audio_thread_tx: ringbuf::Producer<UIToAudioThreadMsg>,
     _cpal_stream: Option<Stream>,
@@ -139,8 +138,8 @@ struct BasicDawExampleGUI {
 
 impl BasicDawExampleGUI {
     fn new(
-        engine_handle: DAWEngineHandle,
-        engine_rx: Receiver<DAWEngineEvent>,
+        engine_handle: DSEngineHandle,
+        engine_rx: Receiver<DSEngineEvent>,
         cpal_stream: Stream,
         sample_rate: SampleRate,
         to_audio_thread_tx: ringbuf::Producer<UIToAudioThreadMsg>,
@@ -165,22 +164,22 @@ impl BasicDawExampleGUI {
             match msg {
                 // Sent whenever the engine is deactivated.
                 //
-                // The DAWEngineAudioThread sent in a previous EngineActivated event is now
+                // The DSEngineAudioThread sent in a previous EngineActivated event is now
                 // invalidated. Please drop it and wait for a new EngineActivated event to
                 // replace it.
                 //
                 // To keep using the audio graph, you must reactivate the engine with
-                // `DAWEngineRequest::ActivateEngine`, and then restore the audio graph
+                // `DSEngineRequest::ActivateEngine`, and then restore the audio graph
                 // from an existing save state if you wish using
-                // `DAWEngineRequest::RestoreFromSaveState`.
-                DAWEngineEvent::EngineDeactivated(res) => {
+                // `DSEngineRequest::RestoreFromSaveState`.
+                DSEngineEvent::EngineDeactivated(res) => {
                     self.to_audio_thread_tx
                         .push(UIToAudioThreadMsg::DropEngineAudioThread)
                         .unwrap();
 
                     match res {
                         // The engine was deactivated gracefully after recieving a
-                        // `DAWEngineRequest::DeactivateEngine` request.
+                        // `DSEngineRequest::DeactivateEngine` request.
                         EngineDeactivatedInfo::DeactivatedGracefully { recovered_save_state } => {
                             println!("Engine deactivated gracefully");
                         }
@@ -197,7 +196,7 @@ impl BasicDawExampleGUI {
                 }
 
                 // This message is sent whenever the engine successfully activates.
-                DAWEngineEvent::EngineActivated(info) => {
+                DSEngineEvent::EngineActivated(info) => {
                     self.engine_state = Some(EngineState {
                         graph_in_node_id: info.graph_in_node_id,
                         graph_out_node_id: info.graph_out_node_id,
@@ -217,7 +216,7 @@ impl BasicDawExampleGUI {
                 //
                 // If the audio graph is in an invalid state as a result of restoring from
                 // the save state, then the `EngineDeactivated` event will be sent instead.
-                DAWEngineEvent::AudioGraphCleared => {
+                DSEngineEvent::AudioGraphCleared => {
                     if let Some(engine_state) = &mut self.engine_state {
                         engine_state.effect_rack_state.plugins.clear();
                     }
@@ -226,7 +225,7 @@ impl BasicDawExampleGUI {
                 // This message is sent whenever the audio graph has been modified.
                 //
                 // Be sure to update your UI from this new state.
-                DAWEngineEvent::AudioGraphModified(mut res) => {
+                DSEngineEvent::AudioGraphModified(mut res) => {
                     if let Some(engine_state) = &mut self.engine_state {
                         for plugin_id in res.removed_plugins.drain(..) {
                             engine_state.effect_rack_state.remove_plugin(&plugin_id);
@@ -281,7 +280,7 @@ impl BasicDawExampleGUI {
                     }
                 }
 
-                DAWEngineEvent::Plugin(event) => match event {
+                DSEngineEvent::Plugin(event) => match event {
                     // Sent whenever a plugin becomes activated after being deactivated or
                     // when the plugin restarts.
                     //
@@ -334,7 +333,7 @@ impl BasicDawExampleGUI {
                     }
                 },
 
-                DAWEngineEvent::PluginScanner(event) => match event {
+                DSEngineEvent::PluginScanner(event) => match event {
                     // A new CLAP plugin scan path was added.
                     PluginScannerEvent::ClapScanPathAdded(path) => {
                         println!("Added clap scan path: {:?}", path);
@@ -469,7 +468,7 @@ impl BasicDawExampleGUI {
                                 */
                             };
 
-                            self.engine_handle.send(DAWEngineRequest::ModifyGraph(req));
+                            self.engine_handle.send(DSEngineRequest::ModifyGraph(req));
                         }
                     }
                     unkown_event => {
@@ -500,14 +499,14 @@ impl eframe::App for BasicDawExampleGUI {
                         ui.label("engine status:");
 
                         if ui.button("deactivate").clicked() {
-                            self.engine_handle.send(DAWEngineRequest::DeactivateEngine);
+                            self.engine_handle.send(DSEngineRequest::DeactivateEngine);
                         }
                     } else {
                         ui.colored_label(egui::Color32::RED, "inactive");
                         ui.label("engine status:");
 
                         if ui.button("activate").clicked() {
-                            self.engine_handle.send(DAWEngineRequest::ActivateEngine(Box::new(
+                            self.engine_handle.send(DSEngineRequest::ActivateEngine(Box::new(
                                 ActivateEngineSettings {
                                     sample_rate: self.sample_rate,
                                     min_frames: MIN_BLOCK_SIZE,

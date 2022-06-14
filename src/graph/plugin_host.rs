@@ -1,5 +1,5 @@
 use fnv::FnvHashMap;
-use rusty_daw_core::SampleRate;
+use meadowlark_core_types::SampleRate;
 use smallvec::SmallVec;
 use std::error::Error;
 use std::fmt::Debug;

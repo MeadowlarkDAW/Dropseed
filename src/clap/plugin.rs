@@ -1,6 +1,6 @@
 use basedrop::Shared;
 use clap_sys::string_sizes::CLAP_NAME_SIZE;
-use rusty_daw_core::SampleRate;
+use meadowlark_core_types::SampleRate;
 use std::error::Error;
 use std::ffi::CString;
 use std::path::PathBuf;

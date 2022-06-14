@@ -3,7 +3,7 @@ use basedrop::Shared;
 use crossbeam::channel::Sender;
 use fnv::FnvHashMap;
 use fnv::FnvHashSet;
-use rusty_daw_core::SampleRate;
+use meadowlark_core_types::SampleRate;
 use smallvec::SmallVec;
 use std::error::Error;
 
@@ -20,7 +20,7 @@ use schedule::{Schedule, SharedSchedule};
 use shared_pool::{PluginInstanceHostEntry, SharedBufferPool, SharedPluginPool};
 use verifier::Verifier;
 
-use crate::engine::events::from_engine::{DAWEngineEvent, PluginEvent};
+use crate::engine::events::from_engine::{DSEngineEvent, PluginEvent};
 use crate::engine::plugin_scanner::{NewPluginInstanceError, PluginScanner};
 use crate::graph::plugin_host::PluginInstanceHost;
 use crate::graph::shared_pool::SharedPluginHostAudioThread;
@@ -737,7 +737,7 @@ impl AudioGraph {
         }
     }
 
-    pub fn on_idle(&mut self, event_tx: Option<&mut Sender<DAWEngineEvent>>) -> bool {
+    pub fn on_idle(&mut self, event_tx: Option<&mut Sender<DSEngineEvent>>) -> bool {
         let mut plugins_to_remove: SmallVec<[PluginInstanceID; 4]> = SmallVec::new();
 
         let mut recompile_graph = false;
@@ -760,7 +760,7 @@ impl AudioGraph {
 
                     if let Some(event_tx) = event_tx.as_ref() {
                         event_tx
-                            .send(DAWEngineEvent::Plugin(PluginEvent::Deactivated {
+                            .send(DSEngineEvent::Plugin(PluginEvent::Deactivated {
                                 plugin_id: plugin.plugin_host.id.clone(),
                                 status: Ok(()),
                             }))
@@ -783,7 +783,7 @@ impl AudioGraph {
 
                     if let Some(event_tx) = event_tx.as_ref() {
                         event_tx
-                            .send(DAWEngineEvent::Plugin(PluginEvent::Activated {
+                            .send(DSEngineEvent::Plugin(PluginEvent::Activated {
                                 plugin_id: plugin.plugin_host.id.clone(),
                                 new_handle,
                                 new_param_values,
@@ -795,14 +795,14 @@ impl AudioGraph {
                     plugins_to_remove.push(plugin.plugin_host.id.clone());
 
                     // The user should have already been alerted of the plugin being removed
-                    // in a previous `DAWEngineEvent::AudioGraphModified` event.
+                    // in a previous `DSEngineEvent::AudioGraphModified` event.
                 }
                 OnIdleResult::PluginFailedToActivate(e) => {
                     recompile_graph = true;
 
                     if let Some(event_tx) = event_tx.as_ref() {
                         event_tx
-                            .send(DAWEngineEvent::Plugin(PluginEvent::Deactivated {
+                            .send(DSEngineEvent::Plugin(PluginEvent::Deactivated {
                                 plugin_id: plugin.plugin_host.id.clone(),
                                 status: Err(e),
                             }))
@@ -814,7 +814,7 @@ impl AudioGraph {
             if modified_params.len() > 0 {
                 if let Some(event_tx) = event_tx.as_ref() {
                     event_tx
-                        .send(DAWEngineEvent::Plugin(PluginEvent::ParamsModified {
+                        .send(DSEngineEvent::Plugin(PluginEvent::ParamsModified {
                             plugin_id: plugin.plugin_host.id.clone(),
                             modified_params: modified_params.to_owned(),
                         }))

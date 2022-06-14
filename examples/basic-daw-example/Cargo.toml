@@ -7,8 +7,8 @@ publish = false
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rusty-daw-engine = { path = "../../" }
-rusty-daw-core = "0.9"
+dropseed = { path = "../../" }
+meadowlark-core-types = "0.1"
 eframe = "0.18"
 cpal = "0.13"
 crossbeam = "0.8"
