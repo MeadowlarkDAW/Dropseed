@@ -8,9 +8,9 @@ use dropseed::{
 };
 use eframe::egui;
 use meadowlark_core_types::SampleRate;
+use noise_generator_dropseed::NoiseGenPluginFactory;
 
 mod effect_rack_page;
-mod noise_gen_plugin;
 mod scanned_plugins_page;
 
 use effect_rack_page::{EffectRackPluginActiveState, EffectRackPluginState, EffectRackState};
@@ -71,7 +71,7 @@ fn main() {
 
     let (mut engine_handle, engine_rx) = DSEngineHandle::new(
         HostInfo::new(String::from("RustyDAW integration test"), String::from("0.1.0"), None, None),
-        vec![Box::new(noise_gen_plugin::NoiseGenPluginFactory {})],
+        vec![Box::new(NoiseGenPluginFactory {})],
     );
 
     dbg!(&engine_handle.internal_plugins_res);
