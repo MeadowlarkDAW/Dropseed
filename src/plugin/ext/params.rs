@@ -14,6 +14,10 @@ impl ParamID {
     pub const fn new(stable_id: u32) -> Self {
         Self(stable_id)
     }
+
+    pub fn as_u32(&self) -> u32 {
+        self.0
+    }
 }
 
 bitflags! {
@@ -86,6 +90,18 @@ bitflags! {
         /// A simple example would be a DC Offset, changing it will change the output signal and must be
         /// processed.
         const REQUIRES_PROCESS = 1 << 15;
+    }
+}
+
+impl ParamInfoFlags {
+    /// `Self::IS_AUTOMATABLE | Self::IS_MODULATABLE`
+    pub fn default_float() -> Self {
+        Self::IS_AUTOMATABLE | Self::IS_MODULATABLE
+    }
+
+    /// `Self::IS_STEPPED | Self::IS_AUTOMATABLE | Self::IS_MODULATABLE`
+    pub fn default_enum() -> Self {
+        Self::IS_STEPPED | Self::IS_AUTOMATABLE | Self::IS_MODULATABLE
     }
 }
 

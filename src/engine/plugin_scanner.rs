@@ -165,6 +165,15 @@ impl PluginScanner {
         let mut scanned_plugins: Vec<ScannedPlugin> = Vec::new();
         let mut failed_plugins: Vec<(PathBuf, Box<dyn Error + Send>)> = Vec::new();
 
+        for (key, f) in self.scanned_internal_plugins.iter() {
+            scanned_plugins.push(ScannedPlugin {
+                description: f.factory.description(),
+                format: PluginFormat::Internal,
+                format_version: env!("CARGO_PKG_VERSION").into(),
+                key: key.clone(),
+            })
+        }
+
         #[cfg(feature = "clap-host")]
         {
             let mut found_binaries: Vec<PathBuf> = Vec::new();

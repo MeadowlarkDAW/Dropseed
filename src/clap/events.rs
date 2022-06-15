@@ -15,7 +15,7 @@ use clap_sys::events::clap_event_transport as RawClapEventTransport;
 use clap_sys::events::clap_input_events as RawClapInputEvents;
 use clap_sys::events::clap_output_events as RawClapOutputEvents;
 
-use crate::plugin::events::event_queue::PluginEvent;
+use crate::plugin::events::event_queue::ProcEvent;
 use crate::plugin::events::{
     EventMidi, EventMidi2, EventMidiSysex, EventNote, EventNoteExpression, EventParamGesture,
     EventParamMod, EventParamValue, EventTransport,
@@ -139,7 +139,7 @@ unsafe extern "C" fn try_push(
 
     let header = *event;
 
-    let event: PluginEvent = match header.type_ {
+    let event: ProcEvent = match header.type_ {
         CLAP_EVENT_NOTE_ON | CLAP_EVENT_NOTE_OFF | CLAP_EVENT_NOTE_CHOKE | CLAP_EVENT_NOTE_END => {
             EventNote::from_raw(*(event as *const RawClapEventNote)).into()
         }

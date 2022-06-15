@@ -10,6 +10,7 @@ use eframe::egui;
 use meadowlark_core_types::SampleRate;
 
 mod effect_rack_page;
+mod noise_gen_plugin;
 mod scanned_plugins_page;
 
 use effect_rack_page::{EffectRackPluginActiveState, EffectRackPluginState, EffectRackState};
@@ -70,7 +71,7 @@ fn main() {
 
     let (mut engine_handle, engine_rx) = DSEngineHandle::new(
         HostInfo::new(String::from("RustyDAW integration test"), String::from("0.1.0"), None, None),
-        Vec::new(),
+        vec![Box::new(noise_gen_plugin::NoiseGenPluginFactory {})],
     );
 
     dbg!(&engine_handle.internal_plugins_res);
@@ -358,7 +359,7 @@ impl BasicDawExampleGUI {
                         if let Some(engine_state) = &mut self.engine_state {
                             let mut index_1 = None;
                             for (i, p) in self.plugin_list.iter().enumerate() {
-                                if p.rdn() == "com.moist-plugins-gmbh.sine" {
+                                if p.rdn() == "app.meadowlark.noise-generator" {
                                     index_1 = Some(i);
                                     break;
                                 }

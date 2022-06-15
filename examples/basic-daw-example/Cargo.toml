@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 dropseed = { path = "../../" }
 meadowlark-core-types = "0.1"
+noise-generator-dsp = { path = "../../../meadowlark-plugins/noise-generator/noise-generator-dsp"}
 eframe = "0.18"
 cpal = "0.13"
 crossbeam = "0.8"
@@ -16,3 +17,4 @@ ringbuf = "0.2"
 fnv = "1.0"
 fast_log = "1.5.16"
 log = "0.4"
+basedrop = "0.1"

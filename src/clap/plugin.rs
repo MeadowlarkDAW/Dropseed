@@ -660,12 +660,12 @@ impl PluginMainThread for ClapPluginMainThread {
     /// [main-thread & !active_state]
     fn audio_ports_ext(
         &mut self,
-    ) -> Result<&ext::audio_ports::PluginAudioPortsExt, Box<dyn Error + Send>> {
+    ) -> Result<ext::audio_ports::PluginAudioPortsExt, Box<dyn Error + Send>> {
         match self.parse_audio_ports_extension() {
             Ok(audio_ports_ext) => {
                 self.audio_ports_ext = Some(audio_ports_ext);
 
-                Ok(self.audio_ports_ext.as_ref().unwrap())
+                Ok(self.audio_ports_ext.as_ref().unwrap().clone())
             }
             Err(e) => {
                 self.audio_ports_ext = None;

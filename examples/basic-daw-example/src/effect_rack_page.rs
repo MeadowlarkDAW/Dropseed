@@ -75,7 +75,6 @@ pub struct ParamState {
 
     min_value: f64,
     max_value: f64,
-    default_value: f64,
 
     is_stepped: bool,
     is_read_only: bool,
@@ -113,7 +112,6 @@ impl ParamsState {
                     value: *param_values.get(&info.stable_id).unwrap(),
                     min_value: info.min_value,
                     max_value: info.max_value,
-                    default_value: info.default_value,
                     is_stepped: info.flags.contains(ParamInfoFlags::IS_STEPPED),
                     is_read_only: info.flags.contains(ParamInfoFlags::IS_READONLY),
                     is_hidden: info.flags.contains(ParamInfoFlags::IS_HIDDEN),

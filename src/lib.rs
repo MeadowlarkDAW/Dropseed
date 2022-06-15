@@ -25,11 +25,11 @@ pub use graph::{
     PluginEdges, PluginHandle, PluginParamsExt,
 };
 pub use plugin::audio_buffer::{AudioPortBuffer, AudioPortBufferMut};
-pub use plugin::events::event_queue::EventQueue;
+pub use plugin::events::event_queue::{EventQueue, ProcEvent, ProcEventRef};
 pub use plugin::ext::audio_ports::{AudioPortInfo, MainPortsLayout, PluginAudioPortsExt};
 pub use plugin::ext::params::{ParamID, ParamInfo, ParamInfoFlags};
 pub use plugin::host_request::{HostInfo, HostRequest};
-pub use plugin::process_info::{ProcInfo, ProcessStatus};
+pub use plugin::process_info::{ProcBuffers, ProcInfo, ProcessStatus};
 pub use utils::fixed_point::FixedPoint64;
 
 pub use audio_graph::DefaultPortType as PortType;

@@ -157,8 +157,8 @@ pub trait PluginMainThread {
     #[allow(unused)]
     fn audio_ports_ext(
         &mut self,
-    ) -> Result<&ext::audio_ports::PluginAudioPortsExt, Box<dyn Error + Send>> {
-        Ok(&ext::audio_ports::EMPTY_AUDIO_PORTS_CONFIG)
+    ) -> Result<ext::audio_ports::PluginAudioPortsExt, Box<dyn Error + Send>> {
+        Ok(ext::audio_ports::EMPTY_AUDIO_PORTS_CONFIG.clone())
     }
 
     // --- Parameters ---------------------------------------------------------------------------------

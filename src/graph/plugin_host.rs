@@ -9,7 +9,7 @@ use std::sync::{
 };
 
 use super::shared_pool::PluginInstanceID;
-use crate::plugin::events::event_queue::{EventQueue, PluginEventRef};
+use crate::plugin::events::event_queue::{EventQueue, ProcEventRef};
 use crate::plugin::events::{EventFlags, EventParamMod, EventParamValue};
 use crate::plugin::ext::audio_ports::PluginAudioPortsExt;
 use crate::plugin::ext::params::{ParamInfo, ParamInfoFlags};
@@ -617,7 +617,7 @@ impl PluginInstanceHostAudioThread {
             params_queue.audio_to_main_param_value_tx.produce(|mut queue| {
                 while let Some(out_event) = self.out_events.pop() {
                     match out_event.get() {
-                        Ok(PluginEventRef::ParamGesture(event)) => {
+                        Ok(ProcEventRef::ParamGesture(event)) => {
                             // TODO: Use event.time for more accurate recording of automation.
 
                             let is_adjusting =
@@ -657,7 +657,7 @@ impl PluginInstanceHostAudioThread {
                                 queue.set_or_update(event.param_id(), value);
                             }
                         }
-                        Ok(PluginEventRef::ParamValue(event)) => {
+                        Ok(ProcEventRef::ParamValue(event)) => {
                             // TODO: Use event.time for more accurate recording of automation.
 
                             let value = AudioToMainParamValue {

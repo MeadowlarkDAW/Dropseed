@@ -1,4 +1,5 @@
 use clap_sys::events::clap_event_header as ClapEventHeader;
+use std::iter::Iterator;
 
 use super::{
     EventMidi, EventMidi2, EventMidiSysex, EventNote, EventNoteExpression, EventParamGesture,
@@ -10,7 +11,7 @@ use super::{
 // less than the less common maximum-sized event `EventTransport`.
 
 pub struct EventQueue {
-    pub(crate) events: Vec<PluginEvent>,
+    pub(crate) events: Vec<ProcEvent>,
 }
 
 impl EventQueue {
@@ -19,7 +20,7 @@ impl EventQueue {
     }
 
     #[inline]
-    pub fn push(&mut self, event: PluginEvent) {
+    pub fn push(&mut self, event: ProcEvent) {
         if self.events.len() >= self.events.capacity() {
             log::warn!("Event queue has exceeded its capacity. This will cause an allocation on the audio thread.");
         }
@@ -27,8 +28,14 @@ impl EventQueue {
         self.events.push(event);
     }
 
-    pub fn pop(&mut self) -> Option<PluginEvent> {
+    pub fn pop(&mut self) -> Option<ProcEvent> {
         self.events.pop()
+    }
+
+    pub fn iter<'a>(&'a self) -> impl Iterator<Item = &'a ProcEvent> {
+        let s = self.events.iter();
+
+        self.events.iter()
     }
 
     pub fn clear(&mut self) {
@@ -41,7 +48,7 @@ impl EventQueue {
 }
 
 #[derive(Clone, Copy)]
-pub enum PluginEventRef<'a> {
+pub enum ProcEventRef<'a> {
     Note(&'a EventNote),
     NoteExpression(&'a EventNoteExpression),
     ParamValue(&'a EventParamValue),
@@ -55,7 +62,7 @@ pub enum PluginEventRef<'a> {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub union PluginEvent {
+pub union ProcEvent {
     note: EventNote,
     note_expression: EventNoteExpression,
     param_value: EventParamValue,
@@ -67,26 +74,26 @@ pub union PluginEvent {
     midi2: EventMidi2,
 }
 
-impl PluginEvent {
+impl ProcEvent {
     pub fn raw_pointer(&self) -> *const ClapEventHeader {
         unsafe { &self.note.0.header }
     }
 
-    pub fn from_ref<'a>(event: PluginEventRef<'a>) -> Self {
+    pub fn from_ref<'a>(event: ProcEventRef<'a>) -> Self {
         match event {
-            PluginEventRef::Note(e) => PluginEvent { note: *e },
-            PluginEventRef::NoteExpression(e) => PluginEvent { note_expression: *e },
-            PluginEventRef::ParamValue(e) => PluginEvent { param_value: *e },
-            PluginEventRef::ParamMod(e) => PluginEvent { param_mod: *e },
-            PluginEventRef::ParamGesture(e) => PluginEvent { param_gesture: *e },
-            PluginEventRef::Transport(e) => PluginEvent { transport: *e },
-            PluginEventRef::Midi(e) => PluginEvent { midi: *e },
-            PluginEventRef::MidiSysex(e) => PluginEvent { midi_sysex: *e },
-            PluginEventRef::Midi2(e) => PluginEvent { midi2: *e },
+            ProcEventRef::Note(e) => ProcEvent { note: *e },
+            ProcEventRef::NoteExpression(e) => ProcEvent { note_expression: *e },
+            ProcEventRef::ParamValue(e) => ProcEvent { param_value: *e },
+            ProcEventRef::ParamMod(e) => ProcEvent { param_mod: *e },
+            ProcEventRef::ParamGesture(e) => ProcEvent { param_gesture: *e },
+            ProcEventRef::Transport(e) => ProcEvent { transport: *e },
+            ProcEventRef::Midi(e) => ProcEvent { midi: *e },
+            ProcEventRef::MidiSysex(e) => ProcEvent { midi_sysex: *e },
+            ProcEventRef::Midi2(e) => ProcEvent { midi2: *e },
         }
     }
 
-    pub fn get<'a>(&'a self) -> Result<PluginEventRef<'a>, ()> {
+    pub fn get<'a>(&'a self) -> Result<ProcEventRef<'a>, ()> {
         // The event header is always the first bytes in every event.
         let header = unsafe { self.note.0.header };
 
@@ -95,84 +102,84 @@ impl PluginEvent {
             | clap_sys::events::CLAP_EVENT_NOTE_OFF
             | clap_sys::events::CLAP_EVENT_NOTE_CHOKE
             | clap_sys::events::CLAP_EVENT_NOTE_END => {
-                Ok(PluginEventRef::Note(unsafe { &self.note }))
+                Ok(ProcEventRef::Note(unsafe { &self.note }))
             }
             clap_sys::events::CLAP_EVENT_NOTE_EXPRESSION => {
-                Ok(PluginEventRef::NoteExpression(unsafe { &self.note_expression }))
+                Ok(ProcEventRef::NoteExpression(unsafe { &self.note_expression }))
             }
             clap_sys::events::CLAP_EVENT_PARAM_VALUE => {
-                Ok(PluginEventRef::ParamValue(unsafe { &self.param_value }))
+                Ok(ProcEventRef::ParamValue(unsafe { &self.param_value }))
             }
             clap_sys::events::CLAP_EVENT_PARAM_MOD => {
-                Ok(PluginEventRef::ParamMod(unsafe { &self.param_mod }))
+                Ok(ProcEventRef::ParamMod(unsafe { &self.param_mod }))
             }
             clap_sys::events::CLAP_EVENT_PARAM_GESTURE_BEGIN
             | clap_sys::events::CLAP_EVENT_PARAM_GESTURE_END => {
-                Ok(PluginEventRef::ParamGesture(unsafe { &self.param_gesture }))
+                Ok(ProcEventRef::ParamGesture(unsafe { &self.param_gesture }))
             }
             clap_sys::events::CLAP_EVENT_TRANSPORT => {
-                Ok(PluginEventRef::Transport(unsafe { &self.transport }))
+                Ok(ProcEventRef::Transport(unsafe { &self.transport }))
             }
-            clap_sys::events::CLAP_EVENT_MIDI => Ok(PluginEventRef::Midi(unsafe { &self.midi })),
+            clap_sys::events::CLAP_EVENT_MIDI => Ok(ProcEventRef::Midi(unsafe { &self.midi })),
             clap_sys::events::CLAP_EVENT_MIDI_SYSEX => {
-                Ok(PluginEventRef::MidiSysex(unsafe { &self.midi_sysex }))
+                Ok(ProcEventRef::MidiSysex(unsafe { &self.midi_sysex }))
             }
-            clap_sys::events::CLAP_EVENT_MIDI2 => Ok(PluginEventRef::Midi2(unsafe { &self.midi2 })),
+            clap_sys::events::CLAP_EVENT_MIDI2 => Ok(ProcEventRef::Midi2(unsafe { &self.midi2 })),
             _ => Err(()),
         }
     }
 }
 
-impl From<EventNote> for PluginEvent {
+impl From<EventNote> for ProcEvent {
     fn from(e: EventNote) -> Self {
-        PluginEvent { note: e }
+        ProcEvent { note: e }
     }
 }
 
-impl From<EventNoteExpression> for PluginEvent {
+impl From<EventNoteExpression> for ProcEvent {
     fn from(e: EventNoteExpression) -> Self {
-        PluginEvent { note_expression: e }
+        ProcEvent { note_expression: e }
     }
 }
 
-impl From<EventParamValue> for PluginEvent {
+impl From<EventParamValue> for ProcEvent {
     fn from(e: EventParamValue) -> Self {
-        PluginEvent { param_value: e }
+        ProcEvent { param_value: e }
     }
 }
 
-impl From<EventParamMod> for PluginEvent {
+impl From<EventParamMod> for ProcEvent {
     fn from(e: EventParamMod) -> Self {
-        PluginEvent { param_mod: e }
+        ProcEvent { param_mod: e }
     }
 }
 
-impl From<EventParamGesture> for PluginEvent {
+impl From<EventParamGesture> for ProcEvent {
     fn from(e: EventParamGesture) -> Self {
-        PluginEvent { param_gesture: e }
+        ProcEvent { param_gesture: e }
     }
 }
 
-impl From<EventTransport> for PluginEvent {
+impl From<EventTransport> for ProcEvent {
     fn from(e: EventTransport) -> Self {
-        PluginEvent { transport: e }
+        ProcEvent { transport: e }
     }
 }
 
-impl From<EventMidi> for PluginEvent {
+impl From<EventMidi> for ProcEvent {
     fn from(e: EventMidi) -> Self {
-        PluginEvent { midi: e }
+        ProcEvent { midi: e }
     }
 }
 
-impl From<EventMidiSysex> for PluginEvent {
+impl From<EventMidiSysex> for ProcEvent {
     fn from(e: EventMidiSysex) -> Self {
-        PluginEvent { midi_sysex: e }
+        ProcEvent { midi_sysex: e }
     }
 }
 
-impl From<EventMidi2> for PluginEvent {
+impl From<EventMidi2> for ProcEvent {
     fn from(e: EventMidi2) -> Self {
-        PluginEvent { midi2: e }
+        ProcEvent { midi2: e }
     }
 }
