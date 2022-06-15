@@ -19,15 +19,10 @@ clap-host = ["libloading", "globwalk", "dirs"]
 cpal-backend = ["cpal"]
 cpal-asio = ["cpal/asio"]
 
-[workspace]
-members = [
-    "examples/basic-daw-example",
-]
-
 [dependencies]
 meadowlark-core-types = "0.1"
 audio-graph = { git = "https://github.com/MeadowlarkDAW/audio-graph", branch = "main" }
-clap-sys = { git = "https://github.com/glowcoil/clap-sys.git", rev = "362c89d22ef7aa7c30b0e8ffa2d9a0ee2dd7897b" }
+clap-sys = { git = "https://github.com/glowcoil/clap-sys.git", rev = "25d56346819bc380e039e670d7606ba1b85b7969" }
 dirs = { version = "4.0", optional = true }
 raw-window-handle = "0.4"
 basedrop = "0.1"
@@ -43,6 +38,3 @@ thread-priority = "0.8"
 cpal = { version = "0.13", optional = true }
 libloading = { version = "0.7", optional = true }
 globwalk = { version = "0.8", optional = true }
-
-[dev-dependencies]
-fast_log = "1.5.16"
