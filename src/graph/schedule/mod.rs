@@ -140,7 +140,7 @@ impl Schedule {
                     in_buffer.set_constant(is_constant);
                 } else {
                     unsafe {
-                        in_buffer.clear(frames);
+                        in_buffer.clear_f32(frames);
                     }
                 }
             }

@@ -1,3 +1,5 @@
+use bitflags::bitflags;
+
 pub const PORT_TYPE_MONO: &'static str = "mono";
 pub const PORT_TYPE_STEREO: &'static str = "stereo";
 
@@ -276,7 +278,7 @@ pub struct AudioPortInfo {
     /// The number of channels in this port.
     ///
     /// This cannot be `0`.
-    pub channels: usize,
+    pub channels: u16,
 
     /// If `None` or empty then it is unspecified (arbitrary audio).
     ///
@@ -315,5 +317,27 @@ pub enum MainPortsLayout {
 impl Default for MainPortsLayout {
     fn default() -> Self {
         MainPortsLayout::InOut
+    }
+}
+
+bitflags! {
+    pub struct AudioPortRescanFlags: u32 {
+        /// The ports name did change, the host can scan them right away.
+        const RESCAN_NAMES = clap_sys::ext::audio_ports::CLAP_AUDIO_PORTS_RESCAN_NAMES;
+
+        /// [!active] The flags did change
+        const RESCAN_FLAGS = clap_sys::ext::audio_ports::CLAP_AUDIO_PORTS_RESCAN_FLAGS;
+
+        /// [!active] The channel_count did change
+        const RESCAN_CHANNEL_COUNT = clap_sys::ext::audio_ports::CLAP_AUDIO_PORTS_RESCAN_CHANNEL_COUNT;
+
+        /// [!active] The port type did change
+        const RESCAN_PORT_TYPE = clap_sys::ext::audio_ports::CLAP_AUDIO_PORTS_RESCAN_PORT_TYPE;
+
+        /// [!active] The in-place pair did change, this requires.
+        const RESCAN_IN_PLACE_PAIR = clap_sys::ext::audio_ports::CLAP_AUDIO_PORTS_RESCAN_IN_PLACE_PAIR;
+
+        /// [!active] The list of ports have changed: entries have been removed/added.
+        const RESCAN_LIST = clap_sys::ext::audio_ports::CLAP_AUDIO_PORTS_RESCAN_LIST;
     }
 }

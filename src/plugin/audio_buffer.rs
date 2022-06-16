@@ -485,14 +485,14 @@ impl AudioPortBufferMut {
                 for rc_buf in buffers.iter() {
                     let clear_frames = frames.min(rc_buf.max_frames());
 
-                    unsafe { rc_buf.clear(clear_frames) };
+                    unsafe { rc_buf.clear_f32(clear_frames) };
                 }
             }
             RawAudioChannelBuffers::F64(buffers) => {
                 for rc_buf in buffers.iter() {
                     let clear_frames = frames.min(rc_buf.max_frames());
 
-                    unsafe { rc_buf.clear(clear_frames) };
+                    unsafe { rc_buf.clear_f64(clear_frames) };
                 }
             }
         }
@@ -507,12 +507,12 @@ impl AudioPortBufferMut {
         match &self.raw_channels {
             RawAudioChannelBuffers::F32(buffers) => {
                 for rc_buf in buffers.iter() {
-                    rc_buf.clear(frames);
+                    rc_buf.clear_f32(frames);
                 }
             }
             RawAudioChannelBuffers::F64(buffers) => {
                 for rc_buf in buffers.iter() {
-                    rc_buf.clear(frames);
+                    rc_buf.clear_f64(frames);
                 }
             }
         }

@@ -1,6 +1,7 @@
 use basedrop::Shared;
 use clap_sys::ext::audio_ports::clap_host_audio_ports as RawClapHostAudioPorts;
 use clap_sys::ext::log::clap_host_log as RawClapHostLog;
+use clap_sys::ext::note_ports::clap_host_note_ports as RawClapHostNotePorts;
 use clap_sys::ext::params::clap_host_params as RawClapHostParams;
 use clap_sys::ext::thread_check::clap_host_thread_check as RawClapHostThreadCheck;
 use clap_sys::host::clap_host as RawClapHost;
@@ -12,6 +13,8 @@ use std::sync::Arc;
 
 use super::c_char_helpers::c_char_ptr_to_maybe_str;
 
+use crate::plugin::ext::audio_ports::AudioPortRescanFlags;
+use crate::plugin::ext::note_ports::NotePortRescanFlags;
 use crate::plugin::host_request::HostRequest;
 use crate::utils::thread_id::SharedThreadIDs;
 use crate::ParamID;
@@ -44,7 +47,14 @@ impl ClapHostRequest {
                 plug_did_create: Arc::new(AtomicBool::new(false)),
                 plugin_id,
                 host_request,
-                host_audio_ports: [RawClapHostAudioPorts { is_rescan_flag_supported, rescan }],
+                host_audio_ports: [RawClapHostAudioPorts {
+                    is_rescan_flag_supported: is_rescan_audio_ports_flag_supported,
+                    rescan: rescan_audio_ports,
+                }],
+                host_note_ports: [RawClapHostNotePorts {
+                    supported_dialects: supported_note_dialects,
+                    rescan: rescan_note_ports,
+                }],
                 host_thread_check: [RawClapHostThreadCheck { is_main_thread, is_audio_thread }],
                 host_params: [RawClapHostParams {
                     rescan: params_rescan,
@@ -112,6 +122,7 @@ struct HostData {
     plugin_id: PluginInstanceID,
     host_request: HostRequest,
     host_audio_ports: [RawClapHostAudioPorts; 1],
+    host_note_ports: [RawClapHostNotePorts; 1],
     host_thread_check: [RawClapHostThreadCheck; 1],
     host_params: [RawClapHostParams; 1],
     host_log: [RawClapHostLog; 1],
@@ -181,6 +192,11 @@ unsafe extern "C" fn get_extension(
         return (host_data.host_audio_ports).as_ptr() as *const c_void;
     }
 
+    if extension_id == "clap.note-ports" {
+        // Safe because host_data is pinned in place via the `Shared` pointer.
+        return (host_data.host_note_ports).as_ptr() as *const c_void;
+    }
+
     if extension_id == "clap.log" {
         // Safe because host_data is pinned in place via the `Shared` pointer.
         return (host_data.host_log).as_ptr() as *const c_void;
@@ -195,13 +211,10 @@ unsafe extern "C" fn get_extension(
 }
 
 /// [main-thread]
-unsafe extern "C" fn is_rescan_flag_supported(clap_host: *const RawClapHost, flag: u32) -> bool {
-    use clap_sys::ext::audio_ports::{
-        CLAP_AUDIO_PORTS_RESCAN_CHANNEL_COUNT, CLAP_AUDIO_PORTS_RESCAN_FLAGS,
-        CLAP_AUDIO_PORTS_RESCAN_IN_PLACE_PAIR, CLAP_AUDIO_PORTS_RESCAN_LIST,
-        CLAP_AUDIO_PORTS_RESCAN_NAMES, CLAP_AUDIO_PORTS_RESCAN_PORT_TYPE,
-    };
-
+unsafe extern "C" fn is_rescan_audio_ports_flag_supported(
+    clap_host: *const RawClapHost,
+    flag: u32,
+) -> bool {
     let host_data = match parse_clap_host(clap_host) {
         Ok(host_data) => host_data,
         Err(()) => return false,
@@ -212,37 +225,13 @@ unsafe extern "C" fn is_rescan_flag_supported(clap_host: *const RawClapHost, fla
         return false;
     }
 
-    if flag & CLAP_AUDIO_PORTS_RESCAN_NAMES == 1 {
-        return false; // TODO: support this
-    }
+    let flag = AudioPortRescanFlags::from_bits_truncate(flag);
 
-    if flag & CLAP_AUDIO_PORTS_RESCAN_FLAGS == 1 {
-        return true;
-    }
-
-    if flag & CLAP_AUDIO_PORTS_RESCAN_CHANNEL_COUNT == 1 {
-        return true;
-    }
-
-    if flag & CLAP_AUDIO_PORTS_RESCAN_PORT_TYPE == 1 {
-        return true;
-    }
-
-    if flag & CLAP_AUDIO_PORTS_RESCAN_IN_PLACE_PAIR == 1 {
-        return true;
-    }
-
-    if flag & CLAP_AUDIO_PORTS_RESCAN_LIST == 1 {
-        return true;
-    }
-
-    false
+    host_data.host_request.is_rescan_audio_ports_flag_supported(flag)
 }
 
 /// [main-thread]
-unsafe extern "C" fn rescan(clap_host: *const RawClapHost, mut flags: u32) {
-    use clap_sys::ext::audio_ports::CLAP_AUDIO_PORTS_RESCAN_NAMES;
-
+unsafe extern "C" fn rescan_audio_ports(clap_host: *const RawClapHost, flags: u32) {
     let host_data = match parse_clap_host(clap_host) {
         Ok(host_data) => host_data,
         Err(()) => return,
@@ -253,16 +242,43 @@ unsafe extern "C" fn rescan(clap_host: *const RawClapHost, mut flags: u32) {
         return;
     }
 
-    if flags & CLAP_AUDIO_PORTS_RESCAN_NAMES == 1 {
-        // TODO: support this
-        log::warn!("clap plugin {:?} set CLAP_AUDIO_PORTS_RESCAN_NAMES flag in call to clap_host_audio_ports->rescan()", &host_data.plugin_id);
+    let flags = AudioPortRescanFlags::from_bits_truncate(flags);
 
-        flags = flags & (!CLAP_AUDIO_PORTS_RESCAN_NAMES);
+    host_data.host_request.rescan_audio_ports(flags);
+}
+
+/// [main-thread]
+unsafe extern "C" fn supported_note_dialects(clap_host: *const RawClapHost) -> u32 {
+    let host_data = match parse_clap_host(clap_host) {
+        Ok(host_data) => host_data,
+        Err(()) => return 0,
+    };
+
+    if !host_data.thread_ids.is_external_main_thread() {
+        log::warn!(
+            "Plugin called clap_host_note_ports->supported_dialects() not in the main thread"
+        );
+        return 0;
     }
 
-    if flags > 1 {
-        host_data.host_request.request_restart();
+    host_data.host_request.supported_note_dialects().bits()
+}
+
+/// [main-thread]
+unsafe extern "C" fn rescan_note_ports(clap_host: *const RawClapHost, flags: u32) {
+    let host_data = match parse_clap_host(clap_host) {
+        Ok(host_data) => host_data,
+        Err(()) => return,
+    };
+
+    if !host_data.thread_ids.is_external_main_thread() {
+        log::warn!("Plugin called clap_host_note_ports->rescan() not in the main thread");
+        return;
     }
+
+    let flags = NotePortRescanFlags::from_bits_truncate(flags);
+
+    host_data.host_request.rescan_note_ports(flags);
 }
 
 /// [thread-safe]

@@ -161,6 +161,20 @@ pub trait PluginMainThread {
         Ok(ext::audio_ports::EMPTY_AUDIO_PORTS_CONFIG.clone())
     }
 
+    /// An optional extension that describes the configuration of note ports on this plugin instance.
+    ///
+    /// This will only be called while the plugin is inactive.
+    ///
+    /// The default configuration is one with no note ports.
+    ///
+    /// [main-thread & !active_state]
+    #[allow(unused)]
+    fn note_ports_ext(
+        &mut self,
+    ) -> Result<ext::note_ports::PluginNotePortsExt, Box<dyn Error + Send>> {
+        Ok(ext::note_ports::EMPTY_NOTE_PORTS_CONFIG.clone())
+    }
+
     // --- Parameters ---------------------------------------------------------------------------------
 
     /// Get the total number of parameters in this plugin.

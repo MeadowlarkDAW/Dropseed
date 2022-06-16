@@ -9,6 +9,9 @@ use std::sync::{
 
 use crate::plugin::ext::params::HostParamsExtMainThread;
 
+use super::ext::audio_ports::AudioPortRescanFlags;
+use super::ext::note_ports::{NoteDialect, NotePortRescanFlags};
+
 #[derive(Debug, Clone)]
 pub struct HostInfo {
     /// The name of this host (mandatory).
@@ -79,6 +82,10 @@ bitflags! {
         const CALLBACK = 1 << 2;
 
         const DEACTIVATE = 1 << 3;
+
+        const RESCAN_AUDIO_PORTS = 1 << 4;
+
+        const RESCAN_NOTE_PORTS = 1 << 5;
     }
 }
 
@@ -129,6 +136,37 @@ impl HostRequest {
     pub fn request_callback(&self) {
         // TODO: Are we able to use relaxed ordering here?
         let _ = self.request_flags.fetch_or(RequestFlags::CALLBACK.bits(), Ordering::SeqCst);
+    }
+
+    /// Checks if the host allows a plugin to change a given aspect of the audio ports definition.
+    ///
+    /// [main-thread]
+    pub fn is_rescan_audio_ports_flag_supported(&self, flag: AudioPortRescanFlags) -> bool {
+        // todo
+        false
+    }
+
+    /// Checks if the host allows a plugin to change a given aspect of the audio ports definition.
+    ///
+    /// [main-thread]
+    pub fn supported_note_dialects(&self) -> NoteDialect {
+        // todo: more
+        NoteDialect::CLAP | NoteDialect::MIDI
+    }
+
+    /// Rescan the full list of audio ports according to the flags.
+    ///
+    /// It is illegal to ask the host to rescan with a flag that is not supported.
+    ///
+    /// Certain flags require the plugin to be de-activated.
+    ///
+    /// [main-thread]
+    pub fn rescan_audio_ports(&self, flags: AudioPortRescanFlags) {
+        // todo
+    }
+
+    pub fn rescan_note_ports(&self, flags: NotePortRescanFlags) {
+        // todo
     }
 
     /// Request the host to schedule a call to `PluginMainThread::on_main_thread()` on the main thread.
@@ -183,6 +221,19 @@ impl HostRequest {
     pub(crate) fn reset_deactivate(&self) {
         // TODO: Are we able to use relaxed ordering here?
         let _ = self.request_flags.fetch_and(!RequestFlags::DEACTIVATE.bits(), Ordering::SeqCst);
+    }
+
+    pub(crate) fn reset_rescan_audio_ports(&self) {
+        // TODO: Are we able to use relaxed ordering here?
+        let _ = self
+            .request_flags
+            .fetch_and(!RequestFlags::RESCAN_AUDIO_PORTS.bits(), Ordering::SeqCst);
+    }
+
+    pub(crate) fn reset_rescan_note_ports(&self) {
+        // TODO: Are we able to use relaxed ordering here?
+        let _ =
+            self.request_flags.fetch_and(!RequestFlags::RESCAN_NOTE_PORTS.bits(), Ordering::SeqCst);
     }
 }
 

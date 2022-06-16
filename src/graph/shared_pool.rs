@@ -6,9 +6,11 @@ use std::hash::Hash;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::engine::plugin_scanner::PluginFormat;
+use crate::ProcEvent;
 
 use super::plugin_host::{PluginInstanceHost, PluginInstanceHostAudioThread};
 use super::schedule::delay_comp_node::DelayCompNode;
+use super::PortChannelID;
 
 /// Used for debugging and verifying purposes.
 #[repr(u8)]
@@ -18,6 +20,8 @@ enum DebugBufferType {
     Audio32,
     Audio64,
     IntermediaryAudio32,
+    ClapNoteBuffer,
+    MidiNoteBuffer,
 }
 impl std::fmt::Debug for DebugBufferType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -25,6 +29,8 @@ impl std::fmt::Debug for DebugBufferType {
             DebugBufferType::Audio32 => write!(f, "f"),
             DebugBufferType::Audio64 => write!(f, "d"),
             DebugBufferType::IntermediaryAudio32 => write!(f, "if"),
+            DebugBufferType::ClapNoteBuffer => write!(f, "cn"),
+            DebugBufferType::MidiNoteBuffer => write!(f, "m"),
         }
     }
 }
@@ -42,27 +48,47 @@ impl std::fmt::Debug for DebugBufferID {
     }
 }
 
-pub(crate) struct Buffer<T: Clone + Copy + Send + Default + 'static> {
+pub(crate) struct Buffer<T: Clone + Copy + Send + 'static> {
     pub data: MaybeAtomicRefCell<Vec<T>>,
     pub is_constant: AtomicBool,
     pub debug_id: DebugBufferID,
 }
 
-impl<T: Clone + Copy + Send + Default + 'static> Buffer<T> {
+impl<T: Clone + Copy + Send + 'static> Buffer<T> {
     pub fn new(max_frames: usize, debug_id: DebugBufferID) -> Self {
         Self {
-            data: MaybeAtomicRefCell::new(vec![Default::default(); max_frames]),
+            data: MaybeAtomicRefCell::new(Vec::with_capacity(max_frames)),
             is_constant: AtomicBool::new(true),
             debug_id,
         }
     }
 }
 
-pub(crate) struct SharedBuffer<T: Clone + Copy + Send + Default + 'static> {
+impl Buffer<f32> {
+    pub fn new_f32(max_frames: usize, debug_id: DebugBufferID) -> Self {
+        Self {
+            data: MaybeAtomicRefCell::new(vec![0.0; max_frames]),
+            is_constant: AtomicBool::new(true),
+            debug_id,
+        }
+    }
+}
+
+impl Buffer<f64> {
+    pub fn new_f64(max_frames: usize, debug_id: DebugBufferID) -> Self {
+        Self {
+            data: MaybeAtomicRefCell::new(vec![0.0; max_frames]),
+            is_constant: AtomicBool::new(true),
+            debug_id,
+        }
+    }
+}
+
+pub(crate) struct SharedBuffer<T: Clone + Copy + Send + 'static> {
     pub buffer: Shared<Buffer<T>>,
 }
 
-impl<T: Clone + Copy + Send + Default + 'static> SharedBuffer<T> {
+impl<T: Clone + Copy + Send + 'static> SharedBuffer<T> {
     #[inline]
     pub unsafe fn borrow<'a>(&'a self) -> MaybeAtomicRef<'a, Vec<T>> {
         self.buffer.data.borrow()
@@ -71,20 +97,6 @@ impl<T: Clone + Copy + Send + Default + 'static> SharedBuffer<T> {
     #[inline]
     pub unsafe fn borrow_mut<'a>(&'a self) -> MaybeAtomicRefMut<'a, Vec<T>> {
         self.buffer.data.borrow_mut()
-    }
-
-    #[inline]
-    pub unsafe fn clear(&self, frames: usize) {
-        let mut buf_ref = self.borrow_mut();
-
-        #[cfg(debug_assertions)]
-        let buf = &mut buf_ref[0..frames];
-        #[cfg(not(debug_assertions))]
-        let buf = std::slice::from_raw_parts_mut(buf_ref.as_mut_ptr(), frames);
-
-        buf.fill(Default::default());
-
-        self.set_constant(true);
     }
 
     #[inline]
@@ -109,7 +121,37 @@ impl<T: Clone + Copy + Send + Default + 'static> SharedBuffer<T> {
     }
 }
 
-impl<T: Clone + Copy + Send + Default + 'static> Clone for SharedBuffer<T> {
+impl SharedBuffer<f32> {
+    pub unsafe fn clear_f32(&self, frames: usize) {
+        let mut buf_ref = self.borrow_mut();
+
+        #[cfg(debug_assertions)]
+        let buf = &mut buf_ref[0..frames];
+        #[cfg(not(debug_assertions))]
+        let buf = std::slice::from_raw_parts_mut(buf_ref.as_mut_ptr(), frames);
+
+        buf.fill(0.0);
+
+        self.set_constant(true);
+    }
+}
+
+impl SharedBuffer<f64> {
+    pub unsafe fn clear_f64(&self, frames: usize) {
+        let mut buf_ref = self.borrow_mut();
+
+        #[cfg(debug_assertions)]
+        let buf = &mut buf_ref[0..frames];
+        #[cfg(not(debug_assertions))]
+        let buf = std::slice::from_raw_parts_mut(buf_ref.as_mut_ptr(), frames);
+
+        buf.fill(0.0);
+
+        self.set_constant(true);
+    }
+}
+
+impl<T: Clone + Copy + Send + 'static> Clone for SharedBuffer<T> {
     fn clone(&self) -> Self {
         Self { buffer: Shared::clone(&self.buffer) }
     }
@@ -234,8 +276,7 @@ pub(crate) struct PluginInstanceHostEntry {
     pub plugin_host: PluginInstanceHost,
     pub audio_thread: Option<SharedPluginHostAudioThread>,
 
-    pub audio_in_channel_refs: Vec<audio_graph::PortRef>,
-    pub audio_out_channel_refs: Vec<audio_graph::PortRef>,
+    pub port_channels_refs: FnvHashMap<PortChannelID, audio_graph::PortRef>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -284,25 +325,37 @@ impl SharedPluginPool {
 }
 
 pub(crate) struct SharedBufferPool {
-    pub buffer_size: usize,
+    pub audio_buffer_size: usize,
+    pub note_buffer_size: usize,
 
     audio_buffers_f32: Vec<Option<SharedBuffer<f32>>>,
     audio_buffers_f64: Vec<Option<SharedBuffer<f64>>>,
 
     intermediary_audio_f32: Vec<Option<SharedBuffer<f32>>>,
 
+    clap_note_buffers: Vec<Option<SharedBuffer<ProcEvent>>>,
+    midi_buffers: Vec<Option<SharedBuffer<ProcEvent>>>,
+
     coll_handle: basedrop::Handle,
 }
 
 impl SharedBufferPool {
-    pub fn new(buffer_size: usize, coll_handle: basedrop::Handle) -> Self {
-        assert_ne!(buffer_size, 0);
+    pub fn new(
+        audio_buffer_size: usize,
+        note_buffer_size: usize,
+        coll_handle: basedrop::Handle,
+    ) -> Self {
+        assert_ne!(audio_buffer_size, 0);
+        assert_ne!(note_buffer_size, 0);
 
         Self {
             audio_buffers_f32: Vec::new(),
             audio_buffers_f64: Vec::new(),
             intermediary_audio_f32: Vec::new(),
-            buffer_size,
+            clap_note_buffers: Vec::new(),
+            midi_buffers: Vec::new(),
+            audio_buffer_size,
+            note_buffer_size,
             coll_handle,
         }
     }
@@ -323,8 +376,8 @@ impl SharedBufferPool {
             *slot = Some(SharedBuffer {
                 buffer: Shared::new(
                     &self.coll_handle,
-                    Buffer::new(
-                        self.buffer_size,
+                    Buffer::new_f32(
+                        self.audio_buffer_size,
                         DebugBufferID {
                             buffer_type: DebugBufferType::Audio32,
                             index: index as u32,
@@ -354,8 +407,8 @@ impl SharedBufferPool {
             *slot = Some(SharedBuffer {
                 buffer: Shared::new(
                     &self.coll_handle,
-                    Buffer::new(
-                        self.buffer_size,
+                    Buffer::new_f64(
+                        self.audio_buffer_size,
                         DebugBufferID {
                             buffer_type: DebugBufferType::Audio64,
                             index: index as u32,
@@ -385,10 +438,70 @@ impl SharedBufferPool {
             *slot = Some(SharedBuffer {
                 buffer: Shared::new(
                     &self.coll_handle,
-                    Buffer::new(
-                        self.buffer_size,
+                    Buffer::new_f32(
+                        self.audio_buffer_size,
                         DebugBufferID {
                             buffer_type: DebugBufferType::IntermediaryAudio32,
+                            index: index as u32,
+                        },
+                    ),
+                ),
+            });
+
+            slot.as_ref().unwrap().clone()
+        }
+    }
+
+    pub fn clap_note(&mut self, index: usize) -> SharedBuffer<ProcEvent> {
+        if self.clap_note_buffers.len() <= index {
+            let n_new_slots = (index + 1) - self.clap_note_buffers.len();
+            for _ in 0..n_new_slots {
+                self.clap_note_buffers.push(None);
+            }
+        }
+
+        let slot = &mut self.clap_note_buffers[index];
+
+        if let Some(b) = slot {
+            b.clone()
+        } else {
+            *slot = Some(SharedBuffer {
+                buffer: Shared::new(
+                    &self.coll_handle,
+                    Buffer::new(
+                        self.note_buffer_size,
+                        DebugBufferID {
+                            buffer_type: DebugBufferType::ClapNoteBuffer,
+                            index: index as u32,
+                        },
+                    ),
+                ),
+            });
+
+            slot.as_ref().unwrap().clone()
+        }
+    }
+
+    pub fn midi(&mut self, index: usize) -> SharedBuffer<ProcEvent> {
+        if self.midi_buffers.len() <= index {
+            let n_new_slots = (index + 1) - self.midi_buffers.len();
+            for _ in 0..n_new_slots {
+                self.midi_buffers.push(None);
+            }
+        }
+
+        let slot = &mut self.midi_buffers[index];
+
+        if let Some(b) = slot {
+            b.clone()
+        } else {
+            *slot = Some(SharedBuffer {
+                buffer: Shared::new(
+                    &self.coll_handle,
+                    Buffer::new(
+                        self.note_buffer_size,
+                        DebugBufferID {
+                            buffer_type: DebugBufferType::MidiNoteBuffer,
                             index: index as u32,
                         },
                     ),
@@ -403,6 +516,8 @@ impl SharedBufferPool {
         &mut self,
         max_buffer_index: usize,
         total_intermediary_buffers: usize,
+        max_clap_note_buffer_index: usize,
+        max_midi_buffer_index: usize,
     ) {
         if self.audio_buffers_f32.len() > max_buffer_index + 1 {
             let n_slots_to_remove = self.audio_buffers_f32.len() - (max_buffer_index + 1);
@@ -420,6 +535,18 @@ impl SharedBufferPool {
             let n_slots_to_remove = self.intermediary_audio_f32.len() - total_intermediary_buffers;
             for _ in 0..n_slots_to_remove {
                 let _ = self.intermediary_audio_f32.pop();
+            }
+        }
+        if self.clap_note_buffers.len() > max_clap_note_buffer_index {
+            let n_slots_to_remove = self.clap_note_buffers.len() - max_clap_note_buffer_index;
+            for _ in 0..n_slots_to_remove {
+                let _ = self.clap_note_buffers.pop();
+            }
+        }
+        if self.midi_buffers.len() > max_midi_buffer_index {
+            let n_slots_to_remove = self.midi_buffers.len() - max_midi_buffer_index;
+            for _ in 0..n_slots_to_remove {
+                let _ = self.midi_buffers.pop();
             }
         }
     }

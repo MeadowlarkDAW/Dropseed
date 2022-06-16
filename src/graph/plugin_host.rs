@@ -12,6 +12,7 @@ use super::shared_pool::PluginInstanceID;
 use crate::plugin::events::event_queue::{EventQueue, ProcEventRef};
 use crate::plugin::events::{EventFlags, EventParamMod, EventParamValue};
 use crate::plugin::ext::audio_ports::PluginAudioPortsExt;
+use crate::plugin::ext::note_ports::PluginNotePortsExt;
 use crate::plugin::ext::params::{ParamInfo, ParamInfoFlags};
 use crate::plugin::host_request::RequestFlags;
 use crate::plugin::process_info::ProcBuffers;
@@ -66,11 +67,16 @@ pub struct ParamModifiedInfo {
 pub struct PluginHandle {
     pub params: PluginParamsExt,
     pub(crate) audio_ports: PluginAudioPortsExt,
+    pub(crate) note_ports: PluginNotePortsExt,
 }
 
 impl PluginHandle {
     pub fn audio_ports(&self) -> &PluginAudioPortsExt {
         &self.audio_ports
+    }
+
+    pub fn note_ports(&self) -> &PluginNotePortsExt {
+        &self.note_ports
     }
 }
 
@@ -147,6 +153,7 @@ pub(crate) struct PluginInstanceHost {
     pub id: PluginInstanceID,
 
     pub audio_ports: Option<PluginAudioPortsExt>,
+    pub note_ports: Option<PluginNotePortsExt>,
 
     main_thread: Option<Box<dyn PluginMainThread>>,
 
@@ -178,6 +185,7 @@ impl PluginInstanceHost {
             id,
             main_thread,
             audio_ports: None,
+            note_ports: None,
             state: Arc::new(SharedPluginState::new()),
             save_state,
             param_queues: None,
@@ -223,7 +231,7 @@ impl PluginInstanceHost {
         }
 
         let audio_ports = match plugin_main_thread.audio_ports_ext() {
-            Ok(audio_ports) => audio_ports.clone(),
+            Ok(audio_ports) => audio_ports,
             Err(e) => {
                 self.state.set(PluginState::InactiveWithError);
                 self.audio_ports = None;
@@ -232,12 +240,23 @@ impl PluginInstanceHost {
             }
         };
 
+        let note_ports = match plugin_main_thread.note_ports_ext() {
+            Ok(note_ports) => note_ports,
+            Err(e) => {
+                self.state.set(PluginState::InactiveWithError);
+                self.note_ports = None;
+
+                return Err(ActivatePluginError::PluginFailedToGetNotePortsExt(e));
+            }
+        };
+
+        self.audio_ports = Some(audio_ports.clone());
+        self.note_ports = Some(note_ports.clone());
+
         if let Some(save_state) = &mut self.save_state {
             save_state.audio_in_out_channels =
                 (audio_ports.total_in_channels() as u16, audio_ports.total_out_channels() as u16);
         }
-
-        self.audio_ports = Some(audio_ports.clone());
 
         let num_params = plugin_main_thread.num_params() as usize;
         let mut params: FnvHashMap<ParamID, ParamInfo> = FnvHashMap::default();
@@ -320,7 +339,7 @@ impl PluginInstanceHost {
                         is_adjusting_parameter,
                         host_request: self.host_request.clone(),
                     },
-                    PluginHandle { audio_ports, params: params_ext },
+                    PluginHandle { audio_ports, note_ports, params: params_ext },
                     param_values,
                 ))
             }
@@ -797,6 +816,7 @@ pub enum ActivatePluginError {
     AlreadyActive,
     RestartScheduled,
     PluginFailedToGetAudioPortsExt(Box<dyn Error + Send>),
+    PluginFailedToGetNotePortsExt(Box<dyn Error + Send>),
     PluginFailedToGetParamInfo(usize),
     PluginFailedToGetParamValue(ParamID),
     PluginSpecific(Box<dyn Error + Send>),
@@ -814,6 +834,9 @@ impl std::fmt::Display for ActivatePluginError {
             }
             ActivatePluginError::PluginFailedToGetAudioPortsExt(e) => {
                 write!(f, "plugin returned error while getting audio ports extension: {:?}", e)
+            }
+            ActivatePluginError::PluginFailedToGetNotePortsExt(e) => {
+                write!(f, "plugin returned error while getting note ports extension: {:?}", e)
             }
             ActivatePluginError::PluginFailedToGetParamInfo(index) => {
                 write!(f, "plugin returned error while getting parameter info at index: {}", index)

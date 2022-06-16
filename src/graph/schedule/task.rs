@@ -169,7 +169,7 @@ impl DeactivatedPluginTask {
 
             // Make sure any extra output buffers are cleared.
             for out_buf in self.extra_audio_out.iter() {
-                out_buf.clear(proc_info.frames);
+                out_buf.clear_f32(proc_info.frames);
             }
         }
     }
