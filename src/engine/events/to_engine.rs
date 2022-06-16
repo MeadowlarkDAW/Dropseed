@@ -36,3 +36,9 @@ pub enum DSEngineRequest {
     /// Rescan all plugin directories.
     RescanPluginDirectories,
 }
+
+impl From<ModifyGraphRequest> for DSEngineRequest {
+    fn from(m: ModifyGraphRequest) -> Self {
+        DSEngineRequest::ModifyGraph(m)
+    }
+}

@@ -29,7 +29,7 @@ impl std::fmt::Display for PluginFormat {
                 write!(f, "internal")
             }
             PluginFormat::Clap => {
-                write!(f, "clap")
+                write!(f, "CLAP")
             }
         }
     }
