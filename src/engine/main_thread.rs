@@ -1,4 +1,3 @@
-use audio_graph::DefaultPortType;
 use basedrop::{Collector, Shared};
 use crossbeam::channel::{Receiver, Sender};
 use fnv::FnvHashSet;
@@ -20,7 +19,7 @@ use crate::engine::events::from_engine::{
 use crate::engine::events::to_engine::DSEngineRequest;
 use crate::engine::plugin_scanner::{PluginScanner, ScannedPluginKey};
 use crate::graph::{
-    AudioGraph, AudioGraphSaveState, Edge, NewPluginRes, PluginEdges, PluginInstanceID,
+    AudioGraph, AudioGraphSaveState, Edge, NewPluginRes, PluginEdges, PluginInstanceID, PortType,
 };
 use crate::plugin::host_request::HostInfo;
 use crate::plugin::{PluginFactory, PluginSaveState};
@@ -160,6 +159,7 @@ impl DSEngineMainThread {
         let min_frames = settings.min_frames;
         let max_frames = settings.max_frames;
         let sample_rate = settings.sample_rate;
+        let note_buffer_size = settings.note_buffer_size;
 
         let (mut audio_graph, shared_schedule) = AudioGraph::new(
             self.collector.handle(),
@@ -169,26 +169,31 @@ impl DSEngineMainThread {
             sample_rate,
             min_frames,
             max_frames,
+            note_buffer_size,
             self.thread_ids.clone(),
         );
 
         // TODO: Remove this once compiler is fixed.
         audio_graph
             .connect_edge(&Edge {
-                edge_type: DefaultPortType::Audio,
+                edge_type: PortType::Audio,
                 src_plugin_id: audio_graph.graph_in_node_id().clone(),
                 dst_plugin_id: audio_graph.graph_out_node_id().clone(),
-                src_channel: 0,
-                dst_channel: 0,
+                src_port_stable_id: 0,
+                src_port_channel: 0,
+                dst_port_stable_id: 0,
+                dst_port_channel: 0,
             })
             .unwrap();
         audio_graph
             .connect_edge(&Edge {
-                edge_type: DefaultPortType::Audio,
+                edge_type: PortType::Audio,
                 src_plugin_id: audio_graph.graph_in_node_id().clone(),
                 dst_plugin_id: audio_graph.graph_out_node_id().clone(),
-                src_channel: 1,
-                dst_channel: 1,
+                src_port_stable_id: 0,
+                src_port_channel: 1,
+                dst_port_stable_id: 0,
+                dst_port_channel: 1,
             })
             .unwrap();
 
@@ -340,8 +345,10 @@ impl DSEngineMainThread {
                     edge_type: edge.edge_type,
                     src_plugin_id,
                     dst_plugin_id,
-                    src_channel: edge.src_channel,
-                    dst_channel: edge.dst_channel,
+                    src_port_stable_id: edge.src_port_stable_id,
+                    src_port_channel: edge.src_port_channel,
+                    dst_port_stable_id: edge.dst_port_stable_id,
+                    dst_port_channel: edge.dst_port_channel,
                 };
 
                 if let Err(e) = audio_graph.connect_edge(&new_edge) {
@@ -519,6 +526,7 @@ pub struct ActivateEngineSettings {
     pub max_frames: u32,
     pub num_audio_in_channels: u16,
     pub num_audio_out_channels: u16,
+    pub note_buffer_size: usize,
 }
 
 impl Default for ActivateEngineSettings {
@@ -529,6 +537,7 @@ impl Default for ActivateEngineSettings {
             max_frames: 512,
             num_audio_in_channels: 2,
             num_audio_out_channels: 2,
+            note_buffer_size: 128,
         }
     }
 }
@@ -544,13 +553,16 @@ pub enum PluginIDReq {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EdgeReq {
-    pub edge_type: DefaultPortType,
+    pub edge_type: PortType,
 
     pub src_plugin_id: PluginIDReq,
     pub dst_plugin_id: PluginIDReq,
 
-    pub src_channel: u16,
-    pub dst_channel: u16,
+    pub src_port_stable_id: u32,
+    pub src_port_channel: u16,
+
+    pub dst_port_stable_id: u32,
+    pub dst_port_channel: u16,
 }
 
 #[derive(Debug, Clone)]

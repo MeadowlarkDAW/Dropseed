@@ -35,7 +35,7 @@ pub struct PluginNotePortsExt {
 }
 
 impl PluginNotePortsExt {
-    pub fn empty() -> Self {
+    pub const fn empty() -> Self {
         Self { inputs: Vec::new(), outputs: Vec::new() }
     }
 }

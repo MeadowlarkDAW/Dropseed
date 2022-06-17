@@ -282,7 +282,8 @@ pub(crate) struct PluginInstanceHostEntry {
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct DelayCompKey {
     pub src_node_ref: NodeRef,
-    pub port_i: u16,
+    pub port_stable_id: u32,
+    pub port_channel_index: u16,
     pub delay: u32,
 }
 
@@ -325,7 +326,7 @@ impl SharedPluginPool {
 }
 
 pub(crate) struct SharedBufferPool {
-    pub audio_buffer_size: usize,
+    pub audio_buffer_size: u32,
     pub note_buffer_size: usize,
 
     audio_buffers_f32: Vec<Option<SharedBuffer<f32>>>,
@@ -341,7 +342,7 @@ pub(crate) struct SharedBufferPool {
 
 impl SharedBufferPool {
     pub fn new(
-        audio_buffer_size: usize,
+        audio_buffer_size: u32,
         note_buffer_size: usize,
         coll_handle: basedrop::Handle,
     ) -> Self {
@@ -377,7 +378,7 @@ impl SharedBufferPool {
                 buffer: Shared::new(
                     &self.coll_handle,
                     Buffer::new_f32(
-                        self.audio_buffer_size,
+                        self.audio_buffer_size as usize,
                         DebugBufferID {
                             buffer_type: DebugBufferType::Audio32,
                             index: index as u32,
@@ -439,7 +440,7 @@ impl SharedBufferPool {
                 buffer: Shared::new(
                     &self.coll_handle,
                     Buffer::new_f32(
-                        self.audio_buffer_size,
+                        self.audio_buffer_size as usize,
                         DebugBufferID {
                             buffer_type: DebugBufferType::IntermediaryAudio32,
                             index: index as u32,

@@ -426,7 +426,14 @@ impl PluginScanner {
         }
 
         CreatePluginResult {
-            plugin_host: PluginInstanceHost::new(id, Some(save_state), main_thread, host_request),
+            plugin_host: PluginInstanceHost::new(
+                id,
+                Some(save_state),
+                main_thread,
+                host_request,
+                0,
+                0,
+            ),
             status,
         }
     }

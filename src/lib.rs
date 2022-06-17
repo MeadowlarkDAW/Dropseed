@@ -22,7 +22,7 @@ pub use engine::plugin_scanner::{ScannedPlugin, ScannedPluginKey};
 pub use graph::shared_pool::PluginInstanceID;
 pub use graph::{
     AudioGraphSaveState, Edge, ParamGestureInfo, ParamModifiedInfo, PluginActivationStatus,
-    PluginEdges, PluginHandle, PluginParamsExt,
+    PluginEdges, PluginHandle, PluginParamsExt, PortType,
 };
 pub use plugin::audio_buffer::{AudioPortBuffer, AudioPortBufferMut};
 pub use plugin::events::event_queue::{EventQueue, ProcEvent, ProcEventRef};
@@ -31,5 +31,3 @@ pub use plugin::ext::params::{ParamID, ParamInfo, ParamInfoFlags};
 pub use plugin::host_request::{HostInfo, HostRequest};
 pub use plugin::process_info::{ProcBuffers, ProcInfo, ProcessStatus};
 pub use utils::fixed_point::FixedPoint64;
-
-pub use audio_graph::DefaultPortType as PortType;

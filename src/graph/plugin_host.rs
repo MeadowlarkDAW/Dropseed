@@ -155,6 +155,9 @@ pub(crate) struct PluginInstanceHost {
     pub audio_ports: Option<PluginAudioPortsExt>,
     pub note_ports: Option<PluginNotePortsExt>,
 
+    pub num_audio_in_channels: usize,
+    pub num_audio_out_channels: usize,
+
     main_thread: Option<Box<dyn PluginMainThread>>,
 
     state: Arc<SharedPluginState>,
@@ -174,6 +177,8 @@ impl PluginInstanceHost {
         save_state: Option<PluginSaveState>,
         main_thread: Option<Box<dyn PluginMainThread>>,
         host_request: HostRequest,
+        num_audio_in_channels: usize,
+        num_audio_out_channels: usize,
     ) -> Self {
         let state = Arc::new(SharedPluginState::new());
 
@@ -186,6 +191,8 @@ impl PluginInstanceHost {
             main_thread,
             audio_ports: None,
             note_ports: None,
+            num_audio_in_channels,
+            num_audio_out_channels,
             state: Arc::new(SharedPluginState::new()),
             save_state,
             param_queues: None,
@@ -231,7 +238,12 @@ impl PluginInstanceHost {
         }
 
         let audio_ports = match plugin_main_thread.audio_ports_ext() {
-            Ok(audio_ports) => audio_ports,
+            Ok(audio_ports) => {
+                self.num_audio_in_channels = audio_ports.total_in_channels();
+                self.num_audio_out_channels = audio_ports.total_out_channels();
+
+                audio_ports
+            }
             Err(e) => {
                 self.state.set(PluginState::InactiveWithError);
                 self.audio_ports = None;

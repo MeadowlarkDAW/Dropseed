@@ -494,7 +494,7 @@ impl ClapPluginMainThread {
 
             AudioPortInfo {
                 stable_id: raw_info.id,
-                channels: raw_info.channel_count as usize,
+                channels: raw_info.channel_count as u16,
                 port_type,
                 display_name,
             }
@@ -532,7 +532,7 @@ impl ClapPluginMainThread {
 
             AudioPortInfo {
                 stable_id: raw_info.id,
-                channels: raw_info.channel_count as usize,
+                channels: raw_info.channel_count as u16,
                 port_type,
                 display_name,
             }

@@ -63,11 +63,11 @@ impl audio_graph::PortType for PortType {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct PortChannelID {
-    pub port_type: PortType,
-    pub port_stable_id: u32,
-    pub is_input: bool,
-    pub port_channel: u16,
+pub struct PortChannelID {
+    pub(crate) port_type: PortType,
+    pub(crate) port_stable_id: u32,
+    pub(crate) is_input: bool,
+    pub(crate) port_channel: u16,
 }
 
 pub(crate) struct AudioGraph {
@@ -115,7 +115,7 @@ impl AudioGraph {
 
         let shared_plugin_pool = SharedPluginPool::new();
         let shared_buffer_pool =
-            SharedBufferPool::new(max_frames as usize, note_buffer_size, coll_handle.clone());
+            SharedBufferPool::new(max_frames, note_buffer_size, coll_handle.clone());
 
         let (shared_schedule, shared_schedule_clone) =
             SharedSchedule::new(Schedule::empty(max_frames as usize), thread_ids, &coll_handle);
@@ -608,20 +608,41 @@ impl AudioGraph {
             .set_node_ident(graph_out_node_id.node_ref, graph_out_node_id.clone())
             .unwrap();
 
-        let graph_in_out_channel_refs: Vec<audio_graph::PortRef> = (0..self.graph_in_channels)
-            .map(|i| {
-                self.abstract_graph
-                    .port(graph_in_node_id.node_ref, DefaultPortType::Audio, PortID::AudioOut(i))
-                    .unwrap()
-            })
-            .collect();
-        let graph_out_in_channel_refs: Vec<audio_graph::PortRef> = (0..self.graph_out_channels)
-            .map(|i| {
-                self.abstract_graph
-                    .port(graph_out_node_id.node_ref, DefaultPortType::Audio, PortID::AudioIn(i))
-                    .unwrap()
-            })
-            .collect();
+        let mut graph_in_port_refs: FnvHashMap<PortChannelID, audio_graph::PortRef> =
+            FnvHashMap::default();
+        let mut graph_out_port_refs: FnvHashMap<PortChannelID, audio_graph::PortRef> =
+            FnvHashMap::default();
+
+        for i in 0..self.graph_in_channels {
+            let port_id = PortChannelID {
+                port_type: PortType::Audio,
+                port_stable_id: 0,
+                is_input: false,
+                port_channel: i,
+            };
+
+            let port_ref = self
+                .abstract_graph
+                .port(graph_in_node_id.node_ref, PortType::Audio, port_id)
+                .unwrap();
+
+            let _ = graph_in_port_refs.insert(port_id, port_ref);
+        }
+        for i in 0..self.graph_out_channels {
+            let port_id = PortChannelID {
+                port_type: PortType::Audio,
+                port_stable_id: 0,
+                is_input: true,
+                port_channel: i,
+            };
+
+            let port_ref = self
+                .abstract_graph
+                .port(graph_out_node_id.node_ref, PortType::Audio, port_id)
+                .unwrap();
+
+            let _ = graph_out_port_refs.insert(port_id, port_ref);
+        }
 
         let _ = self.shared_plugin_pool.plugins.insert(
             graph_in_node_id.clone(),
@@ -631,10 +652,11 @@ impl AudioGraph {
                     None,
                     None,
                     HostRequest::new(Shared::clone(&self.host_info)),
+                    0,
+                    self.graph_out_channels as usize,
                 ),
                 audio_thread: None,
-                audio_in_channel_refs: Vec::new(),
-                audio_out_channel_refs: graph_in_out_channel_refs,
+                port_channels_refs: graph_in_port_refs,
             },
         );
         let _ = self.shared_plugin_pool.plugins.insert(
@@ -645,10 +667,11 @@ impl AudioGraph {
                     None,
                     None,
                     HostRequest::new(Shared::clone(&self.host_info)),
+                    self.graph_in_channels as usize,
+                    0,
                 ),
                 audio_thread: None,
-                audio_in_channel_refs: graph_out_in_channel_refs,
-                audio_out_channel_refs: Vec::new(),
+                port_channels_refs: graph_out_port_refs,
             },
         );
 
@@ -709,8 +732,10 @@ impl AudioGraph {
                 edge_type: edge_save_state.edge_type,
                 src_plugin_id,
                 dst_plugin_id,
-                src_channel: edge_save_state.src_channel,
-                dst_channel: edge_save_state.dst_channel,
+                src_port_stable_id: edge_save_state.src_port_stable_id,
+                src_port_channel: edge_save_state.src_port_channel,
+                dst_port_stable_id: edge_save_state.dst_port_stable_id,
+                dst_port_channel: edge_save_state.dst_port_channel,
             };
 
             if let Err(e) = self.connect_edge(&edge) {
