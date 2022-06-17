@@ -602,8 +602,6 @@ impl PluginInstanceHostAudioThread {
         note_in_buffers: &[Option<SmallVec<[SharedBuffer<ProcEvent>; 2]>>],
         note_out_buffers: &[Option<SharedBuffer<ProcEvent>>],
     ) {
-        // TODO: Flush parameters while plugin is sleeping.
-
         let clear_outputs = |proc_info: &ProcInfo, buffers: &mut ProcBuffers| {
             // Safe because this `proc_info.frames` will always be less than or
             // equal to the length of all audio buffers.
