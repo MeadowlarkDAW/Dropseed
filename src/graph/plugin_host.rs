@@ -835,6 +835,8 @@ impl PluginInstanceHostAudioThread {
         self.in_events.clear();
 
         if let Some(params_queue) = &mut self.param_queues {
+            // TODO: Change this to not take a closure so we don't
+            // have to duplicate this code.
             params_queue.audio_to_main_param_value_tx.produce(|mut queue| {
                 while let Some(mut out_event) = self.out_events.pop() {
                     let mut push_to_event_out = false;
