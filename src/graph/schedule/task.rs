@@ -39,6 +39,57 @@ impl std::fmt::Debug for Task {
                     f.field("audio_out", &s);
                 }
 
+                if let Some(event_in_buffers) = &t.event_in_buffers {
+                    let mut s = String::new();
+                    for b in event_in_buffers.iter() {
+                        s.push_str(&format!("{:?}, ", b.id()))
+                    }
+
+                    f.field("event_in", &s);
+                }
+
+                if let Some(event_out_buffer) = &t.event_out_buffer {
+                    f.field("event_out", &format!("{:?}", event_out_buffer.id()));
+                }
+
+                if !t.note_in_buffers.is_empty() {
+                    let mut has_buffer = false;
+                    let mut s = String::new();
+                    for buffers in t.note_in_buffers.iter() {
+                        if let Some(buffers) = buffers {
+                            has_buffer = true;
+
+                            s.push_str("[");
+
+                            for b in buffers.iter() {
+                                s.push_str(&format!("{:?}, ", b.id()))
+                            }
+
+                            s.push_str("], ");
+                        }
+                    }
+
+                    if has_buffer {
+                        f.field("note_in", &s);
+                    }
+                }
+
+                if !t.note_out_buffers.is_empty() {
+                    let mut has_buffer = false;
+                    let mut s = String::new();
+                    for buffer in t.note_out_buffers.iter() {
+                        if let Some(b) = buffer {
+                            has_buffer = true;
+
+                            s.push_str(&format!("{:?}, ", b.id()));
+                        }
+                    }
+
+                    if has_buffer {
+                        f.field("note_out", &s);
+                    }
+                }
+
                 f.finish()
             }
             Task::DelayComp(t) => {
@@ -77,6 +128,26 @@ impl std::fmt::Debug for Task {
                     s.push_str(&format!("{:?}, ", b.id()))
                 }
                 f.field("extra_audio_out", &s);
+
+                if let Some(event_out_buffer) = &t.event_out_buffer {
+                    f.field("event_out", &format!("{:?}", event_out_buffer.id()));
+                }
+
+                if !t.note_out_buffers.is_empty() {
+                    let mut has_buffer = false;
+                    let mut s = String::new();
+                    for buffer in t.note_out_buffers.iter() {
+                        if let Some(b) = buffer {
+                            has_buffer = true;
+
+                            s.push_str(&format!("{:?}, ", b.id()));
+                        }
+                    }
+
+                    if has_buffer {
+                        f.field("note_out", &s);
+                    }
+                }
 
                 f.finish()
             }
