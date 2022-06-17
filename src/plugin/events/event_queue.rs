@@ -60,6 +60,18 @@ pub enum ProcEventRef<'a> {
     Midi2(&'a EventMidi2),
 }
 
+pub enum ProcEventRefMut<'a> {
+    Note(&'a mut EventNote),
+    NoteExpression(&'a mut EventNoteExpression),
+    ParamValue(&'a mut EventParamValue),
+    ParamMod(&'a mut EventParamMod),
+    ParamGesture(&'a mut EventParamGesture),
+    Transport(&'a mut EventTransport),
+    Midi(&'a mut EventMidi),
+    MidiSysex(&'a mut EventMidiSysex),
+    Midi2(&'a mut EventMidi2),
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub union ProcEvent {
@@ -125,6 +137,46 @@ impl ProcEvent {
                 Ok(ProcEventRef::MidiSysex(unsafe { &self.midi_sysex }))
             }
             clap_sys::events::CLAP_EVENT_MIDI2 => Ok(ProcEventRef::Midi2(unsafe { &self.midi2 })),
+            _ => Err(()),
+        }
+    }
+
+    pub fn get_mut<'a>(&'a mut self) -> Result<ProcEventRefMut<'a>, ()> {
+        // The event header is always the first bytes in every event.
+        let header = unsafe { self.note.0.header };
+
+        match header.type_ {
+            clap_sys::events::CLAP_EVENT_NOTE_ON
+            | clap_sys::events::CLAP_EVENT_NOTE_OFF
+            | clap_sys::events::CLAP_EVENT_NOTE_CHOKE
+            | clap_sys::events::CLAP_EVENT_NOTE_END => {
+                Ok(ProcEventRefMut::Note(unsafe { &mut self.note }))
+            }
+            clap_sys::events::CLAP_EVENT_NOTE_EXPRESSION => {
+                Ok(ProcEventRefMut::NoteExpression(unsafe { &mut self.note_expression }))
+            }
+            clap_sys::events::CLAP_EVENT_PARAM_VALUE => {
+                Ok(ProcEventRefMut::ParamValue(unsafe { &mut self.param_value }))
+            }
+            clap_sys::events::CLAP_EVENT_PARAM_MOD => {
+                Ok(ProcEventRefMut::ParamMod(unsafe { &mut self.param_mod }))
+            }
+            clap_sys::events::CLAP_EVENT_PARAM_GESTURE_BEGIN
+            | clap_sys::events::CLAP_EVENT_PARAM_GESTURE_END => {
+                Ok(ProcEventRefMut::ParamGesture(unsafe { &mut self.param_gesture }))
+            }
+            clap_sys::events::CLAP_EVENT_TRANSPORT => {
+                Ok(ProcEventRefMut::Transport(unsafe { &mut self.transport }))
+            }
+            clap_sys::events::CLAP_EVENT_MIDI => {
+                Ok(ProcEventRefMut::Midi(unsafe { &mut self.midi }))
+            }
+            clap_sys::events::CLAP_EVENT_MIDI_SYSEX => {
+                Ok(ProcEventRefMut::MidiSysex(unsafe { &mut self.midi_sysex }))
+            }
+            clap_sys::events::CLAP_EVENT_MIDI2 => {
+                Ok(ProcEventRefMut::Midi2(unsafe { &mut self.midi2 }))
+            }
             _ => Err(()),
         }
     }

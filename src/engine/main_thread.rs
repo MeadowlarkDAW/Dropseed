@@ -160,6 +160,7 @@ impl DSEngineMainThread {
         let max_frames = settings.max_frames;
         let sample_rate = settings.sample_rate;
         let note_buffer_size = settings.note_buffer_size;
+        let event_buffer_size = settings.event_buffer_size;
 
         let (mut audio_graph, shared_schedule) = AudioGraph::new(
             self.collector.handle(),
@@ -170,6 +171,7 @@ impl DSEngineMainThread {
             min_frames,
             max_frames,
             note_buffer_size,
+            event_buffer_size,
             self.thread_ids.clone(),
         );
 
@@ -272,36 +274,8 @@ impl DSEngineMainThread {
             let new_plugins_res: Vec<NewPluginRes> = req
                 .add_plugin_instances
                 .drain(..)
-                .map(|(key, preset)| {
-                    if let Some(preset) = preset {
-                        let save_state = PluginSaveState {
-                            key: key.clone(),
-                            _preset: preset.clone(),
-                            activation_requested: true,
-                            audio_in_out_channels: (0, 0),
-                        };
-
-                        audio_graph.add_new_plugin_instance(
-                            save_state,
-                            &mut self.plugin_scanner,
-                            true,
-                            true,
-                        )
-                    } else {
-                        let save_state = PluginSaveState {
-                            key: key.clone(),
-                            _preset: (), // TODO: Get default preset.
-                            activation_requested: true,
-                            audio_in_out_channels: (0, 0),
-                        };
-
-                        audio_graph.add_new_plugin_instance(
-                            save_state,
-                            &mut self.plugin_scanner,
-                            true,
-                            true,
-                        )
-                    }
+                .map(|save_state| {
+                    audio_graph.add_new_plugin_instance(save_state, &mut self.plugin_scanner, true)
                 })
                 .collect();
 
@@ -527,6 +501,7 @@ pub struct ActivateEngineSettings {
     pub num_audio_in_channels: u16,
     pub num_audio_out_channels: u16,
     pub note_buffer_size: usize,
+    pub event_buffer_size: usize,
 }
 
 impl Default for ActivateEngineSettings {
@@ -537,7 +512,8 @@ impl Default for ActivateEngineSettings {
             max_frames: 512,
             num_audio_in_channels: 2,
             num_audio_out_channels: 2,
-            note_buffer_size: 128,
+            note_buffer_size: 256,
+            event_buffer_size: 256,
         }
     }
 }
@@ -568,9 +544,7 @@ pub struct EdgeReq {
 #[derive(Debug, Clone)]
 pub struct ModifyGraphRequest {
     /// Any new plugin instances to add.
-    ///
-    /// `(plugin key, plugin preset (None for default preset))`
-    pub add_plugin_instances: Vec<(ScannedPluginKey, Option<()>)>,
+    pub add_plugin_instances: Vec<PluginSaveState>,
 
     /// Any plugins to remove.
     pub remove_plugin_instances: Vec<PluginInstanceID>,

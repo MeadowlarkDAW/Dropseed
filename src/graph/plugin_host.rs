@@ -9,7 +9,9 @@ use std::sync::{
 };
 
 use super::shared_pool::PluginInstanceID;
-use crate::plugin::events::event_queue::{EventQueue, ProcEventRef};
+use crate::engine::plugin_scanner::PluginFormat;
+use crate::graph::shared_pool::SharedBuffer;
+use crate::plugin::events::event_queue::{EventQueue, ProcEventRefMut};
 use crate::plugin::events::{EventFlags, EventParamMod, EventParamValue};
 use crate::plugin::ext::audio_ports::PluginAudioPortsExt;
 use crate::plugin::ext::note_ports::PluginNotePortsExt;
@@ -20,7 +22,7 @@ use crate::plugin::{PluginAudioThread, PluginMainThread, PluginSaveState};
 use crate::utils::reducing_queue::{
     ReducFnvConsumer, ReducFnvProducer, ReducFnvValue, ReducingFnvQueue,
 };
-use crate::{HostRequest, ParamID, ProcInfo, ProcessStatus};
+use crate::{HostRequest, ParamID, ProcEvent, ProcInfo, ProcessStatus, ScannedPluginKey};
 
 #[derive(Clone, Copy)]
 struct MainToAudioParamValue {
@@ -162,7 +164,7 @@ pub(crate) struct PluginInstanceHost {
 
     state: Arc<SharedPluginState>,
 
-    save_state: Option<PluginSaveState>,
+    save_state: PluginSaveState,
 
     param_queues: Option<ParamQueuesMainThread>,
     gesturing_params: FnvHashMap<ParamID, bool>,
@@ -174,17 +176,22 @@ pub(crate) struct PluginInstanceHost {
 impl PluginInstanceHost {
     pub fn new(
         id: PluginInstanceID,
-        save_state: Option<PluginSaveState>,
+        save_state: PluginSaveState,
         main_thread: Option<Box<dyn PluginMainThread>>,
         host_request: HostRequest,
-        num_audio_in_channels: usize,
-        num_audio_out_channels: usize,
     ) -> Self {
         let state = Arc::new(SharedPluginState::new());
 
         if main_thread.is_none() {
             state.set(PluginState::InactiveWithError);
         }
+
+        let (num_audio_in_channels, num_audio_out_channels) =
+            if let Some(backup_audio_ports) = &save_state.backup_audio_ports {
+                (backup_audio_ports.total_in_channels(), backup_audio_ports.total_out_channels())
+            } else {
+                (0, 0)
+            };
 
         Self {
             id,
@@ -202,8 +209,84 @@ impl PluginInstanceHost {
         }
     }
 
-    pub fn collect_save_state(&mut self) -> Option<PluginSaveState> {
-        self.save_state.as_ref().map(|s| s.clone())
+    pub fn new_graph_in(
+        id: PluginInstanceID,
+        host_request: HostRequest,
+        num_audio_out_channels: usize,
+    ) -> Self {
+        let state = Arc::new(SharedPluginState::new());
+
+        state.set(PluginState::Inactive);
+
+        // We don't actually use this save state. This is just here to be
+        // consistent with the rest of the plugins.
+        let save_state = PluginSaveState {
+            key: ScannedPluginKey {
+                rdn: "app.meadowlark.dropseed-graph-in".into(),
+                format: PluginFormat::Internal,
+            },
+            activation_requested: false,
+            backup_audio_ports: None,
+            backup_note_ports: None,
+            _preset: (),
+        };
+
+        Self {
+            id,
+            main_thread: None,
+            audio_ports: None,
+            note_ports: None,
+            num_audio_in_channels: 0,
+            num_audio_out_channels,
+            state: Arc::new(SharedPluginState::new()),
+            save_state,
+            param_queues: None,
+            gesturing_params: FnvHashMap::default(),
+            host_request,
+            remove_requested: false,
+        }
+    }
+
+    pub fn new_graph_out(
+        id: PluginInstanceID,
+        host_request: HostRequest,
+        num_audio_in_channels: usize,
+    ) -> Self {
+        let state = Arc::new(SharedPluginState::new());
+
+        state.set(PluginState::Inactive);
+
+        // We don't actually use this save state. This is just here to be
+        // consistent with the rest of the plugins.
+        let save_state = PluginSaveState {
+            key: ScannedPluginKey {
+                rdn: "app.meadowlark.dropseed-graph-out".into(),
+                format: PluginFormat::Internal,
+            },
+            activation_requested: false,
+            backup_audio_ports: None,
+            backup_note_ports: None,
+            _preset: (),
+        };
+
+        Self {
+            id,
+            main_thread: None,
+            audio_ports: None,
+            note_ports: None,
+            num_audio_in_channels,
+            num_audio_out_channels: 0,
+            state: Arc::new(SharedPluginState::new()),
+            save_state,
+            param_queues: None,
+            gesturing_params: FnvHashMap::default(),
+            host_request,
+            remove_requested: false,
+        }
+    }
+
+    pub fn collect_save_state(&mut self) -> PluginSaveState {
+        self.save_state.clone()
     }
 
     pub fn can_activate(&self) -> Result<(), ActivatePluginError> {
@@ -233,14 +316,14 @@ impl PluginInstanceHost {
 
         let plugin_main_thread = self.main_thread.as_mut().unwrap();
 
-        if let Some(save_state) = &mut self.save_state {
-            save_state.activation_requested = true;
-        }
+        self.save_state.activation_requested = true;
 
         let audio_ports = match plugin_main_thread.audio_ports_ext() {
             Ok(audio_ports) => {
                 self.num_audio_in_channels = audio_ports.total_in_channels();
                 self.num_audio_out_channels = audio_ports.total_out_channels();
+
+                self.save_state.backup_audio_ports = Some(audio_ports.clone());
 
                 audio_ports
             }
@@ -253,7 +336,11 @@ impl PluginInstanceHost {
         };
 
         let note_ports = match plugin_main_thread.note_ports_ext() {
-            Ok(note_ports) => note_ports,
+            Ok(note_ports) => {
+                self.save_state.backup_note_ports = Some(note_ports.clone());
+
+                note_ports
+            }
             Err(e) => {
                 self.state.set(PluginState::InactiveWithError);
                 self.note_ports = None;
@@ -264,11 +351,6 @@ impl PluginInstanceHost {
 
         self.audio_ports = Some(audio_ports.clone());
         self.note_ports = Some(note_ports.clone());
-
-        if let Some(save_state) = &mut self.save_state {
-            save_state.audio_in_out_channels =
-                (audio_ports.total_in_channels() as u16, audio_ports.total_out_channels() as u16);
-        }
 
         let num_params = plugin_main_thread.num_params() as usize;
         let mut params: FnvHashMap<ParamID, ParamInfo> = FnvHashMap::default();
@@ -364,9 +446,7 @@ impl PluginInstanceHost {
     }
 
     pub fn schedule_deactivate(&mut self) {
-        if let Some(save_state) = &mut self.save_state {
-            save_state.activation_requested = false;
-        }
+        self.save_state.activation_requested = false;
 
         if !self.state.get().is_active() {
             return;
@@ -381,6 +461,22 @@ impl PluginInstanceHost {
         self.remove_requested = true;
 
         self.schedule_deactivate();
+    }
+
+    pub fn audio_ports_ext(&self) -> Option<&PluginAudioPortsExt> {
+        if self.audio_ports.is_some() {
+            self.audio_ports.as_ref()
+        } else {
+            self.save_state.backup_audio_ports.as_ref()
+        }
+    }
+
+    pub fn note_ports_ext(&self) -> Option<&PluginNotePortsExt> {
+        if self.note_ports.is_some() {
+            self.note_ports.as_ref()
+        } else {
+            self.save_state.backup_note_ports.as_ref()
+        }
     }
 
     pub fn on_idle(
@@ -497,7 +593,15 @@ pub(crate) struct PluginInstanceHostAudioThread {
 }
 
 impl PluginInstanceHostAudioThread {
-    pub fn process<'a>(&mut self, proc_info: &ProcInfo, buffers: &mut ProcBuffers) {
+    pub fn process<'a>(
+        &mut self,
+        proc_info: &ProcInfo,
+        buffers: &mut ProcBuffers,
+        event_in_buffers: &Option<SmallVec<[SharedBuffer<ProcEvent>; 2]>>,
+        event_out_buffer: &Option<SharedBuffer<ProcEvent>>,
+        note_in_buffers: &[Option<SmallVec<[SharedBuffer<ProcEvent>; 2]>>],
+        note_out_buffers: &[Option<SharedBuffer<ProcEvent>>],
+    ) {
         // TODO: Flush parameters while plugin is sleeping.
 
         let clear_outputs = |proc_info: &ProcInfo, buffers: &mut ProcBuffers| {
@@ -510,6 +614,18 @@ impl PluginInstanceHostAudioThread {
                 b.sync_constant_mask_to_buffers();
             }
         };
+
+        // Always clear event and note output buffers.
+        if let Some(out_buf) = event_out_buffer {
+            let mut b = unsafe { out_buf.borrow_mut() };
+            b.clear();
+        }
+        for out_buf in note_out_buffers.iter() {
+            if let Some(out_buf) = out_buf {
+                let mut b = unsafe { out_buf.borrow_mut() };
+                b.clear();
+            }
+        }
 
         let mut state = self.state.get();
 
@@ -543,8 +659,13 @@ impl PluginInstanceHostAudioThread {
 
         self.out_events.clear();
 
+        let mut has_param_in_event = false;
+        let mut has_note_in_event = false;
+
         if let Some(params_queue) = &mut self.param_queues {
             params_queue.ui_to_audio_param_value_rx.consume(|param_id, value| {
+                has_param_in_event = true;
+
                 self.in_events.push(
                     EventParamValue::new(
                         // TODO: Finer values for `time` instead of just setting it to the first frame?
@@ -567,6 +688,8 @@ impl PluginInstanceHostAudioThread {
             });
 
             params_queue.ui_to_audio_param_mod_rx.consume(|param_id, value| {
+                has_param_in_event = true;
+
                 self.in_events.push(
                     EventParamMod::new(
                         // TODO: Finer values for `time` instead of just setting it to the first frame?
@@ -589,7 +712,63 @@ impl PluginInstanceHostAudioThread {
             });
         }
 
-        if state == PluginState::ActiveAndWaitingForQuiet {
+        for (port_i, in_buffers) in note_in_buffers.iter().enumerate() {
+            if let Some(in_buffers) = in_buffers {
+                for in_buf in in_buffers.iter() {
+                    let mut b = unsafe { in_buf.borrow_mut() };
+
+                    for mut event in b.drain(..) {
+                        let mut do_add = true;
+                        if let Ok(event) = ProcEvent::get_mut(&mut event) {
+                            // TODO: Convert to a different note dialect if the plugin does not support
+                            // the dialect in the event.
+                            match event {
+                                ProcEventRefMut::Note(e) => e.set_port_index(port_i as i16),
+                                ProcEventRefMut::NoteExpression(e) => {
+                                    e.set_port_index(port_i as i16)
+                                }
+                                ProcEventRefMut::Midi(e) => e.set_port_index(port_i as u16),
+                                ProcEventRefMut::MidiSysex(e) => e.set_port_index(port_i as u16),
+                                ProcEventRefMut::Midi2(e) => e.set_port_index(port_i as u16),
+                                _ => do_add = false,
+                            }
+                        }
+
+                        if do_add {
+                            has_note_in_event = true;
+                            self.in_events.push(event);
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(event_in_buffers) = event_in_buffers {
+            for in_buf in event_in_buffers.iter() {
+                let mut b = unsafe { in_buf.borrow_mut() };
+
+                for mut event in b.drain(..) {
+                    let do_add = if let Ok(event) = ProcEvent::get_mut(&mut event) {
+                        match event {
+                            ProcEventRefMut::ParamMod(_) => {
+                                has_param_in_event = true;
+                                true
+                            }
+                            ProcEventRefMut::Transport(_) => true,
+                            _ => false,
+                        }
+                    } else {
+                        false
+                    };
+
+                    if do_add {
+                        self.in_events.push(event);
+                    }
+                }
+            }
+        }
+
+        if state == PluginState::ActiveAndWaitingForQuiet && !has_note_in_event {
             // Sync constant masks for more efficient silence checking.
             for buf in buffers.audio_in.iter_mut() {
                 buf.sync_constant_mask_from_buffers();
@@ -600,18 +779,26 @@ impl PluginInstanceHostAudioThread {
 
                 self.state.set(PluginState::ActiveAndSleeping);
                 clear_outputs(proc_info, buffers);
+
+                if has_param_in_event {
+                    self.plugin.param_flush(&self.in_events, &mut self.out_events);
+                }
+
                 self.in_events.clear();
                 return;
             }
         }
 
         if state.is_sleeping() {
-            let has_in_events = true; // TODO: Check if there are any input events.
-
-            if !request_flags.contains(RequestFlags::PROCESS) && !has_in_events {
+            if !request_flags.contains(RequestFlags::PROCESS) && !has_note_in_event {
                 // The plugin is sleeping, there is no request to wake it up, and there
                 // are no events to process.
                 clear_outputs(proc_info, buffers);
+
+                if has_param_in_event {
+                    self.plugin.param_flush(&self.in_events, &mut self.out_events);
+                }
+
                 self.in_events.clear();
                 return;
             }
@@ -622,6 +809,11 @@ impl PluginInstanceHostAudioThread {
                 // The plugin failed to start processing.
                 self.state.set(PluginState::ActiveWithError);
                 clear_outputs(proc_info, buffers);
+
+                if has_param_in_event {
+                    self.plugin.param_flush(&self.in_events, &mut self.out_events);
+                }
+
                 self.in_events.clear();
                 return;
             }
@@ -646,9 +838,11 @@ impl PluginInstanceHostAudioThread {
 
         if let Some(params_queue) = &mut self.param_queues {
             params_queue.audio_to_main_param_value_tx.produce(|mut queue| {
-                while let Some(out_event) = self.out_events.pop() {
-                    match out_event.get() {
-                        Ok(ProcEventRef::ParamGesture(event)) => {
+                while let Some(mut out_event) = self.out_events.pop() {
+                    let mut push_to_event_out = false;
+                    let mut push_to_note_out_i = None;
+                    match ProcEvent::get_mut(&mut out_event) {
+                        Ok(ProcEventRefMut::ParamGesture(event)) => {
                             // TODO: Use event.time for more accurate recording of automation.
 
                             let is_adjusting =
@@ -688,7 +882,7 @@ impl PluginInstanceHostAudioThread {
                                 queue.set_or_update(event.param_id(), value);
                             }
                         }
-                        Ok(ProcEventRef::ParamValue(event)) => {
+                        Ok(ProcEventRefMut::ParamValue(event)) => {
                             // TODO: Use event.time for more accurate recording of automation.
 
                             let value = AudioToMainParamValue {
@@ -698,13 +892,116 @@ impl PluginInstanceHostAudioThread {
 
                             queue.set_or_update(event.param_id(), value);
                         }
-                        // TODO: Handle more output event types
+                        Ok(ProcEventRefMut::ParamMod(_)) => {
+                            if event_out_buffer.is_some() {
+                                push_to_event_out = true;
+                            }
+                        }
+                        Ok(ProcEventRefMut::Transport(_)) => {
+                            if event_out_buffer.is_some() {
+                                push_to_event_out = true;
+                            }
+                        }
+                        Ok(ProcEventRefMut::Note(event)) => {
+                            if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
+                                push_to_note_out_i = Some(event.port_index() as usize);
+                            }
+                        }
+                        Ok(ProcEventRefMut::NoteExpression(event)) => {
+                            if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
+                                push_to_note_out_i = Some(event.port_index() as usize);
+                            }
+                        }
+                        Ok(ProcEventRefMut::Midi(event)) => {
+                            if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
+                                push_to_note_out_i = Some(event.port_index() as usize);
+                            }
+                        }
+                        Ok(ProcEventRefMut::MidiSysex(event)) => {
+                            if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
+                                push_to_note_out_i = Some(event.port_index() as usize);
+                            }
+                        }
+                        Ok(ProcEventRefMut::Midi2(event)) => {
+                            if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
+                                push_to_note_out_i = Some(event.port_index() as usize);
+                            }
+                        }
                         _ => {}
+                    }
+
+                    if push_to_event_out {
+                        let out_buf = event_out_buffer.as_ref().unwrap();
+
+                        let mut b = unsafe { out_buf.borrow_mut() };
+
+                        b.push(out_event);
+                    } else if let Some(buf_i) = push_to_note_out_i {
+                        let out_buf = note_out_buffers[buf_i].as_ref().unwrap();
+
+                        let mut b = unsafe { out_buf.borrow_mut() };
+
+                        b.push(out_event);
                     }
                 }
             });
         } else {
-            self.out_events.clear();
+            while let Some(mut out_event) = self.out_events.pop() {
+                let mut push_to_event_out = false;
+                let mut push_to_note_out_i = None;
+                match ProcEvent::get_mut(&mut out_event) {
+                    Ok(ProcEventRefMut::ParamMod(_)) => {
+                        if event_out_buffer.is_some() {
+                            push_to_event_out = true;
+                        }
+                    }
+                    Ok(ProcEventRefMut::Transport(_)) => {
+                        if event_out_buffer.is_some() {
+                            push_to_event_out = true;
+                        }
+                    }
+                    Ok(ProcEventRefMut::Note(event)) => {
+                        if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
+                            push_to_note_out_i = Some(event.port_index() as usize);
+                        }
+                    }
+                    Ok(ProcEventRefMut::NoteExpression(event)) => {
+                        if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
+                            push_to_note_out_i = Some(event.port_index() as usize);
+                        }
+                    }
+                    Ok(ProcEventRefMut::Midi(event)) => {
+                        if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
+                            push_to_note_out_i = Some(event.port_index() as usize);
+                        }
+                    }
+                    Ok(ProcEventRefMut::MidiSysex(event)) => {
+                        if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
+                            push_to_note_out_i = Some(event.port_index() as usize);
+                        }
+                    }
+                    Ok(ProcEventRefMut::Midi2(event)) => {
+                        if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
+                            push_to_note_out_i = Some(event.port_index() as usize);
+                        }
+                    }
+                    _ => {}
+                }
+
+                if push_to_event_out {
+                    let out_buf = event_out_buffer.as_ref().unwrap();
+
+                    let mut b = unsafe { out_buf.borrow_mut() };
+
+                    b.push(out_event);
+                } else if let Some(buf_i) = push_to_note_out_i {
+                    let out_buf = note_out_buffers[buf_i].as_ref().unwrap();
+
+                    let mut b = unsafe { out_buf.borrow_mut() };
+
+                    b.push(out_event);
+                }
+            }
         }
 
         match status {

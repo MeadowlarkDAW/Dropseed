@@ -5,7 +5,7 @@ use std::error::Error;
 use crate::graph::shared_pool::{DelayCompKey, SharedDelayCompNode};
 use crate::plugin::ext::audio_ports::MainPortsLayout;
 use crate::plugin::process_info::ProcBuffers;
-use crate::{AudioPortBuffer, AudioPortBufferMut};
+use crate::{AudioPortBuffer, AudioPortBufferMut, ProcEvent};
 
 use super::{
     schedule::sum::SumTask,
@@ -33,6 +33,8 @@ pub(crate) fn compile_graph(
 
     let mut total_intermediary_buffers = 0;
     let mut max_graph_audio_buffer_index = 0;
+    let mut max_graph_note_buffer_index = 0;
+    let mut max_graph_event_buffer_index = 0;
 
     for node in shared_plugin_pool.delay_comp_nodes.values_mut() {
         node.active = false;
@@ -51,8 +53,8 @@ pub(crate) fn compile_graph(
                 entry.plugin_host.num_audio_in_channels,
                 entry.plugin_host.num_audio_out_channels,
                 entry.audio_thread.as_ref(),
-                entry.plugin_host.audio_ports.as_ref(),
-                entry.plugin_host.note_ports.as_ref(),
+                entry.plugin_host.audio_ports_ext(),
+                entry.plugin_host.note_ports_ext(),
             )
         } else {
             return Err(GraphCompilerError::UnexpectedError(format!(
@@ -73,6 +75,25 @@ pub(crate) fn compile_graph(
         for _ in 0..num_audio_out_channels {
             plugin_out_channel_buffers.push(None);
         }
+
+        let (num_note_in_ports, num_note_out_ports) = if let Some(note_ports_ext) = note_ports_ext {
+            (note_ports_ext.inputs.len(), note_ports_ext.outputs.len())
+        } else {
+            (0, 0)
+        };
+        let mut note_in_buffers: SmallVec<[Option<SmallVec<[SharedBuffer<ProcEvent>; 2]>>; 2]> =
+            SmallVec::with_capacity(num_note_in_ports);
+        let mut note_out_buffers: SmallVec<[Option<SharedBuffer<ProcEvent>>; 2]> =
+            SmallVec::with_capacity(num_note_out_ports);
+        for _ in 0..num_note_in_ports {
+            note_in_buffers.push(None);
+        }
+        for _ in 0..num_note_out_ports {
+            note_out_buffers.push(None);
+        }
+
+        let mut event_in_buffers: Option<SmallVec<[SharedBuffer<ProcEvent>; 2]>> = None;
+        let mut event_out_buffer: Option<SharedBuffer<ProcEvent>> = None;
 
         let mut next_audio_in_channel_index = 0;
         let mut next_audio_out_channel_index = 0;
@@ -181,8 +202,49 @@ pub(crate) fn compile_graph(
 
                     plugin_in_channel_buffers[channel_index] = Some(channel_buffer);
                 }
-                PortType::Event => {}
-                PortType::Note => {}
+                PortType::Event => {
+                    let mut bufs: SmallVec<[SharedBuffer<ProcEvent>; 2]> =
+                        SmallVec::with_capacity(buffers.len());
+
+                    for (buffer, _delay_comp_info) in buffers.iter() {
+                        // TODO: Use delay compensation?
+
+                        max_graph_event_buffer_index =
+                            max_graph_event_buffer_index.max(buffer.buffer_id);
+
+                        let buffer = shared_buffer_pool.event_buffer(buffer.buffer_id);
+
+                        bufs.push(buffer);
+                    }
+
+                    event_in_buffers = Some(bufs);
+                }
+                PortType::Note => {
+                    if let Some(note_ports_ext) = note_ports_ext {
+                        // TODO: Optimize this?
+                        for (port_i, port) in note_ports_ext.inputs.iter().enumerate() {
+                            if port_channel_id.port_stable_id == port.stable_id {
+                                let mut bufs: SmallVec<[SharedBuffer<ProcEvent>; 2]> =
+                                    SmallVec::with_capacity(buffers.len());
+
+                                for (buffer, _delay_comp_info) in buffers.iter() {
+                                    // TODO: Use delay compensation?
+
+                                    max_graph_note_buffer_index =
+                                        max_graph_note_buffer_index.max(buffer.buffer_id);
+
+                                    let buffer = shared_buffer_pool.note_buffer(buffer.buffer_id);
+
+                                    bufs.push(buffer);
+                                }
+
+                                note_in_buffers[port_i] = Some(bufs);
+
+                                break;
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -215,8 +277,31 @@ pub(crate) fn compile_graph(
                     let graph_buffer = shared_buffer_pool.audio_f32(buffer.buffer_id);
                     plugin_out_channel_buffers[channel_index] = Some(graph_buffer);
                 }
-                PortType::Event => {}
-                PortType::Note => {}
+                PortType::Event => {
+                    max_graph_event_buffer_index =
+                        max_graph_event_buffer_index.max(buffer.buffer_id);
+
+                    let buffer = shared_buffer_pool.event_buffer(buffer.buffer_id);
+
+                    event_out_buffer = Some(buffer);
+                }
+                PortType::Note => {
+                    if let Some(note_ports_ext) = note_ports_ext {
+                        // TODO: Optimize this?
+                        for (port_i, port) in note_ports_ext.outputs.iter().enumerate() {
+                            if port_channel_id.port_stable_id == port.stable_id {
+                                max_graph_note_buffer_index =
+                                    max_graph_note_buffer_index.max(buffer.buffer_id);
+
+                                let buffer = shared_buffer_pool.note_buffer(buffer.buffer_id);
+
+                                note_out_buffers[port_i] = Some(buffer);
+
+                                break;
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -286,6 +371,8 @@ pub(crate) fn compile_graph(
             tasks.push(Task::DeactivatedPlugin(DeactivatedPluginTask {
                 audio_through,
                 extra_audio_out,
+                event_out_buffer,
+                note_out_buffers,
             }));
 
             continue;
@@ -329,6 +416,10 @@ pub(crate) fn compile_graph(
         tasks.push(Task::Plugin(PluginTask {
             plugin: plugin_audio_thread,
             buffers: ProcBuffers { audio_in, audio_out, task_version },
+            event_in_buffers,
+            event_out_buffer,
+            note_in_buffers,
+            note_out_buffers,
         }));
     }
 
@@ -353,11 +444,11 @@ pub(crate) fn compile_graph(
         return Err(GraphCompilerError::VerifierError(e, abstract_tasks.to_vec(), new_schedule));
     }
 
-    shared_buffer_pool.remove_excess_audio_buffers(
+    shared_buffer_pool.remove_excess_buffers(
         max_graph_audio_buffer_index,
         total_intermediary_buffers,
-        0,
-        0,
+        max_graph_note_buffer_index,
+        max_graph_event_buffer_index,
     );
 
     // TODO: Optimize this?

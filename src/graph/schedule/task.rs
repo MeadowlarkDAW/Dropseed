@@ -2,7 +2,7 @@ use smallvec::SmallVec;
 
 use crate::graph::shared_pool::{SharedBuffer, SharedDelayCompNode, SharedPluginHostAudioThread};
 use crate::plugin::process_info::ProcBuffers;
-use crate::ProcInfo;
+use crate::{ProcEvent, ProcInfo};
 
 use super::sum::SumTask;
 
@@ -99,6 +99,12 @@ pub(crate) struct PluginTask {
     pub plugin: SharedPluginHostAudioThread,
 
     pub buffers: ProcBuffers,
+
+    pub event_in_buffers: Option<SmallVec<[SharedBuffer<ProcEvent>; 2]>>,
+    pub event_out_buffer: Option<SharedBuffer<ProcEvent>>,
+
+    pub note_in_buffers: SmallVec<[Option<SmallVec<[SharedBuffer<ProcEvent>; 2]>>; 2]>,
+    pub note_out_buffers: SmallVec<[Option<SharedBuffer<ProcEvent>>; 2]>,
 }
 
 impl PluginTask {
@@ -109,7 +115,14 @@ impl PluginTask {
         // not appear twice within the same schedule, so no data races can occur.
         let mut plugin_audio_thread = unsafe { (*self.plugin.plugin).borrow_mut() };
 
-        plugin_audio_thread.process(proc_info, &mut self.buffers);
+        plugin_audio_thread.process(
+            proc_info,
+            &mut self.buffers,
+            &self.event_in_buffers,
+            &self.event_out_buffer,
+            &self.note_in_buffers,
+            &self.note_out_buffers,
+        );
     }
 }
 
@@ -135,6 +148,10 @@ impl DelayCompTask {
 pub(crate) struct DeactivatedPluginTask {
     pub audio_through: SmallVec<[(SharedBuffer<f32>, SharedBuffer<f32>); 4]>,
     pub extra_audio_out: SmallVec<[SharedBuffer<f32>; 4]>,
+
+    pub event_out_buffer: Option<SharedBuffer<ProcEvent>>,
+
+    pub note_out_buffers: SmallVec<[Option<SharedBuffer<ProcEvent>>; 2]>,
 }
 
 impl DeactivatedPluginTask {
@@ -167,9 +184,19 @@ impl DeactivatedPluginTask {
                 out_buf.copy_from_slice(in_buf);
             }
 
-            // Make sure any extra output buffers are cleared.
+            // Make sure all output buffers are cleared.
             for out_buf in self.extra_audio_out.iter() {
                 out_buf.clear_f32(proc_info.frames);
+            }
+            if let Some(out_buf) = &self.event_out_buffer {
+                let mut b = out_buf.borrow_mut();
+                b.clear();
+            }
+            for out_buf in self.note_out_buffers.iter() {
+                if let Some(out_buf) = out_buf {
+                    let mut b = out_buf.borrow_mut();
+                    b.clear();
+                }
             }
         }
     }

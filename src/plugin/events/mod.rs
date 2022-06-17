@@ -184,6 +184,10 @@ impl EventNote {
         self.0.port_index
     }
 
+    pub fn set_port_index(&mut self, port_index: i16) {
+        self.0.port_index = port_index;
+    }
+
     /// `[0..15]`
     pub fn channel(&self) -> i16 {
         self.0.channel
@@ -326,6 +330,10 @@ impl EventNoteExpression {
 
     pub fn port_index(&self) -> i16 {
         self.0.port_index
+    }
+
+    pub fn set_port_index(&mut self, port_index: i16) {
+        self.0.port_index = port_index;
     }
 
     /// `[0..15]`
@@ -482,7 +490,7 @@ impl EventParamMod {
                 flags: event_flags.bits(),
             },
             param_id: param_id.0,
-            cooke: std::ptr::null_mut(),
+            cookie: std::ptr::null_mut(),
             note_id,
             port_index,
             channel,
@@ -839,6 +847,10 @@ impl EventMidi {
         self.0.port_index
     }
 
+    pub fn set_port_index(&mut self, port_index: u16) {
+        self.0.port_index = port_index;
+    }
+
     /// The raw MIDI data.
     pub fn data(&self) -> [u8; 3] {
         self.0.data
@@ -910,6 +922,10 @@ impl EventMidiSysex {
         self.0.port_index
     }
 
+    pub fn set_port_index(&mut self, port_index: u16) {
+        self.0.port_index = port_index;
+    }
+
     /// The raw MIDI data.
     pub fn data(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.0.buffer, self.0.size as usize) }
@@ -973,6 +989,10 @@ impl EventMidi2 {
     /// The index of the MIDI2 port.
     pub fn port_index(&self) -> u16 {
         self.0.port_index
+    }
+
+    pub fn set_port_index(&mut self, port_index: u16) {
+        self.0.port_index = port_index;
     }
 
     /// The raw MIDI2 data.

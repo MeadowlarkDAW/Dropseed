@@ -20,8 +20,8 @@ enum DebugBufferType {
     Audio32,
     Audio64,
     IntermediaryAudio32,
-    ClapNoteBuffer,
-    MidiNoteBuffer,
+    NoteBuffer,
+    EventBuffer,
 }
 impl std::fmt::Debug for DebugBufferType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -29,8 +29,8 @@ impl std::fmt::Debug for DebugBufferType {
             DebugBufferType::Audio32 => write!(f, "f"),
             DebugBufferType::Audio64 => write!(f, "d"),
             DebugBufferType::IntermediaryAudio32 => write!(f, "if"),
-            DebugBufferType::ClapNoteBuffer => write!(f, "cn"),
-            DebugBufferType::MidiNoteBuffer => write!(f, "m"),
+            DebugBufferType::NoteBuffer => write!(f, "n"),
+            DebugBufferType::EventBuffer => write!(f, "e"),
         }
     }
 }
@@ -328,14 +328,15 @@ impl SharedPluginPool {
 pub(crate) struct SharedBufferPool {
     pub audio_buffer_size: u32,
     pub note_buffer_size: usize,
+    pub event_buffer_size: usize,
 
     audio_buffers_f32: Vec<Option<SharedBuffer<f32>>>,
     audio_buffers_f64: Vec<Option<SharedBuffer<f64>>>,
 
     intermediary_audio_f32: Vec<Option<SharedBuffer<f32>>>,
 
-    clap_note_buffers: Vec<Option<SharedBuffer<ProcEvent>>>,
-    midi_buffers: Vec<Option<SharedBuffer<ProcEvent>>>,
+    note_buffers: Vec<Option<SharedBuffer<ProcEvent>>>,
+    event_buffers: Vec<Option<SharedBuffer<ProcEvent>>>,
 
     coll_handle: basedrop::Handle,
 }
@@ -344,6 +345,7 @@ impl SharedBufferPool {
     pub fn new(
         audio_buffer_size: u32,
         note_buffer_size: usize,
+        event_buffer_size: usize,
         coll_handle: basedrop::Handle,
     ) -> Self {
         assert_ne!(audio_buffer_size, 0);
@@ -353,10 +355,11 @@ impl SharedBufferPool {
             audio_buffers_f32: Vec::new(),
             audio_buffers_f64: Vec::new(),
             intermediary_audio_f32: Vec::new(),
-            clap_note_buffers: Vec::new(),
-            midi_buffers: Vec::new(),
+            note_buffers: Vec::new(),
+            event_buffers: Vec::new(),
             audio_buffer_size,
             note_buffer_size,
+            event_buffer_size,
             coll_handle,
         }
     }
@@ -453,15 +456,15 @@ impl SharedBufferPool {
         }
     }
 
-    pub fn clap_note(&mut self, index: usize) -> SharedBuffer<ProcEvent> {
-        if self.clap_note_buffers.len() <= index {
-            let n_new_slots = (index + 1) - self.clap_note_buffers.len();
+    pub fn note_buffer(&mut self, index: usize) -> SharedBuffer<ProcEvent> {
+        if self.note_buffers.len() <= index {
+            let n_new_slots = (index + 1) - self.note_buffers.len();
             for _ in 0..n_new_slots {
-                self.clap_note_buffers.push(None);
+                self.note_buffers.push(None);
             }
         }
 
-        let slot = &mut self.clap_note_buffers[index];
+        let slot = &mut self.note_buffers[index];
 
         if let Some(b) = slot {
             b.clone()
@@ -472,7 +475,7 @@ impl SharedBufferPool {
                     Buffer::new(
                         self.note_buffer_size,
                         DebugBufferID {
-                            buffer_type: DebugBufferType::ClapNoteBuffer,
+                            buffer_type: DebugBufferType::NoteBuffer,
                             index: index as u32,
                         },
                     ),
@@ -483,15 +486,15 @@ impl SharedBufferPool {
         }
     }
 
-    pub fn midi(&mut self, index: usize) -> SharedBuffer<ProcEvent> {
-        if self.midi_buffers.len() <= index {
-            let n_new_slots = (index + 1) - self.midi_buffers.len();
+    pub fn event_buffer(&mut self, index: usize) -> SharedBuffer<ProcEvent> {
+        if self.event_buffers.len() <= index {
+            let n_new_slots = (index + 1) - self.event_buffers.len();
             for _ in 0..n_new_slots {
-                self.midi_buffers.push(None);
+                self.event_buffers.push(None);
             }
         }
 
-        let slot = &mut self.midi_buffers[index];
+        let slot = &mut self.event_buffers[index];
 
         if let Some(b) = slot {
             b.clone()
@@ -502,7 +505,7 @@ impl SharedBufferPool {
                     Buffer::new(
                         self.note_buffer_size,
                         DebugBufferID {
-                            buffer_type: DebugBufferType::MidiNoteBuffer,
+                            buffer_type: DebugBufferType::EventBuffer,
                             index: index as u32,
                         },
                     ),
@@ -513,12 +516,12 @@ impl SharedBufferPool {
         }
     }
 
-    pub fn remove_excess_audio_buffers(
+    pub fn remove_excess_buffers(
         &mut self,
         max_buffer_index: usize,
         total_intermediary_buffers: usize,
-        max_clap_note_buffer_index: usize,
-        max_midi_buffer_index: usize,
+        max_note_buffer_index: usize,
+        max_event_buffer_index: usize,
     ) {
         if self.audio_buffers_f32.len() > max_buffer_index + 1 {
             let n_slots_to_remove = self.audio_buffers_f32.len() - (max_buffer_index + 1);
@@ -538,16 +541,16 @@ impl SharedBufferPool {
                 let _ = self.intermediary_audio_f32.pop();
             }
         }
-        if self.clap_note_buffers.len() > max_clap_note_buffer_index {
-            let n_slots_to_remove = self.clap_note_buffers.len() - max_clap_note_buffer_index;
+        if self.note_buffers.len() > max_note_buffer_index + 1 {
+            let n_slots_to_remove = self.note_buffers.len() - (max_note_buffer_index + 1);
             for _ in 0..n_slots_to_remove {
-                let _ = self.clap_note_buffers.pop();
+                let _ = self.note_buffers.pop();
             }
         }
-        if self.midi_buffers.len() > max_midi_buffer_index {
-            let n_slots_to_remove = self.midi_buffers.len() - max_midi_buffer_index;
+        if self.event_buffers.len() > max_event_buffer_index + 1 {
+            let n_slots_to_remove = self.event_buffers.len() - (max_event_buffer_index + 1);
             for _ in 0..n_slots_to_remove {
-                let _ = self.midi_buffers.pop();
+                let _ = self.event_buffers.pop();
             }
         }
     }

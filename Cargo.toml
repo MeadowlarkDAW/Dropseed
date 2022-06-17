@@ -22,7 +22,7 @@ cpal-asio = ["cpal/asio"]
 [dependencies]
 meadowlark-core-types = "0.1"
 audio-graph = { git = "https://github.com/MeadowlarkDAW/audio-graph", branch = "main" }
-clap-sys = { git = "https://github.com/glowcoil/clap-sys.git", rev = "25d56346819bc380e039e670d7606ba1b85b7969" }
+clap-sys = "0.2.0"
 dirs = { version = "4.0", optional = true }
 raw-window-handle = "0.4"
 basedrop = "0.1"

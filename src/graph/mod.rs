@@ -106,6 +106,7 @@ impl AudioGraph {
         min_frames: u32,
         max_frames: u32,
         note_buffer_size: usize,
+        event_buffer_size: usize,
         thread_ids: SharedThreadIDs,
     ) -> (Self, SharedSchedule) {
         assert!(graph_in_channels > 0);
@@ -114,8 +115,12 @@ impl AudioGraph {
         let abstract_graph = Graph::default();
 
         let shared_plugin_pool = SharedPluginPool::new();
-        let shared_buffer_pool =
-            SharedBufferPool::new(max_frames, note_buffer_size, coll_handle.clone());
+        let shared_buffer_pool = SharedBufferPool::new(
+            max_frames,
+            note_buffer_size,
+            event_buffer_size,
+            coll_handle.clone(),
+        );
 
         let (shared_schedule, shared_schedule_clone) =
             SharedSchedule::new(Schedule::empty(max_frames as usize), thread_ids, &coll_handle);
@@ -173,7 +178,6 @@ impl AudioGraph {
         &mut self,
         save_state: PluginSaveState,
         plugin_scanner: &mut PluginScanner,
-        activate: bool,
         fallback_to_other_formats: bool,
     ) -> NewPluginRes {
         let temp_id = PluginInstanceID {
@@ -184,7 +188,7 @@ impl AudioGraph {
 
         let node_ref = self.abstract_graph.node(temp_id);
 
-        let (backup_in_channels, backup_out_channels) = save_state.audio_in_out_channels;
+        let activate_plugin = save_state.activation_requested;
 
         let res = plugin_scanner.create_plugin(save_state, node_ref, fallback_to_other_formats);
 
@@ -215,7 +219,7 @@ impl AudioGraph {
             panic!("Something went wrong when allocating a new slot for a plugin");
         }
 
-        let activation_status = if activate {
+        let activation_status = if activate_plugin {
             self.activate_plugin_instance(&plugin_id).unwrap()
         } else {
             PluginActivationStatus::Inactive
@@ -520,7 +524,7 @@ impl AudioGraph {
                 continue;
             }
 
-            plugin_save_states.push(plugin_entry.plugin_host.collect_save_state().unwrap());
+            plugin_save_states.push(plugin_entry.plugin_host.collect_save_state());
         }
 
         // Iterate again to get all the edges.
@@ -581,7 +585,7 @@ impl AudioGraph {
             .set_new_schedule(Schedule::empty(self.max_frames as usize), &self.coll_handle);
 
         self.shared_plugin_pool.plugins.clear();
-        self.shared_buffer_pool.remove_excess_audio_buffers(0, 0, 0, 0);
+        self.shared_buffer_pool.remove_excess_buffers(0, 0, 0, 0);
 
         self.abstract_graph = Graph::default();
 
@@ -647,13 +651,10 @@ impl AudioGraph {
         let _ = self.shared_plugin_pool.plugins.insert(
             graph_in_node_id.clone(),
             PluginInstanceHostEntry {
-                plugin_host: PluginInstanceHost::new(
+                plugin_host: PluginInstanceHost::new_graph_in(
                     graph_in_node_id.clone(),
-                    None,
-                    None,
                     HostRequest::new(Shared::clone(&self.host_info)),
-                    0,
-                    self.graph_out_channels as usize,
+                    self.graph_in_channels as usize,
                 ),
                 audio_thread: None,
                 port_channels_refs: graph_in_port_refs,
@@ -662,13 +663,10 @@ impl AudioGraph {
         let _ = self.shared_plugin_pool.plugins.insert(
             graph_out_node_id.clone(),
             PluginInstanceHostEntry {
-                plugin_host: PluginInstanceHost::new(
-                    graph_out_node_id.clone(),
-                    None,
-                    None,
+                plugin_host: PluginInstanceHost::new_graph_out(
+                    graph_in_node_id.clone(),
                     HostRequest::new(Shared::clone(&self.host_info)),
-                    self.graph_in_channels as usize,
-                    0,
+                    self.graph_out_channels as usize,
                 ),
                 audio_thread: None,
                 port_channels_refs: graph_out_port_refs,
@@ -694,7 +692,6 @@ impl AudioGraph {
             plugin_results.push(self.add_new_plugin_instance(
                 plugin_save_state.clone(),
                 plugin_scanner,
-                plugin_save_state.activation_requested,
                 fallback_to_other_formats,
             ));
         }
@@ -902,7 +899,7 @@ fn update_plugin_ports(
                 port_channel: i,
             };
 
-            if let Some(prev_port_id) = prev_port_channel_refs.get(&port_id) {
+            if prev_port_channel_refs.get(&port_id).is_some() {
                 let _ = prev_port_channel_refs.remove(&port_id);
             } else {
                 let port_ref = abstract_graph
@@ -923,7 +920,7 @@ fn update_plugin_ports(
                 port_channel: i,
             };
 
-            if let Some(prev_port_id) = prev_port_channel_refs.get(&port_id) {
+            if prev_port_channel_refs.get(&port_id).is_some() {
                 let _ = prev_port_channel_refs.remove(&port_id);
             } else {
                 let port_ref = abstract_graph
@@ -936,31 +933,31 @@ fn update_plugin_ports(
     }
 
     // Plugins always have one event in port and one event out port.
-    const in_event_port_id: PortChannelID = PortChannelID {
+    const IN_EVENT_PORT_ID: PortChannelID = PortChannelID {
         port_type: PortType::Event,
         port_stable_id: 0,
         is_input: true,
         port_channel: 0,
     };
-    const out_event_port_id: PortChannelID = PortChannelID {
+    const OUT_EVENT_PORT_ID: PortChannelID = PortChannelID {
         port_type: PortType::Event,
         port_stable_id: 1,
         is_input: false,
         port_channel: 0,
     };
-    if prev_port_channel_refs.get(&in_event_port_id).is_none() {
+    if prev_port_channel_refs.get(&IN_EVENT_PORT_ID).is_none() {
         let in_port_ref = abstract_graph
-            .port(entry.plugin_host.id.node_ref, PortType::Event, in_event_port_id)
+            .port(entry.plugin_host.id.node_ref, PortType::Event, IN_EVENT_PORT_ID)
             .unwrap();
         let out_port_ref = abstract_graph
-            .port(entry.plugin_host.id.node_ref, PortType::Event, out_event_port_id)
+            .port(entry.plugin_host.id.node_ref, PortType::Event, OUT_EVENT_PORT_ID)
             .unwrap();
 
-        let _ = entry.port_channels_refs.insert(in_event_port_id, in_port_ref);
-        let _ = entry.port_channels_refs.insert(out_event_port_id, out_port_ref);
+        let _ = entry.port_channels_refs.insert(IN_EVENT_PORT_ID, in_port_ref);
+        let _ = entry.port_channels_refs.insert(OUT_EVENT_PORT_ID, out_port_ref);
     } else {
-        let _ = prev_port_channel_refs.remove(&in_event_port_id);
-        let _ = prev_port_channel_refs.remove(&out_event_port_id);
+        let _ = prev_port_channel_refs.remove(&IN_EVENT_PORT_ID);
+        let _ = prev_port_channel_refs.remove(&OUT_EVENT_PORT_ID);
     }
 
     for note_in_port in note_ports.inputs.iter() {
@@ -971,7 +968,7 @@ fn update_plugin_ports(
             port_channel: 0,
         };
 
-        if let Some(prev_port_id) = prev_port_channel_refs.get(&port_id) {
+        if prev_port_channel_refs.get(&port_id).is_some() {
             let _ = prev_port_channel_refs.remove(&port_id);
         } else {
             let port_ref = abstract_graph
@@ -990,7 +987,7 @@ fn update_plugin_ports(
             port_channel: 0,
         };
 
-        if let Some(prev_port_id) = prev_port_channel_refs.get(&port_id) {
+        if prev_port_channel_refs.get(&port_id).is_some() {
             let _ = prev_port_channel_refs.remove(&port_id);
         } else {
             let port_ref = abstract_graph

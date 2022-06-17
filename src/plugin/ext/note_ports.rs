@@ -27,10 +27,10 @@ bitflags! {
 #[derive(Debug, Clone, PartialEq)]
 /// The layout of the audio ports of a plugin.
 pub struct PluginNotePortsExt {
-    /// The list of input note ports, in order.
+    /// The list of input note ports.
     pub inputs: Vec<NotePortInfo>,
 
-    /// The list of output note ports, in order.
+    /// The list of output note ports.
     pub outputs: Vec<NotePortInfo>,
 }
 
