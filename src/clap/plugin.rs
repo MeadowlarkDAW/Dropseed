@@ -13,6 +13,7 @@ use maybe_atomic_refcell::{MaybeAtomicRef, MaybeAtomicRefMut};
 use smallvec::SmallVec;
 
 use clap_sys::entry::clap_plugin_entry as RawClapEntry;
+use clap_sys::ext::state::clap_plugin_state as RawClapPluginState;
 use clap_sys::plugin::clap_plugin as RawClapPlugin;
 use clap_sys::plugin::clap_plugin_descriptor as RawClapPluginDescriptor;
 use clap_sys::plugin_factory::clap_plugin_factory as RawClapPluginFactory;
@@ -24,11 +25,14 @@ use super::c_char_helpers::c_char_ptr_to_maybe_str;
 use super::events::{ClapInputEvents, ClapOutputEvents};
 use super::host_request::ClapHostRequest;
 use super::process::ClapProcess;
+use super::stream::{ClapIStream, ClapOStream};
 use crate::clap::c_char_helpers::c_char_buf_to_str;
 use crate::plugin::audio_buffer::RawAudioChannelBuffers;
 use crate::plugin::host_request::HostRequest;
 use crate::plugin::process_info::{ProcBuffers, ProcInfo, ProcessStatus};
-use crate::plugin::{ext, PluginAudioThread, PluginDescriptor, PluginFactory, PluginMainThread};
+use crate::plugin::{
+    ext, PluginAudioThread, PluginDescriptor, PluginFactory, PluginMainThread, PluginPreset,
+};
 use crate::utils::thread_id::SharedThreadIDs;
 use crate::MainPortsLayout;
 use crate::PluginAudioPortsExt;
@@ -280,6 +284,12 @@ impl PluginFactory for ClapPluginFactory {
             None
         };
 
+        let state_ext = unsafe {
+            ((&*raw_plugin).get_extension)(raw_plugin, clap_sys::ext::state::CLAP_EXT_STATE)
+        };
+        let state_ext =
+            if state_ext.is_null() { None } else { Some(state_ext as *const RawClapPluginState) };
+
         let shared_plugin = Shared::new(
             main_thread_coll_handle,
             SharedClapPluginInstance {
@@ -287,6 +297,7 @@ impl PluginFactory for ClapPluginFactory {
                 activated: Arc::new(AtomicBool::new(false)),
                 id: Shared::clone(&self.id),
                 params_ext,
+                state_ext,
                 _host_request: clap_host_request,
                 _shared_lib: Shared::clone(&self.shared_lib),
             },
@@ -303,6 +314,7 @@ pub(crate) struct SharedClapPluginInstance {
     raw_plugin: *const RawClapPlugin,
 
     params_ext: ClapPluginParams,
+    state_ext: Option<*const RawClapPluginState>,
 
     // We hold on to these to make sure these stay alive for as long as a
     // reference to this struct exists.
@@ -548,11 +560,7 @@ impl PluginMainThread for ClapPluginMainThread {
     ///
     /// `[main-thread & !active_state]`
     #[allow(unused)]
-    fn init(
-        &mut self,
-        _preset: (),
-        coll_handle: &basedrop::Handle,
-    ) -> Result<(), Box<dyn Error + Send>> {
+    fn init(&mut self, coll_handle: &basedrop::Handle) -> Result<(), Box<dyn Error + Send>> {
         log::trace!("clap plugin instance init {}", &*self.shared_plugin.id);
 
         let res =
@@ -563,6 +571,67 @@ impl PluginMainThread for ClapPluginMainThread {
         } else {
             Err(StringError(format!(
                 "Plugin with ID {} returned false on call to clap_plugin.init()",
+                &*self.shared_plugin.id
+            ))
+            .into())
+        }
+    }
+
+    /// Collect the save state of this plugin as raw bytes (use serde and bincode).
+    ///
+    /// If `Ok(None)` is returned, then it means that the plugin does not have a
+    /// state it needs to save.
+    ///
+    /// By default this returns `None`.
+    ///
+    /// `[main-thread]`
+    fn collect_save_state(&mut self) -> Result<Option<Vec<u8>>, Box<dyn Error + Send>> {
+        if let Some(state_ext) = self.shared_plugin.state_ext {
+            let mut buffer = Vec::new();
+
+            let clap_ostream = ClapOStream::new(&mut buffer);
+
+            let res =
+                unsafe { ((&*state_ext).save)(self.shared_plugin.raw_plugin, clap_ostream.raw()) };
+
+            if res {
+                Ok(Some(buffer))
+            } else {
+                Err(StringError(format!(
+                    "Plugin with ID {} returned false on call to clap_plugin_state.save()",
+                    &*self.shared_plugin.id
+                ))
+                .into())
+            }
+        } else {
+            return Ok(None);
+        }
+    }
+
+    /// Load the given preset (use serde and bincode).
+    ///
+    /// By default this does nothing.
+    ///
+    /// `[main-thread]`
+    fn load_state(&mut self, preset: &PluginPreset) -> Result<(), Box<dyn Error + Send>> {
+        if let Some(state_ext) = self.shared_plugin.state_ext {
+            let clap_istream = ClapIStream::new(&preset.data);
+
+            let res =
+                unsafe { ((&*state_ext).load)(self.shared_plugin.raw_plugin, clap_istream.raw()) };
+
+            if res {
+                Ok(())
+            } else {
+                Err(StringError(format!(
+                    "Plugin with ID {} returned false on call to clap_plugin_state.load()",
+                    &*self.shared_plugin.id
+                ))
+                .into())
+            }
+        } else {
+            Err(StringError(format!(
+                "Could not load state for clap plugin with ID {}: plugin does not implement the \"clap.state\" extension",
                 &*self.shared_plugin.id
             ))
             .into())

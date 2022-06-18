@@ -52,6 +52,7 @@ impl ScannedPlugin {
 struct ScannedPluginFactory {
     pub rdn: Shared<String>,
     pub format: PluginFormat,
+    pub plugin_version: Shared<String>,
 
     factory: Box<dyn PluginFactory>,
 }
@@ -250,8 +251,13 @@ impl PluginScanner {
                             let key =
                                 ScannedPluginKey { rdn: id.clone(), format: PluginFormat::Clap };
 
+                            let description = f.description();
+
+                            let plugin_version =
+                                Shared::new(&self.coll_handle, description.version.clone());
+
                             scanned_plugins.push(ScannedPlugin {
-                                description: f.description().clone(),
+                                description,
                                 format: PluginFormat::Clap,
                                 format_version,
                                 key: key.clone(),
@@ -262,6 +268,7 @@ impl PluginScanner {
                                 ScannedPluginFactory {
                                     rdn: Shared::new(&self.coll_handle, id.clone()),
                                     format: PluginFormat::Clap,
+                                    plugin_version,
                                     factory: Box::new(f),
                                 },
                             ) {
@@ -302,6 +309,7 @@ impl PluginScanner {
         let scanned_plugin = ScannedPluginFactory {
             factory,
             rdn: Shared::new(&self.coll_handle, key.rdn.clone()),
+            plugin_version: Shared::new(&self.coll_handle, description.version.clone()),
             format: PluginFormat::Internal,
         };
 
@@ -326,6 +334,7 @@ impl PluginScanner {
 
         let mut factory = None;
         let mut status = Ok(());
+        let mut plugin_version = None;
 
         // Always try to use internal plugins when available.
         if save_state.key.format == PluginFormat::Internal || fallback_to_other_formats {
@@ -386,6 +395,8 @@ impl PluginScanner {
             id.format = factory.format.into();
             id.rdn = factory.rdn.clone();
 
+            plugin_version = Some(Shared::clone(&factory.plugin_version));
+
             if save_state.key.format != factory.format {
                 save_state.key =
                     ScannedPluginKey { rdn: save_state.key.rdn.clone(), format: factory.format };
@@ -395,9 +406,7 @@ impl PluginScanner {
                 Ok(mut plugin_main_thread) => {
                     check_for_invalid_host_callbacks(&host_request, &factory.rdn);
 
-                    if let Err(e) =
-                        plugin_main_thread.init(save_state._preset.clone(), &self.coll_handle)
-                    {
+                    if let Err(e) = plugin_main_thread.init(&self.coll_handle) {
                         status = Err(NewPluginInstanceError::PluginFailedToInit(
                             (*factory.rdn).clone(),
                             e,
@@ -426,7 +435,13 @@ impl PluginScanner {
         }
 
         CreatePluginResult {
-            plugin_host: PluginInstanceHost::new(id, save_state, main_thread, host_request),
+            plugin_host: PluginInstanceHost::new(
+                id,
+                save_state,
+                main_thread,
+                host_request,
+                plugin_version,
+            ),
             status,
         }
     }

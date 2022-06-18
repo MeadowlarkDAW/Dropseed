@@ -1,6 +1,28 @@
-use crate::{engine::plugin_scanner::ScannedPluginKey, PluginAudioPortsExt};
+use std::fmt::Debug;
 
 use super::ext::note_ports::PluginNotePortsExt;
+use crate::{engine::plugin_scanner::ScannedPluginKey, PluginAudioPortsExt};
+
+#[derive(Clone)]
+pub struct PluginPreset {
+    /// The version of this plugin that saved this preset.
+    pub version: Option<String>,
+
+    /// The preset as raw bytes (use serde and bincode).
+    pub data: Vec<u8>,
+}
+
+impl Debug for PluginPreset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut f = f.debug_struct("PluginPreset");
+
+        f.field("version", &self.version);
+
+        f.field("preset_size", &self.data.len());
+
+        f.finish()
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct PluginSaveState {
@@ -18,8 +40,11 @@ pub struct PluginSaveState {
     /// user doesn't have this plugin installed on their system.)
     pub backup_note_ports: Option<PluginNotePortsExt>,
 
-    // TODO
-    pub _preset: (),
+    /// The plugin's preset.
+    ///
+    /// If this is none, then it means that the plugin should load
+    /// its default preset.
+    pub preset: Option<PluginPreset>,
 }
 
 impl PluginSaveState {
@@ -29,7 +54,7 @@ impl PluginSaveState {
             activation_requested: true,
             backup_audio_ports: None,
             backup_note_ports: None,
-            _preset: (),
+            preset: None,
         }
     }
 }

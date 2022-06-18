@@ -1,3 +1,4 @@
+use basedrop::Shared;
 use fnv::FnvHashMap;
 use meadowlark_core_types::SampleRate;
 use smallvec::SmallVec;
@@ -18,7 +19,7 @@ use crate::plugin::ext::note_ports::PluginNotePortsExt;
 use crate::plugin::ext::params::{ParamInfo, ParamInfoFlags};
 use crate::plugin::host_request::RequestFlags;
 use crate::plugin::process_info::ProcBuffers;
-use crate::plugin::{PluginAudioThread, PluginMainThread, PluginSaveState};
+use crate::plugin::{PluginAudioThread, PluginMainThread, PluginPreset, PluginSaveState};
 use crate::utils::reducing_queue::{
     ReducFnvConsumer, ReducFnvProducer, ReducFnvValue, ReducingFnvQueue,
 };
@@ -165,6 +166,7 @@ pub(crate) struct PluginInstanceHost {
     state: Arc<SharedPluginState>,
 
     save_state: PluginSaveState,
+    plugin_version: Option<Shared<String>>,
 
     param_queues: Option<ParamQueuesMainThread>,
     gesturing_params: FnvHashMap<ParamID, bool>,
@@ -177,10 +179,24 @@ impl PluginInstanceHost {
     pub fn new(
         id: PluginInstanceID,
         save_state: PluginSaveState,
-        main_thread: Option<Box<dyn PluginMainThread>>,
+        mut main_thread: Option<Box<dyn PluginMainThread>>,
         host_request: HostRequest,
+        plugin_version: Option<Shared<String>>,
     ) -> Self {
         let state = Arc::new(SharedPluginState::new());
+
+        if let Some(preset) = &save_state.preset {
+            if let Some(main_thread) = &mut main_thread {
+                match main_thread.load_state(preset) {
+                    Ok(()) => {
+                        log::trace!("Plugin {:?} successfully loaded preset", &id);
+                    }
+                    Err(e) => {
+                        log::error!("Plugin {:?} failed to load preset: {}", &id, e);
+                    }
+                }
+            }
+        }
 
         if main_thread.is_none() {
             state.set(PluginState::InactiveWithError);
@@ -202,6 +218,7 @@ impl PluginInstanceHost {
             num_audio_out_channels,
             state: Arc::new(SharedPluginState::new()),
             save_state,
+            plugin_version,
             param_queues: None,
             gesturing_params: FnvHashMap::default(),
             host_request,
@@ -228,7 +245,7 @@ impl PluginInstanceHost {
             activation_requested: false,
             backup_audio_ports: None,
             backup_note_ports: None,
-            _preset: (),
+            preset: None,
         };
 
         Self {
@@ -240,6 +257,7 @@ impl PluginInstanceHost {
             num_audio_out_channels,
             state: Arc::new(SharedPluginState::new()),
             save_state,
+            plugin_version: None,
             param_queues: None,
             gesturing_params: FnvHashMap::default(),
             host_request,
@@ -266,7 +284,7 @@ impl PluginInstanceHost {
             activation_requested: false,
             backup_audio_ports: None,
             backup_note_ports: None,
-            _preset: (),
+            preset: None,
         };
 
         Self {
@@ -278,6 +296,7 @@ impl PluginInstanceHost {
             num_audio_out_channels: 0,
             state: Arc::new(SharedPluginState::new()),
             save_state,
+            plugin_version: None,
             param_queues: None,
             gesturing_params: FnvHashMap::default(),
             host_request,
@@ -286,6 +305,28 @@ impl PluginInstanceHost {
     }
 
     pub fn collect_save_state(&mut self) -> PluginSaveState {
+        if self.host_request.state_marked_dirty_and_reset_dirty() {
+            if let Some(main_thread) = &mut self.main_thread {
+                let preset = match main_thread.collect_save_state() {
+                    Ok(preset) => preset.map(|p| PluginPreset {
+                        version: self.plugin_version.as_ref().map(|v| String::clone(&*v)),
+                        data: p,
+                    }),
+                    Err(e) => {
+                        log::error!(
+                            "Failed to collect save state from plugin {:?}: {}",
+                            &self.id,
+                            e
+                        );
+
+                        None
+                    }
+                };
+
+                self.save_state.preset = preset;
+            }
+        }
+
         self.save_state.clone()
     }
 

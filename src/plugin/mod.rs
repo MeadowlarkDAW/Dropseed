@@ -11,7 +11,7 @@ mod save_state;
 use crate::{EventQueue, ParamID, PluginInstanceID};
 use host_request::HostRequest;
 use process_info::{ProcBuffers, ProcInfo, ProcessStatus};
-pub use save_state::PluginSaveState;
+pub use save_state::{PluginPreset, PluginSaveState};
 
 /// The description of a plugin.
 #[derive(Debug, Clone)]
@@ -106,11 +106,7 @@ pub trait PluginMainThread {
     ///
     /// `[main-thread & !active_state]`
     #[allow(unused)]
-    fn init(
-        &mut self,
-        _preset: (),
-        coll_handle: &basedrop::Handle,
-    ) -> Result<(), Box<dyn Error + Send>> {
+    fn init(&mut self, coll_handle: &basedrop::Handle) -> Result<(), Box<dyn Error + Send>> {
         Ok(())
     }
 
@@ -132,6 +128,27 @@ pub trait PluginMainThread {
         max_frames: u32,
         coll_handle: &basedrop::Handle,
     ) -> Result<Box<dyn PluginAudioThread>, Box<dyn Error + Send>>;
+
+    /// Collect the save state of this plugin as raw bytes (use serde and bincode).
+    ///
+    /// If `Ok(None)` is returned, then it means that the plugin does not have a
+    /// state it needs to save.
+    ///
+    /// By default this returns `None`.
+    ///
+    /// `[main-thread]`
+    fn collect_save_state(&mut self) -> Result<Option<Vec<u8>>, Box<dyn Error + Send>> {
+        Ok(None)
+    }
+
+    /// Load the given preset (use serde and bincode).
+    ///
+    /// By default this does nothing.
+    ///
+    /// `[main-thread]`
+    fn load_state(&mut self, preset: &PluginPreset) -> Result<(), Box<dyn Error + Send>> {
+        Ok(())
+    }
 
     /// Deactivate the plugin. When this is called it also means that the `PluginAudioThread`
     /// counterpart has/will be dropped.

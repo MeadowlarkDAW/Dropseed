@@ -86,6 +86,8 @@ bitflags! {
         const RESCAN_AUDIO_PORTS = 1 << 4;
 
         const RESCAN_NOTE_PORTS = 1 << 5;
+
+        const STATE_DIRTY = 1 << 6;
     }
 }
 
@@ -169,6 +171,16 @@ impl HostRequest {
         // todo
     }
 
+    /// Tell the host that the plugin state has changed and should be saved again.
+    ///
+    /// If a parameter value changes, then it is implicit that the state is dirty.
+    ///
+    /// [main-thread]
+    pub fn mark_state_dirty(&self) {
+        // TODO: Are we able to use relaxed ordering here?
+        let _ = self.request_flags.fetch_or(RequestFlags::STATE_DIRTY.bits(), Ordering::SeqCst);
+    }
+
     /// Request the host to schedule a call to `PluginMainThread::on_main_thread()` on the main thread.
     ///
     /// `[thread-safe]`
@@ -234,6 +246,19 @@ impl HostRequest {
         // TODO: Are we able to use relaxed ordering here?
         let _ =
             self.request_flags.fetch_and(!RequestFlags::RESCAN_NOTE_PORTS.bits(), Ordering::SeqCst);
+    }
+
+    pub(crate) fn state_marked_dirty_and_reset_dirty(&self) -> bool {
+        // TODO: Are we able to use relaxed ordering here?
+
+        // Safe because this u32 can only be set via a `RequestFlags` value.
+        let flags = unsafe {
+            RequestFlags::from_bits_unchecked(
+                self.request_flags.fetch_and(!RequestFlags::STATE_DIRTY.bits(), Ordering::SeqCst),
+            )
+        };
+
+        flags.contains(RequestFlags::STATE_DIRTY)
     }
 }
 
