@@ -45,7 +45,6 @@ impl ClapHostRequest {
             coll_handle,
             [HostData {
                 plug_did_create: Arc::new(AtomicBool::new(false)),
-                plugin_id,
                 host_request,
                 host_audio_ports: [RawClapHostAudioPorts {
                     is_rescan_flag_supported: is_rescan_audio_ports_flag_supported,
@@ -119,7 +118,6 @@ impl Clone for ClapHostRequest {
 
 struct HostData {
     plug_did_create: Arc<AtomicBool>,
-    plugin_id: PluginInstanceID,
     host_request: HostRequest,
     host_audio_ports: [RawClapHostAudioPorts; 1],
     host_note_ports: [RawClapHostNotePorts; 1],

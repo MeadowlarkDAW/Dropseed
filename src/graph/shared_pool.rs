@@ -350,6 +350,7 @@ impl SharedBufferPool {
     ) -> Self {
         assert_ne!(audio_buffer_size, 0);
         assert_ne!(note_buffer_size, 0);
+        assert_ne!(event_buffer_size, 0);
 
         Self {
             audio_buffers_f32: Vec::new(),
@@ -503,7 +504,7 @@ impl SharedBufferPool {
                 buffer: Shared::new(
                     &self.coll_handle,
                     Buffer::new(
-                        self.note_buffer_size,
+                        self.event_buffer_size,
                         DebugBufferID {
                             buffer_type: DebugBufferType::EventBuffer,
                             index: index as u32,

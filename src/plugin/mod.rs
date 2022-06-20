@@ -146,6 +146,7 @@ pub trait PluginMainThread {
     /// By default this does nothing.
     ///
     /// `[main-thread]`
+    #[allow(unused)]
     fn load_state(&mut self, preset: &PluginPreset) -> Result<(), Box<dyn Error + Send>> {
         Ok(())
     }
@@ -323,4 +324,20 @@ pub trait PluginAudioThread: Send + Sync + 'static {
     /// [active && !processing : audio-thread]
     #[allow(unused)]
     fn param_flush(&mut self, in_events: &EventQueue, out_events: &mut EventQueue) {}
+
+    /// Only set this to `true` for internal plugins that are used to output
+    /// transport  events.
+    ///
+    /// By default this returns false.
+    fn allow_outputting_transport_events(&self) -> bool {
+        false
+    }
+
+    /// Only set this to `true` for internal plugins that are used to output
+    /// plugin automation events.
+    ///
+    /// By default this returns false.
+    fn allow_outputting_automation_events(&self) -> bool {
+        false
+    }
 }

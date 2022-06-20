@@ -146,12 +146,14 @@ unsafe extern "C" fn try_push(
         CLAP_EVENT_NOTE_EXPRESSION => {
             EventNoteExpression::from_raw(*(event as *const RawClapEventNoteExpression)).into()
         }
-        CLAP_EVENT_PARAM_VALUE => {
-            EventParamValue::from_raw(*(event as *const RawClapEventParamValue)).into()
-        }
-        CLAP_EVENT_PARAM_MOD => {
-            EventParamMod::from_raw(*(event as *const RawClapEventParamMod)).into()
-        }
+        CLAP_EVENT_PARAM_VALUE => ProcEvent::param_value(
+            EventParamValue::from_raw(*(event as *const RawClapEventParamValue)),
+            None,
+        ),
+        CLAP_EVENT_PARAM_MOD => ProcEvent::param_mod(
+            EventParamMod::from_raw(*(event as *const RawClapEventParamMod)),
+            None,
+        ),
         CLAP_EVENT_PARAM_GESTURE_BEGIN | CLAP_EVENT_PARAM_GESTURE_END => {
             EventParamGesture::from_raw(*(event as *const RawClapEventParamGesture)).into()
         }

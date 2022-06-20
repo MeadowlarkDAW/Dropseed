@@ -7,10 +7,10 @@ use crate::{
     engine::main_thread::{EngineActivatedInfo, ModifyGraphRes},
     engine::plugin_scanner::RescanPluginDirectoriesRes,
     graph::{
-        plugin_host::{PluginHandle, PluginParamsExt},
-        ActivatePluginError, AudioGraphSaveState, ParamModifiedInfo, PluginInstanceID,
+        plugin_host::PluginHandle, ActivatePluginError, AudioGraphSaveState, ParamModifiedInfo,
+        PluginInstanceID,
     },
-    ParamID, PluginAudioPortsExt,
+    ParamID,
 };
 
 #[derive(Debug)]

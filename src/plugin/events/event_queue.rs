@@ -33,8 +33,6 @@ impl EventQueue {
     }
 
     pub fn iter<'a>(&'a self) -> impl Iterator<Item = &'a ProcEvent> {
-        let s = self.events.iter();
-
         self.events.iter()
     }
 
@@ -51,8 +49,8 @@ impl EventQueue {
 pub enum ProcEventRef<'a> {
     Note(&'a EventNote),
     NoteExpression(&'a EventNoteExpression),
-    ParamValue(&'a EventParamValue),
-    ParamMod(&'a EventParamMod),
+    ParamValue(&'a EventParamValue, Option<audio_graph::NodeRef>),
+    ParamMod(&'a EventParamMod, Option<audio_graph::NodeRef>),
     ParamGesture(&'a EventParamGesture),
     Transport(&'a EventTransport),
     Midi(&'a EventMidi),
@@ -63,8 +61,8 @@ pub enum ProcEventRef<'a> {
 pub enum ProcEventRefMut<'a> {
     Note(&'a mut EventNote),
     NoteExpression(&'a mut EventNoteExpression),
-    ParamValue(&'a mut EventParamValue),
-    ParamMod(&'a mut EventParamMod),
+    ParamValue(&'a mut EventParamValue, Option<&'a mut audio_graph::NodeRef>),
+    ParamMod(&'a mut EventParamMod, Option<&'a mut audio_graph::NodeRef>),
     ParamGesture(&'a mut EventParamGesture),
     Transport(&'a mut EventTransport),
     Midi(&'a mut EventMidi),
@@ -77,8 +75,8 @@ pub enum ProcEventRefMut<'a> {
 pub union ProcEvent {
     note: EventNote,
     note_expression: EventNoteExpression,
-    param_value: EventParamValue,
-    param_mod: EventParamMod,
+    param_value: (EventParamValue, Option<audio_graph::NodeRef>),
+    param_mod: (EventParamMod, Option<audio_graph::NodeRef>),
     param_gesture: EventParamGesture,
     transport: EventTransport,
     midi: EventMidi,
@@ -91,12 +89,27 @@ impl ProcEvent {
         unsafe { &self.note.0.header }
     }
 
+    pub fn param_value(
+        event: EventParamValue,
+        target_plugin: Option<audio_graph::NodeRef>,
+    ) -> Self {
+        Self { param_value: (event, target_plugin) }
+    }
+
+    pub fn param_mod(event: EventParamMod, target_plugin: Option<audio_graph::NodeRef>) -> Self {
+        Self { param_mod: (event, target_plugin) }
+    }
+
     pub fn from_ref<'a>(event: ProcEventRef<'a>) -> Self {
         match event {
             ProcEventRef::Note(e) => ProcEvent { note: *e },
             ProcEventRef::NoteExpression(e) => ProcEvent { note_expression: *e },
-            ProcEventRef::ParamValue(e) => ProcEvent { param_value: *e },
-            ProcEventRef::ParamMod(e) => ProcEvent { param_mod: *e },
+            ProcEventRef::ParamValue(e, target_plugin) => {
+                ProcEvent { param_value: (*e, target_plugin) }
+            }
+            ProcEventRef::ParamMod(e, target_plugin) => {
+                ProcEvent { param_mod: (*e, target_plugin) }
+            }
             ProcEventRef::ParamGesture(e) => ProcEvent { param_gesture: *e },
             ProcEventRef::Transport(e) => ProcEvent { transport: *e },
             ProcEventRef::Midi(e) => ProcEvent { midi: *e },
@@ -120,10 +133,14 @@ impl ProcEvent {
                 Ok(ProcEventRef::NoteExpression(unsafe { &self.note_expression }))
             }
             clap_sys::events::CLAP_EVENT_PARAM_VALUE => {
-                Ok(ProcEventRef::ParamValue(unsafe { &self.param_value }))
+                Ok(ProcEventRef::ParamValue(unsafe { &self.param_value.0 }, unsafe {
+                    self.param_value.1
+                }))
             }
             clap_sys::events::CLAP_EVENT_PARAM_MOD => {
-                Ok(ProcEventRef::ParamMod(unsafe { &self.param_mod }))
+                Ok(ProcEventRef::ParamMod(unsafe { &self.param_mod.0 }, unsafe {
+                    self.param_mod.1
+                }))
             }
             clap_sys::events::CLAP_EVENT_PARAM_GESTURE_BEGIN
             | clap_sys::events::CLAP_EVENT_PARAM_GESTURE_END => {
@@ -156,10 +173,14 @@ impl ProcEvent {
                 Ok(ProcEventRefMut::NoteExpression(unsafe { &mut self.note_expression }))
             }
             clap_sys::events::CLAP_EVENT_PARAM_VALUE => {
-                Ok(ProcEventRefMut::ParamValue(unsafe { &mut self.param_value }))
+                Ok(ProcEventRefMut::ParamValue(unsafe { &mut self.param_value.0 }, unsafe {
+                    self.param_value.1.as_mut()
+                }))
             }
             clap_sys::events::CLAP_EVENT_PARAM_MOD => {
-                Ok(ProcEventRefMut::ParamMod(unsafe { &mut self.param_mod }))
+                Ok(ProcEventRefMut::ParamMod(unsafe { &mut self.param_mod.0 }, unsafe {
+                    self.param_mod.1.as_mut()
+                }))
             }
             clap_sys::events::CLAP_EVENT_PARAM_GESTURE_BEGIN
             | clap_sys::events::CLAP_EVENT_PARAM_GESTURE_END => {
@@ -191,18 +212,6 @@ impl From<EventNote> for ProcEvent {
 impl From<EventNoteExpression> for ProcEvent {
     fn from(e: EventNoteExpression) -> Self {
         ProcEvent { note_expression: e }
-    }
-}
-
-impl From<EventParamValue> for ProcEvent {
-    fn from(e: EventParamValue) -> Self {
-        ProcEvent { param_value: e }
-    }
-}
-
-impl From<EventParamMod> for ProcEvent {
-    fn from(e: EventParamMod) -> Self {
-        ProcEvent { param_mod: e }
     }
 }
 

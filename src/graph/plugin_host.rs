@@ -463,6 +463,11 @@ impl PluginInstanceHost {
                 let mut is_adjusting_parameter = FnvHashMap::default();
                 is_adjusting_parameter.reserve(num_params * 2);
 
+                let allow_outputting_transport_events =
+                    plugin_audio_thread.allow_outputting_transport_events();
+                let allow_outputting_automation_events =
+                    plugin_audio_thread.allow_outputting_automation_events();
+
                 Ok((
                     PluginInstanceHostAudioThread {
                         id: self.id.clone(),
@@ -472,6 +477,8 @@ impl PluginInstanceHost {
                         in_events: EventQueue::new(num_params * 3),
                         out_events: EventQueue::new(num_params * 3),
                         is_adjusting_parameter,
+                        allow_outputting_transport_events,
+                        allow_outputting_automation_events,
                         host_request: self.host_request.clone(),
                     },
                     PluginHandle { audio_ports, note_ports, params: params_ext },
@@ -630,6 +637,9 @@ pub(crate) struct PluginInstanceHostAudioThread {
 
     is_adjusting_parameter: FnvHashMap<ParamID, bool>,
 
+    allow_outputting_transport_events: bool,
+    allow_outputting_automation_events: bool,
+
     host_request: HostRequest,
 }
 
@@ -705,7 +715,7 @@ impl PluginInstanceHostAudioThread {
             params_queue.ui_to_audio_param_value_rx.consume(|param_id, value| {
                 has_param_in_event = true;
 
-                self.in_events.push(
+                self.in_events.push(ProcEvent::param_value(
                     EventParamValue::new(
                         // TODO: Finer values for `time` instead of just setting it to the first frame?
                         0,                   // time
@@ -721,15 +731,15 @@ impl PluginInstanceHostAudioThread {
                         // TODO: Key
                         -1,          // key
                         value.value, // value
-                    )
-                    .into(),
-                )
+                    ),
+                    None,
+                ))
             });
 
             params_queue.ui_to_audio_param_mod_rx.consume(|param_id, value| {
                 has_param_in_event = true;
 
-                self.in_events.push(
+                self.in_events.push(ProcEvent::param_mod(
                     EventParamMod::new(
                         // TODO: Finer values for `time` instead of just setting it to the first frame?
                         0,                   // time
@@ -745,9 +755,9 @@ impl PluginInstanceHostAudioThread {
                         // TODO: Key
                         -1,          // key
                         value.value, // value
-                    )
-                    .into(),
-                )
+                    ),
+                    None,
+                ))
             });
         }
 
@@ -789,9 +799,29 @@ impl PluginInstanceHostAudioThread {
                 for mut event in b.drain(..) {
                     let do_add = if let Ok(event) = ProcEvent::get_mut(&mut event) {
                         match event {
-                            ProcEventRefMut::ParamMod(_) => {
-                                has_param_in_event = true;
-                                true
+                            ProcEventRefMut::ParamValue(_, target_plugin) => {
+                                if let Some(target_plugin) = target_plugin {
+                                    if *target_plugin == self.id.node_ref {
+                                        has_param_in_event = true;
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
+                                }
+                            }
+                            ProcEventRefMut::ParamMod(_, target_plugin) => {
+                                if let Some(target_plugin) = target_plugin {
+                                    if *target_plugin == self.id.node_ref {
+                                        has_param_in_event = true;
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
+                                }
                             }
                             ProcEventRefMut::Transport(_) => true,
                             _ => false,
@@ -923,7 +953,7 @@ impl PluginInstanceHostAudioThread {
                                 queue.set_or_update(event.param_id(), value);
                             }
                         }
-                        Ok(ProcEventRefMut::ParamValue(event)) => {
+                        Ok(ProcEventRefMut::ParamValue(event, target_plugin)) => {
                             // TODO: Use event.time for more accurate recording of automation.
 
                             let value = AudioToMainParamValue {
@@ -931,15 +961,28 @@ impl PluginInstanceHostAudioThread {
                                 gesture: None,
                             };
 
-                            queue.set_or_update(event.param_id(), value);
+                            if self.allow_outputting_automation_events {
+                                if target_plugin.is_some() {
+                                    if event_out_buffer.is_some() {
+                                        push_to_event_out = true;
+                                    }
+                                } else {
+                                    // If `target_plugin` is `None`, then it means that this is a parameter
+                                    // event for one of this plugin's internal parameters, and is meant to
+                                    // be sent to the UI, not another plugin.
+                                    queue.set_or_update(event.param_id(), value);
+                                }
+                            } else {
+                                queue.set_or_update(event.param_id(), value);
+                            }
                         }
-                        Ok(ProcEventRefMut::ParamMod(_)) => {
-                            if event_out_buffer.is_some() {
+                        Ok(ProcEventRefMut::ParamMod(_, _)) => {
+                            if event_out_buffer.is_some() && self.allow_outputting_automation_events {
                                 push_to_event_out = true;
                             }
                         }
                         Ok(ProcEventRefMut::Transport(_)) => {
-                            if event_out_buffer.is_some() {
+                            if event_out_buffer.is_some() && self.allow_outputting_transport_events {
                                 push_to_event_out = true;
                             }
                         }
@@ -991,13 +1034,25 @@ impl PluginInstanceHostAudioThread {
                 let mut push_to_event_out = false;
                 let mut push_to_note_out_i = None;
                 match ProcEvent::get_mut(&mut out_event) {
-                    Ok(ProcEventRefMut::ParamMod(_)) => {
-                        if event_out_buffer.is_some() {
+                    Ok(ProcEventRefMut::ParamValue(_, target_plugin)) => {
+                        if self.allow_outputting_automation_events {
+                            // If `target_plugin` is `None`, then it means that this is a parameter
+                            // event for one of this plugin's internal parameters, and is meant to
+                            // be sent to the UI, not another plugin.
+                            if target_plugin.is_some() {
+                                if event_out_buffer.is_some() {
+                                    push_to_event_out = true;
+                                }
+                            }
+                        }
+                    }
+                    Ok(ProcEventRefMut::ParamMod(_, _)) => {
+                        if event_out_buffer.is_some() && self.allow_outputting_automation_events {
                             push_to_event_out = true;
                         }
                     }
                     Ok(ProcEventRefMut::Transport(_)) => {
-                        if event_out_buffer.is_some() {
+                        if event_out_buffer.is_some() && self.allow_outputting_transport_events {
                             push_to_event_out = true;
                         }
                     }
