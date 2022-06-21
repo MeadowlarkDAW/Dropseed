@@ -3,6 +3,7 @@ use basedrop::Shared;
 use crossbeam::channel::Sender;
 use fnv::FnvHashMap;
 use fnv::FnvHashSet;
+use maybe_atomic_refcell::MaybeAtomicRefCell;
 use meadowlark_core_types::SampleRate;
 use smallvec::SmallVec;
 use std::error::Error;
@@ -28,6 +29,9 @@ use crate::plugin::ext::audio_ports::PluginAudioPortsExt;
 use crate::plugin::ext::note_ports::PluginNotePortsExt;
 use crate::plugin::host_request::{HostInfo, HostRequest};
 use crate::plugin::PluginSaveState;
+use crate::transport::TempoMap;
+use crate::transport::TransportHandle;
+use crate::transport::TransportTask;
 use crate::utils::thread_id::SharedThreadIDs;
 use crate::ParamID;
 
@@ -45,7 +49,7 @@ pub use verifier::VerifyScheduleError;
 pub enum PortType {
     /// Audio ports
     Audio,
-    Event,
+    ParamAutomation,
     Note,
 }
 
@@ -91,6 +95,8 @@ pub(crate) struct AudioGraph {
     graph_out_rdn: Shared<String>,
     temp_rdn: Shared<String>,
 
+    shared_transport_task: Shared<MaybeAtomicRefCell<TransportTask>>,
+
     sample_rate: SampleRate,
     min_frames: u32,
     max_frames: u32,
@@ -108,8 +114,8 @@ impl AudioGraph {
         note_buffer_size: usize,
         event_buffer_size: usize,
         thread_ids: SharedThreadIDs,
-    ) -> (Self, SharedSchedule) {
-        assert!(graph_in_channels > 0);
+    ) -> (Self, SharedSchedule, TransportHandle) {
+        //assert!(graph_in_channels > 0);
         assert!(graph_out_channels > 0);
 
         let abstract_graph = Graph::default();
@@ -122,8 +128,17 @@ impl AudioGraph {
             coll_handle.clone(),
         );
 
-        let (shared_schedule, shared_schedule_clone) =
-            SharedSchedule::new(Schedule::empty(max_frames as usize), thread_ids, &coll_handle);
+        let (transport_task, transport_handle) =
+            TransportTask::new(None, sample_rate, coll_handle.clone());
+
+        let shared_transport_task =
+            Shared::new(&coll_handle, MaybeAtomicRefCell::new(transport_task));
+
+        let (shared_schedule, shared_schedule_clone) = SharedSchedule::new(
+            Schedule::new(max_frames as usize, Shared::clone(&shared_transport_task)),
+            thread_ids,
+            &coll_handle,
+        );
 
         let graph_in_rdn = Shared::new(&coll_handle, String::from("org.rustydaw.graph_in_node"));
         let graph_out_rdn = Shared::new(&coll_handle, String::from("org.rustydaw.graph_out_node"));
@@ -156,6 +171,7 @@ impl AudioGraph {
             graph_in_rdn,
             graph_out_rdn,
             temp_rdn,
+            shared_transport_task,
             sample_rate,
             min_frames,
             max_frames,
@@ -163,7 +179,7 @@ impl AudioGraph {
 
         new_self.reset();
 
-        (new_self, shared_schedule_clone)
+        (new_self, shared_schedule_clone, transport_handle)
     }
 
     pub fn graph_in_node_id(&self) -> &PluginInstanceID {
@@ -265,6 +281,7 @@ impl AudioGraph {
                 entry,
                 new_handle.audio_ports(),
                 new_handle.note_ports(),
+                entry.plugin_host.has_automation_out_port(),
             );
         }
 
@@ -581,8 +598,10 @@ impl AudioGraph {
             }
         }
 
-        self.shared_schedule
-            .set_new_schedule(Schedule::empty(self.max_frames as usize), &self.coll_handle);
+        self.shared_schedule.set_new_schedule(
+            Schedule::new(self.max_frames as usize, Shared::clone(&self.shared_transport_task)),
+            &self.coll_handle,
+        );
 
         self.shared_plugin_pool.plugins.clear();
         self.shared_buffer_pool.remove_excess_buffers(0, 0, 0, 0);
@@ -761,6 +780,7 @@ impl AudioGraph {
             &mut self.shared_plugin_pool,
             &mut self.shared_buffer_pool,
             &mut self.abstract_graph,
+            &self.shared_transport_task,
             &self.graph_in_node_id,
             &self.graph_out_node_id,
             &mut self.verifier,
@@ -775,8 +795,13 @@ impl AudioGraph {
             Err(e) => {
                 // Replace the current schedule with an emtpy one now that the graph
                 // is in an invalid state.
-                self.shared_schedule
-                    .set_new_schedule(Schedule::empty(self.max_frames as usize), &self.coll_handle);
+                self.shared_schedule.set_new_schedule(
+                    Schedule::new(
+                        self.max_frames as usize,
+                        Shared::clone(&self.shared_transport_task),
+                    ),
+                    &self.coll_handle,
+                );
                 Err(e)
             }
         }
@@ -827,6 +852,7 @@ impl AudioGraph {
                         plugin,
                         new_handle.audio_ports(),
                         new_handle.note_ports(),
+                        plugin.plugin_host.has_automation_out_port(),
                     );
 
                     recompile_graph = true;
@@ -879,6 +905,12 @@ impl AudioGraph {
 
         recompile_graph
     }
+
+    pub fn update_tempo_map(&mut self, new_tempo_map: Shared<TempoMap>) {
+        for plugin in self.shared_plugin_pool.plugins.values_mut() {
+            plugin.plugin_host.update_tempo_map(&new_tempo_map);
+        }
+    }
 }
 
 fn update_plugin_ports(
@@ -886,6 +918,7 @@ fn update_plugin_ports(
     entry: &mut PluginInstanceHostEntry,
     audio_ports: &PluginAudioPortsExt,
     note_ports: &PluginNotePortsExt,
+    has_automation_out_port: bool,
 ) {
     let mut prev_port_channel_refs = entry.port_channels_refs.clone();
     entry.port_channels_refs.clear();
@@ -932,32 +965,44 @@ fn update_plugin_ports(
         }
     }
 
-    // Plugins always have one event in port and one event out port.
-    const IN_EVENT_PORT_ID: PortChannelID = PortChannelID {
-        port_type: PortType::Event,
+    const IN_AUTOMATION_PORT_ID: PortChannelID = PortChannelID {
+        port_type: PortType::ParamAutomation,
         port_stable_id: 0,
         is_input: true,
         port_channel: 0,
     };
-    const OUT_EVENT_PORT_ID: PortChannelID = PortChannelID {
-        port_type: PortType::Event,
+    const OUT_AUTOMATION_PORT_ID: PortChannelID = PortChannelID {
+        port_type: PortType::ParamAutomation,
         port_stable_id: 1,
         is_input: false,
         port_channel: 0,
     };
-    if prev_port_channel_refs.get(&IN_EVENT_PORT_ID).is_none() {
+
+    // Plugins always have one automation in port.
+    if prev_port_channel_refs.get(&IN_AUTOMATION_PORT_ID).is_none() {
         let in_port_ref = abstract_graph
-            .port(entry.plugin_host.id.node_ref, PortType::Event, IN_EVENT_PORT_ID)
-            .unwrap();
-        let out_port_ref = abstract_graph
-            .port(entry.plugin_host.id.node_ref, PortType::Event, OUT_EVENT_PORT_ID)
+            .port(entry.plugin_host.id.node_ref, PortType::ParamAutomation, IN_AUTOMATION_PORT_ID)
             .unwrap();
 
-        let _ = entry.port_channels_refs.insert(IN_EVENT_PORT_ID, in_port_ref);
-        let _ = entry.port_channels_refs.insert(OUT_EVENT_PORT_ID, out_port_ref);
+        let _ = entry.port_channels_refs.insert(IN_AUTOMATION_PORT_ID, in_port_ref);
     } else {
-        let _ = prev_port_channel_refs.remove(&IN_EVENT_PORT_ID);
-        let _ = prev_port_channel_refs.remove(&OUT_EVENT_PORT_ID);
+        let _ = prev_port_channel_refs.remove(&IN_AUTOMATION_PORT_ID);
+    }
+
+    if has_automation_out_port {
+        if prev_port_channel_refs.get(&OUT_AUTOMATION_PORT_ID).is_none() {
+            let out_port_ref = abstract_graph
+                .port(
+                    entry.plugin_host.id.node_ref,
+                    PortType::ParamAutomation,
+                    OUT_AUTOMATION_PORT_ID,
+                )
+                .unwrap();
+
+            let _ = entry.port_channels_refs.insert(OUT_AUTOMATION_PORT_ID, out_port_ref);
+        } else {
+            let _ = prev_port_channel_refs.remove(&OUT_AUTOMATION_PORT_ID);
+        }
     }
 
     for note_in_port in note_ports.inputs.iter() {
@@ -1005,8 +1050,10 @@ fn update_plugin_ports(
 
 impl Drop for AudioGraph {
     fn drop(&mut self) {
-        self.shared_schedule
-            .set_new_schedule(Schedule::empty(self.max_frames as usize), &self.coll_handle);
+        self.shared_schedule.set_new_schedule(
+            Schedule::new(self.max_frames as usize, Shared::clone(&self.shared_transport_task)),
+            &self.coll_handle,
+        );
     }
 }
 

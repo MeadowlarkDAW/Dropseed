@@ -1,3 +1,4 @@
+use basedrop::Shared;
 use meadowlark_core_types::SampleRate;
 use std::error::Error;
 
@@ -8,7 +9,7 @@ pub mod host_request;
 pub(crate) mod process_info;
 mod save_state;
 
-use crate::{EventQueue, ParamID, PluginInstanceID};
+use crate::{transport::TempoMap, EventQueue, ParamID, PluginInstanceID};
 use host_request::HostRequest;
 use process_info::{ProcBuffers, ProcInfo, ProcessStatus};
 pub use save_state::{PluginPreset, PluginSaveState};
@@ -272,6 +273,27 @@ pub trait PluginMainThread {
     /// [!active : main-thread]
     #[allow(unused)]
     fn param_flush(&mut self, in_events: &EventQueue, out_events: &mut EventQueue) {}
+
+    /// Called when the tempo map is updated.
+    ///
+    /// By default this does nothing.
+    ///
+    /// [main-thread]
+    #[allow(unused)]
+    fn update_tempo_map(&mut self, new_tempo_map: &Shared<TempoMap>) {}
+
+    /// Whether or not this plugin has an automation out port (seperate from audio and note
+    /// out ports).
+    ///
+    /// Only return `true` for internal plugins which output parameter automation events for
+    /// other plugins.
+    ///
+    /// By default this returns `false`.
+    ///
+    /// [main-thread]
+    fn has_automation_out_port(&self) -> bool {
+        false
+    }
 }
 
 /// The methods of an audio plugin instance which run in the "audio" thread.
@@ -324,20 +346,4 @@ pub trait PluginAudioThread: Send + Sync + 'static {
     /// [active && !processing : audio-thread]
     #[allow(unused)]
     fn param_flush(&mut self, in_events: &EventQueue, out_events: &mut EventQueue) {}
-
-    /// Only set this to `true` for internal plugins that are used to output
-    /// transport  events.
-    ///
-    /// By default this returns false.
-    fn allow_outputting_transport_events(&self) -> bool {
-        false
-    }
-
-    /// Only set this to `true` for internal plugins that are used to output
-    /// plugin automation events.
-    ///
-    /// By default this returns false.
-    fn allow_outputting_automation_events(&self) -> bool {
-        false
-    }
 }

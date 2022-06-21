@@ -2,6 +2,7 @@ use basedrop::{Shared, SharedCell};
 use maybe_atomic_refcell::MaybeAtomicRefCell;
 use smallvec::SmallVec;
 
+use crate::transport::TransportTask;
 use crate::utils::thread_id::SharedThreadIDs;
 use crate::ProcInfo;
 
@@ -20,15 +21,21 @@ pub struct Schedule {
     pub(crate) graph_audio_out: SmallVec<[SharedBuffer<f32>; 4]>,
 
     pub(crate) max_block_size: usize,
+
+    pub(crate) shared_transport_task: Shared<MaybeAtomicRefCell<TransportTask>>,
 }
 
 impl Schedule {
-    pub(crate) fn empty(max_block_size: usize) -> Self {
+    pub(crate) fn new(
+        max_block_size: usize,
+        shared_transport_task: Shared<MaybeAtomicRefCell<TransportTask>>,
+    ) -> Self {
         Self {
             tasks: Vec::new(),
             graph_audio_in: SmallVec::new(),
             graph_audio_out: SmallVec::new(),
             max_block_size,
+            shared_transport_task,
         }
     }
 }
@@ -94,9 +101,16 @@ impl Schedule {
         while processed_frames < total_frames {
             let frames = (total_frames - processed_frames).min(self.max_block_size);
 
+            let transport = {
+                let mut transport_task =
+                    unsafe { MaybeAtomicRefCell::borrow_mut(&*self.shared_transport_task) };
+                transport_task.process(frames)
+            };
+
             let proc_info = ProcInfo {
                 steady_time: -1, // TODO
                 frames,
+                transport,
             };
 
             for (ch_i, in_buffer) in self.graph_audio_in.iter().enumerate() {

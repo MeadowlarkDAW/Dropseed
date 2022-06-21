@@ -39,17 +39,17 @@ impl std::fmt::Debug for Task {
                     f.field("audio_out", &s);
                 }
 
-                if let Some(event_in_buffers) = &t.event_in_buffers {
+                if let Some(automation_in_buffers) = &t.automation_in_buffers {
                     let mut s = String::new();
-                    for b in event_in_buffers.iter() {
+                    for b in automation_in_buffers.iter() {
                         s.push_str(&format!("{:?}, ", b.id()))
                     }
 
-                    f.field("event_in", &s);
+                    f.field("automation_in", &s);
                 }
 
-                if let Some(event_out_buffer) = &t.event_out_buffer {
-                    f.field("event_out", &format!("{:?}", event_out_buffer.id()));
+                if let Some(automation_out_buffer) = &t.automation_out_buffer {
+                    f.field("automation_out", &format!("{:?}", automation_out_buffer.id()));
                 }
 
                 if !t.note_in_buffers.is_empty() {
@@ -129,8 +129,8 @@ impl std::fmt::Debug for Task {
                 }
                 f.field("extra_audio_out", &s);
 
-                if let Some(event_out_buffer) = &t.event_out_buffer {
-                    f.field("event_out", &format!("{:?}", event_out_buffer.id()));
+                if let Some(automation_out_buffer) = &t.automation_out_buffer {
+                    f.field("automation_out", &format!("{:?}", automation_out_buffer.id()));
                 }
 
                 if !t.note_out_buffers.is_empty() {
@@ -171,8 +171,8 @@ pub(crate) struct PluginTask {
 
     pub buffers: ProcBuffers,
 
-    pub event_in_buffers: Option<SmallVec<[SharedBuffer<ProcEvent>; 2]>>,
-    pub event_out_buffer: Option<SharedBuffer<ProcEvent>>,
+    pub automation_in_buffers: Option<SmallVec<[SharedBuffer<ProcEvent>; 2]>>,
+    pub automation_out_buffer: Option<SharedBuffer<ProcEvent>>,
 
     pub note_in_buffers: SmallVec<[Option<SmallVec<[SharedBuffer<ProcEvent>; 2]>>; 2]>,
     pub note_out_buffers: SmallVec<[Option<SharedBuffer<ProcEvent>>; 2]>,
@@ -189,8 +189,8 @@ impl PluginTask {
         plugin_audio_thread.process(
             proc_info,
             &mut self.buffers,
-            &self.event_in_buffers,
-            &self.event_out_buffer,
+            &self.automation_in_buffers,
+            &self.automation_out_buffer,
             &self.note_in_buffers,
             &self.note_out_buffers,
         );
@@ -220,7 +220,7 @@ pub(crate) struct DeactivatedPluginTask {
     pub audio_through: SmallVec<[(SharedBuffer<f32>, SharedBuffer<f32>); 4]>,
     pub extra_audio_out: SmallVec<[SharedBuffer<f32>; 4]>,
 
-    pub event_out_buffer: Option<SharedBuffer<ProcEvent>>,
+    pub automation_out_buffer: Option<SharedBuffer<ProcEvent>>,
 
     pub note_out_buffers: SmallVec<[Option<SharedBuffer<ProcEvent>>; 2]>,
 }
@@ -259,7 +259,7 @@ impl DeactivatedPluginTask {
             for out_buf in self.extra_audio_out.iter() {
                 out_buf.clear_f32(proc_info.frames);
             }
-            if let Some(out_buf) = &self.event_out_buffer {
+            if let Some(out_buf) = &self.automation_out_buffer {
                 let mut b = out_buf.borrow_mut();
                 b.clear();
             }

@@ -30,6 +30,10 @@ pub struct DSEngineHandle {
     host_info: HostInfo,
 }
 
+struct SpawnEngineRes {
+    internal_plugin_res: Vec<Result<ScannedPluginKey, Box<dyn Error + Send>>>,
+}
+
 impl DSEngineHandle {
     pub fn new(
         host_info: HostInfo,
@@ -38,8 +42,7 @@ impl DSEngineHandle {
         let (event_tx, event_rx) = channel::unbounded::<DSEngineEvent>();
         let (handle_to_engine_tx, handle_to_engine_rx) = channel::unbounded::<DSEngineRequest>();
 
-        let (internal_plugin_res_tx, internal_plugin_res_rx) =
-            channel::bounded::<Vec<Result<ScannedPluginKey, Box<dyn Error + Send>>>>(1);
+        let (spawn_engine_res_tx, spawn_engine_res_rx) = channel::bounded::<SpawnEngineRes>(1);
 
         let host_info_clone = host_info.clone();
 
@@ -58,19 +61,18 @@ impl DSEngineHandle {
                 event_tx_clone,
             );
 
-            internal_plugin_res_tx.send(internal_plugin_res).unwrap();
-            let _ = internal_plugin_res_tx;
+            spawn_engine_res_tx.send(SpawnEngineRes { internal_plugin_res }).unwrap();
+            let _ = spawn_engine_res_tx;
 
             engine.run(run_sandboxed_thread);
         });
 
-        let internal_plugins_res =
-            internal_plugin_res_rx.recv_timeout(Duration::from_secs(20)).unwrap();
-        let _ = internal_plugin_res_rx;
+        let spawn_engine_res = spawn_engine_res_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+        let _ = spawn_engine_res_rx;
 
         (
             Self {
-                internal_plugins_res,
+                internal_plugins_res: spawn_engine_res.internal_plugin_res,
                 handle_to_engine_tx,
                 sandboxed_thread_handle: Some(sandboxed_thread_handle),
                 run_sandboxed_thread: run_sandboxed_thread_clone,

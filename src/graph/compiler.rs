@@ -1,10 +1,13 @@
 use audio_graph::{Graph, ScheduledNode};
+use basedrop::Shared;
+use maybe_atomic_refcell::MaybeAtomicRefCell;
 use smallvec::SmallVec;
 use std::error::Error;
 
 use crate::graph::shared_pool::{DelayCompKey, SharedDelayCompNode};
 use crate::plugin::ext::audio_ports::MainPortsLayout;
 use crate::plugin::process_info::ProcBuffers;
+use crate::transport::TransportTask;
 use crate::{AudioPortBuffer, AudioPortBufferMut, ProcEvent};
 
 use super::{
@@ -19,6 +22,7 @@ pub(crate) fn compile_graph(
     shared_plugin_pool: &mut SharedPluginPool,
     shared_buffer_pool: &mut SharedBufferPool,
     abstract_graph: &mut Graph<PluginInstanceID, PortChannelID, PortType>,
+    shared_transport_task: &Shared<MaybeAtomicRefCell<TransportTask>>,
     graph_in_node_id: &PluginInstanceID,
     graph_out_node_id: &PluginInstanceID,
     verifier: &mut Verifier,
@@ -34,7 +38,7 @@ pub(crate) fn compile_graph(
     let mut total_intermediary_buffers = 0;
     let mut max_graph_audio_buffer_index = 0;
     let mut max_graph_note_buffer_index = 0;
-    let mut max_graph_event_buffer_index = 0;
+    let mut max_graph_automation_buffer_index = 0;
 
     for node in shared_plugin_pool.delay_comp_nodes.values_mut() {
         node.active = false;
@@ -92,8 +96,8 @@ pub(crate) fn compile_graph(
             note_out_buffers.push(None);
         }
 
-        let mut event_in_buffers: Option<SmallVec<[SharedBuffer<ProcEvent>; 2]>> = None;
-        let mut event_out_buffer: Option<SharedBuffer<ProcEvent>> = None;
+        let mut automation_in_buffers: Option<SmallVec<[SharedBuffer<ProcEvent>; 2]>> = None;
+        let mut automation_out_buffer: Option<SharedBuffer<ProcEvent>> = None;
 
         let mut next_audio_in_channel_index = 0;
         let mut next_audio_out_channel_index = 0;
@@ -202,22 +206,22 @@ pub(crate) fn compile_graph(
 
                     plugin_in_channel_buffers[channel_index] = Some(channel_buffer);
                 }
-                PortType::Event => {
+                PortType::ParamAutomation => {
                     let mut bufs: SmallVec<[SharedBuffer<ProcEvent>; 2]> =
                         SmallVec::with_capacity(buffers.len());
 
                     for (buffer, _delay_comp_info) in buffers.iter() {
                         // TODO: Use delay compensation?
 
-                        max_graph_event_buffer_index =
-                            max_graph_event_buffer_index.max(buffer.buffer_id);
+                        max_graph_automation_buffer_index =
+                            max_graph_automation_buffer_index.max(buffer.buffer_id);
 
-                        let buffer = shared_buffer_pool.event_buffer(buffer.buffer_id);
+                        let buffer = shared_buffer_pool.automation_buffer(buffer.buffer_id);
 
                         bufs.push(buffer);
                     }
 
-                    event_in_buffers = Some(bufs);
+                    automation_in_buffers = Some(bufs);
                 }
                 PortType::Note => {
                     if let Some(note_ports_ext) = note_ports_ext {
@@ -277,13 +281,13 @@ pub(crate) fn compile_graph(
                     let graph_buffer = shared_buffer_pool.audio_f32(buffer.buffer_id);
                     plugin_out_channel_buffers[channel_index] = Some(graph_buffer);
                 }
-                PortType::Event => {
-                    max_graph_event_buffer_index =
-                        max_graph_event_buffer_index.max(buffer.buffer_id);
+                PortType::ParamAutomation => {
+                    max_graph_automation_buffer_index =
+                        max_graph_automation_buffer_index.max(buffer.buffer_id);
 
-                    let buffer = shared_buffer_pool.event_buffer(buffer.buffer_id);
+                    let buffer = shared_buffer_pool.automation_buffer(buffer.buffer_id);
 
-                    event_out_buffer = Some(buffer);
+                    automation_out_buffer = Some(buffer);
                 }
                 PortType::Note => {
                     if let Some(note_ports_ext) = note_ports_ext {
@@ -371,7 +375,7 @@ pub(crate) fn compile_graph(
             tasks.push(Task::DeactivatedPlugin(DeactivatedPluginTask {
                 audio_through,
                 extra_audio_out,
-                event_out_buffer,
+                automation_out_buffer,
                 note_out_buffers,
             }));
 
@@ -416,8 +420,8 @@ pub(crate) fn compile_graph(
         tasks.push(Task::Plugin(PluginTask {
             plugin: plugin_audio_thread,
             buffers: ProcBuffers { audio_in, audio_out, task_version },
-            event_in_buffers,
-            event_out_buffer,
+            automation_in_buffers,
+            automation_out_buffer,
             note_in_buffers,
             note_out_buffers,
         }));
@@ -428,6 +432,7 @@ pub(crate) fn compile_graph(
         graph_audio_in,
         graph_audio_out,
         max_block_size: shared_buffer_pool.audio_buffer_size as usize,
+        shared_transport_task: Shared::clone(shared_transport_task),
     };
 
     // This is probably expensive, but I would like to keep this check here until we are very
@@ -448,7 +453,7 @@ pub(crate) fn compile_graph(
         max_graph_audio_buffer_index,
         total_intermediary_buffers,
         max_graph_note_buffer_index,
-        max_graph_event_buffer_index,
+        max_graph_automation_buffer_index,
     );
 
     // TODO: Optimize this?

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use crate::engine::main_thread::{ActivateEngineSettings, ModifyGraphRequest};
 use crate::graph::AudioGraphSaveState;
+use crate::transport::TempoMap;
 
 #[derive(Debug, Clone)]
 /// A request to the engine.
@@ -35,6 +36,8 @@ pub enum DSEngineRequest {
 
     /// Rescan all plugin directories.
     RescanPluginDirectories,
+
+    UpdateTempoMap(Box<TempoMap>),
 }
 
 impl From<ModifyGraphRequest> for DSEngineRequest {

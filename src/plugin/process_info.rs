@@ -1,5 +1,7 @@
 use smallvec::SmallVec;
 
+use crate::TransportInfo;
+
 use super::audio_buffer::{AudioPortBuffer, AudioPortBufferMut};
 
 /// The status of a call to a plugin's `process()` method.
@@ -39,6 +41,8 @@ pub struct ProcInfo {
     /// The number of frames to process. All buffers in this struct are gauranteed to be
     /// at-least this length.
     pub frames: usize,
+
+    pub transport: TransportInfo,
 }
 
 pub struct ProcBuffers {

@@ -20,6 +20,7 @@ use crate::plugin::ext::params::{ParamInfo, ParamInfoFlags};
 use crate::plugin::host_request::RequestFlags;
 use crate::plugin::process_info::ProcBuffers;
 use crate::plugin::{PluginAudioThread, PluginMainThread, PluginPreset, PluginSaveState};
+use crate::transport::TempoMap;
 use crate::utils::reducing_queue::{
     ReducFnvConsumer, ReducFnvProducer, ReducFnvValue, ReducingFnvQueue,
 };
@@ -71,6 +72,7 @@ pub struct PluginHandle {
     pub params: PluginParamsExt,
     pub(crate) audio_ports: PluginAudioPortsExt,
     pub(crate) note_ports: PluginNotePortsExt,
+    pub(crate) has_automation_out_port: bool,
 }
 
 impl PluginHandle {
@@ -80,6 +82,14 @@ impl PluginHandle {
 
     pub fn note_ports(&self) -> &PluginNotePortsExt {
         &self.note_ports
+    }
+
+    /// This will only return `true` for internal plugins which send parameter
+    /// automation events to other plugins.
+    ///
+    /// Note, plugins always have an "automation in port".
+    pub fn has_automation_out_port(&self) -> bool {
+        self.has_automation_out_port
     }
 }
 
@@ -463,10 +473,7 @@ impl PluginInstanceHost {
                 let mut is_adjusting_parameter = FnvHashMap::default();
                 is_adjusting_parameter.reserve(num_params * 2);
 
-                let allow_outputting_transport_events =
-                    plugin_audio_thread.allow_outputting_transport_events();
-                let allow_outputting_automation_events =
-                    plugin_audio_thread.allow_outputting_automation_events();
+                let has_automation_out_port = plugin_main_thread.has_automation_out_port();
 
                 Ok((
                     PluginInstanceHostAudioThread {
@@ -477,11 +484,14 @@ impl PluginInstanceHost {
                         in_events: EventQueue::new(num_params * 3),
                         out_events: EventQueue::new(num_params * 3),
                         is_adjusting_parameter,
-                        allow_outputting_transport_events,
-                        allow_outputting_automation_events,
                         host_request: self.host_request.clone(),
                     },
-                    PluginHandle { audio_ports, note_ports, params: params_ext },
+                    PluginHandle {
+                        audio_ports,
+                        note_ports,
+                        params: params_ext,
+                        has_automation_out_port,
+                    },
                     param_values,
                 ))
             }
@@ -524,6 +534,19 @@ impl PluginInstanceHost {
             self.note_ports.as_ref()
         } else {
             self.save_state.backup_note_ports.as_ref()
+        }
+    }
+
+    /// Whether or not this plugin has an automation out port (seperate from audio
+    /// and note out ports).
+    ///
+    /// Only return `true` for internal plugins which output parameter automation
+    /// events for other plugins.
+    pub fn has_automation_out_port(&self) -> bool {
+        if let Some(main_thread) = &self.main_thread {
+            main_thread.has_automation_out_port()
+        } else {
+            false
         }
     }
 
@@ -614,6 +637,12 @@ impl PluginInstanceHost {
 
         (OnIdleResult::Ok, modified_params)
     }
+
+    pub fn update_tempo_map(&mut self, new_tempo_map: &Shared<TempoMap>) {
+        if let Some(main_thread) = &mut self.main_thread {
+            main_thread.update_tempo_map(new_tempo_map);
+        }
+    }
 }
 
 pub(crate) enum OnIdleResult {
@@ -636,9 +665,6 @@ pub(crate) struct PluginInstanceHostAudioThread {
     out_events: EventQueue,
 
     is_adjusting_parameter: FnvHashMap<ParamID, bool>,
-
-    allow_outputting_transport_events: bool,
-    allow_outputting_automation_events: bool,
 
     host_request: HostRequest,
 }
@@ -837,6 +863,10 @@ impl PluginInstanceHostAudioThread {
             }
         }
 
+        if let Some(transport_in_event) = proc_info.transport.event() {
+            self.in_events.push(transport_in_event.clone());
+        }
+
         if state == PluginState::ActiveAndWaitingForQuiet && !has_note_in_event {
             // Sync constant masks for more efficient silence checking.
             for buf in buffers.audio_in.iter_mut() {
@@ -961,11 +991,10 @@ impl PluginInstanceHostAudioThread {
                                 gesture: None,
                             };
 
-                            if self.allow_outputting_automation_events {
+                            // This will only be `Some` if the plugin returned `true` in `has_event_out_port()`.
+                            if event_out_buffer.is_some() {
                                 if target_plugin.is_some() {
-                                    if event_out_buffer.is_some() {
-                                        push_to_event_out = true;
-                                    }
+                                    push_to_event_out = true;
                                 } else {
                                     // If `target_plugin` is `None`, then it means that this is a parameter
                                     // event for one of this plugin's internal parameters, and is meant to
@@ -977,12 +1006,14 @@ impl PluginInstanceHostAudioThread {
                             }
                         }
                         Ok(ProcEventRefMut::ParamMod(_, _)) => {
-                            if event_out_buffer.is_some() && self.allow_outputting_automation_events {
+                            // This will only be `Some` if the plugin returned `true` in `has_event_out_port()`.
+                            if event_out_buffer.is_some() {
                                 push_to_event_out = true;
                             }
                         }
                         Ok(ProcEventRefMut::Transport(_)) => {
-                            if event_out_buffer.is_some() && self.allow_outputting_transport_events {
+                            // This will only be `Some` if the plugin returned `true` in `has_event_out_port()`.
+                            if event_out_buffer.is_some() {
                                 push_to_event_out = true;
                             }
                         }
@@ -1035,24 +1066,25 @@ impl PluginInstanceHostAudioThread {
                 let mut push_to_note_out_i = None;
                 match ProcEvent::get_mut(&mut out_event) {
                     Ok(ProcEventRefMut::ParamValue(_, target_plugin)) => {
-                        if self.allow_outputting_automation_events {
+                        // This will only be `Some` if the plugin returned `true` in `has_event_out_port()`.
+                        if event_out_buffer.is_some() {
                             // If `target_plugin` is `None`, then it means that this is a parameter
                             // event for one of this plugin's internal parameters, and is meant to
                             // be sent to the UI, not another plugin.
                             if target_plugin.is_some() {
-                                if event_out_buffer.is_some() {
-                                    push_to_event_out = true;
-                                }
+                                push_to_event_out = true;
                             }
                         }
                     }
                     Ok(ProcEventRefMut::ParamMod(_, _)) => {
-                        if event_out_buffer.is_some() && self.allow_outputting_automation_events {
+                        // This will only be `Some` if the plugin returned `true` in `has_event_out_port()`.
+                        if event_out_buffer.is_some() {
                             push_to_event_out = true;
                         }
                     }
                     Ok(ProcEventRefMut::Transport(_)) => {
-                        if event_out_buffer.is_some() && self.allow_outputting_transport_events {
+                        // This will only be `Some` if the plugin returned `true` in `has_event_out_port()`.
+                        if event_out_buffer.is_some() {
                             push_to_event_out = true;
                         }
                     }

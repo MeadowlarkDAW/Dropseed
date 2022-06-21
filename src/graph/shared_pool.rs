@@ -20,8 +20,8 @@ enum DebugBufferType {
     Audio32,
     Audio64,
     IntermediaryAudio32,
+    ParamAutomation,
     NoteBuffer,
-    EventBuffer,
 }
 impl std::fmt::Debug for DebugBufferType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -29,8 +29,8 @@ impl std::fmt::Debug for DebugBufferType {
             DebugBufferType::Audio32 => write!(f, "f"),
             DebugBufferType::Audio64 => write!(f, "d"),
             DebugBufferType::IntermediaryAudio32 => write!(f, "if"),
+            DebugBufferType::ParamAutomation => write!(f, "pa"),
             DebugBufferType::NoteBuffer => write!(f, "n"),
-            DebugBufferType::EventBuffer => write!(f, "e"),
         }
     }
 }
@@ -328,15 +328,15 @@ impl SharedPluginPool {
 pub(crate) struct SharedBufferPool {
     pub audio_buffer_size: u32,
     pub note_buffer_size: usize,
-    pub event_buffer_size: usize,
+    pub automation_buffer_size: usize,
 
     audio_buffers_f32: Vec<Option<SharedBuffer<f32>>>,
     audio_buffers_f64: Vec<Option<SharedBuffer<f64>>>,
 
     intermediary_audio_f32: Vec<Option<SharedBuffer<f32>>>,
 
+    automation_buffers: Vec<Option<SharedBuffer<ProcEvent>>>,
     note_buffers: Vec<Option<SharedBuffer<ProcEvent>>>,
-    event_buffers: Vec<Option<SharedBuffer<ProcEvent>>>,
 
     coll_handle: basedrop::Handle,
 }
@@ -345,22 +345,22 @@ impl SharedBufferPool {
     pub fn new(
         audio_buffer_size: u32,
         note_buffer_size: usize,
-        event_buffer_size: usize,
+        automation_buffer_size: usize,
         coll_handle: basedrop::Handle,
     ) -> Self {
         assert_ne!(audio_buffer_size, 0);
         assert_ne!(note_buffer_size, 0);
-        assert_ne!(event_buffer_size, 0);
+        assert_ne!(automation_buffer_size, 0);
 
         Self {
             audio_buffers_f32: Vec::new(),
             audio_buffers_f64: Vec::new(),
             intermediary_audio_f32: Vec::new(),
+            automation_buffers: Vec::new(),
             note_buffers: Vec::new(),
-            event_buffers: Vec::new(),
             audio_buffer_size,
             note_buffer_size,
-            event_buffer_size,
+            automation_buffer_size,
             coll_handle,
         }
     }
@@ -487,15 +487,15 @@ impl SharedBufferPool {
         }
     }
 
-    pub fn event_buffer(&mut self, index: usize) -> SharedBuffer<ProcEvent> {
-        if self.event_buffers.len() <= index {
-            let n_new_slots = (index + 1) - self.event_buffers.len();
+    pub fn automation_buffer(&mut self, index: usize) -> SharedBuffer<ProcEvent> {
+        if self.automation_buffers.len() <= index {
+            let n_new_slots = (index + 1) - self.automation_buffers.len();
             for _ in 0..n_new_slots {
-                self.event_buffers.push(None);
+                self.automation_buffers.push(None);
             }
         }
 
-        let slot = &mut self.event_buffers[index];
+        let slot = &mut self.automation_buffers[index];
 
         if let Some(b) = slot {
             b.clone()
@@ -504,9 +504,9 @@ impl SharedBufferPool {
                 buffer: Shared::new(
                     &self.coll_handle,
                     Buffer::new(
-                        self.event_buffer_size,
+                        self.automation_buffer_size,
                         DebugBufferID {
-                            buffer_type: DebugBufferType::EventBuffer,
+                            buffer_type: DebugBufferType::ParamAutomation,
                             index: index as u32,
                         },
                     ),
@@ -522,7 +522,7 @@ impl SharedBufferPool {
         max_buffer_index: usize,
         total_intermediary_buffers: usize,
         max_note_buffer_index: usize,
-        max_event_buffer_index: usize,
+        max_automation_buffer_index: usize,
     ) {
         if self.audio_buffers_f32.len() > max_buffer_index + 1 {
             let n_slots_to_remove = self.audio_buffers_f32.len() - (max_buffer_index + 1);
@@ -548,10 +548,11 @@ impl SharedBufferPool {
                 let _ = self.note_buffers.pop();
             }
         }
-        if self.event_buffers.len() > max_event_buffer_index + 1 {
-            let n_slots_to_remove = self.event_buffers.len() - (max_event_buffer_index + 1);
+        if self.automation_buffers.len() > max_automation_buffer_index + 1 {
+            let n_slots_to_remove =
+                self.automation_buffers.len() - (max_automation_buffer_index + 1);
             for _ in 0..n_slots_to_remove {
-                let _ = self.event_buffers.pop();
+                let _ = self.automation_buffers.pop();
             }
         }
     }

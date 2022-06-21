@@ -1,4 +1,4 @@
-use basedrop::{Collector, Shared};
+use basedrop::{Collector, Shared, SharedCell};
 use crossbeam::channel::{Receiver, Sender};
 use fnv::FnvHashSet;
 use meadowlark_core_types::SampleRate;
@@ -23,6 +23,7 @@ use crate::graph::{
 };
 use crate::plugin::host_request::HostInfo;
 use crate::plugin::{PluginFactory, PluginSaveState};
+use crate::transport::{TempoMap, TransportHandle};
 use crate::utils::thread_id::SharedThreadIDs;
 
 use super::process_thread::PROCESS_THREAD_PRIORITY;
@@ -39,6 +40,7 @@ pub(crate) struct DSEngineMainThread {
     host_info: Shared<HostInfo>,
     run_process_thread: Option<Arc<AtomicBool>>,
     process_thread_handle: Option<JoinHandle<()>>,
+    tempo_map_shared: Option<Shared<SharedCell<(Shared<TempoMap>, u64)>>>,
 }
 
 impl DSEngineMainThread {
@@ -77,6 +79,7 @@ impl DSEngineMainThread {
                 host_info,
                 run_process_thread: None,
                 process_thread_handle: None,
+                tempo_map_shared: None,
             },
             internal_plugins_res,
         )
@@ -108,6 +111,24 @@ impl DSEngineMainThread {
                     }
 
                     DSEngineRequest::RescanPluginDirectories => self.rescan_plugin_directories(),
+
+                    DSEngineRequest::UpdateTempoMap(new_tempo_map) => {
+                        if let Some(tempo_map_shared) = &self.tempo_map_shared {
+                            let tempo_map_version = tempo_map_shared.get().1;
+
+                            let new_tempo_map_shared =
+                                Shared::new(&self.collector.handle(), *new_tempo_map);
+
+                            tempo_map_shared.set(Shared::new(
+                                &self.collector.handle(),
+                                (Shared::clone(&new_tempo_map_shared), tempo_map_version + 1),
+                            ));
+
+                            if let Some(audio_graph) = &mut self.audio_graph {
+                                audio_graph.update_tempo_map(new_tempo_map_shared);
+                            }
+                        }
+                    }
                 }
             }
 
@@ -162,7 +183,7 @@ impl DSEngineMainThread {
         let note_buffer_size = settings.note_buffer_size;
         let event_buffer_size = settings.event_buffer_size;
 
-        let (mut audio_graph, shared_schedule) = AudioGraph::new(
+        let (mut audio_graph, shared_schedule, transport_handle) = AudioGraph::new(
             self.collector.handle(),
             Shared::clone(&self.host_info),
             num_audio_in_channels,
@@ -239,6 +260,8 @@ impl DSEngineMainThread {
 
             self.process_thread_handle = Some(process_thread_handle);
 
+            self.tempo_map_shared = Some(transport_handle.tempo_map_shared());
+
             let info = EngineActivatedInfo {
                 audio_thread,
                 graph_in_node_id: audio_graph.graph_in_node_id().clone(),
@@ -246,6 +269,7 @@ impl DSEngineMainThread {
                 sample_rate,
                 min_frames,
                 max_frames,
+                transport_handle,
                 num_audio_in_channels,
                 num_audio_out_channels,
             };
@@ -378,6 +402,8 @@ impl DSEngineMainThread {
             run_process_thread.store(false, Ordering::Relaxed);
         }
         self.process_thread_handle = None;
+
+        self.tempo_map_shared = None;
 
         self.event_tx
             .send(DSEngineEvent::EngineDeactivated(EngineDeactivatedInfo::DeactivatedGracefully {
@@ -585,6 +611,8 @@ pub struct EngineActivatedInfo {
     /// The ID for the output to the audio graph. Use this to connect any
     /// plugins to system outputs.
     pub graph_out_node_id: PluginInstanceID,
+
+    pub transport_handle: TransportHandle,
 
     pub sample_rate: SampleRate,
     pub min_frames: u32,

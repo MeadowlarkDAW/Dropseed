@@ -7,6 +7,7 @@ mod graph;
 mod clap;
 
 pub mod plugin;
+pub mod transport;
 pub mod utils;
 
 pub use engine::audio_thread::DSEngineAudioThread;
@@ -30,4 +31,5 @@ pub use plugin::ext::audio_ports::{AudioPortInfo, MainPortsLayout, PluginAudioPo
 pub use plugin::ext::params::{ParamID, ParamInfo, ParamInfoFlags};
 pub use plugin::host_request::{HostInfo, HostRequest};
 pub use plugin::process_info::{ProcBuffers, ProcInfo, ProcessStatus};
+pub use transport::TransportInfo;
 pub use utils::fixed_point::FixedPoint64;
