@@ -7,6 +7,7 @@ mod graph;
 mod clap;
 
 pub mod plugin;
+pub mod resource_loader;
 pub mod transport;
 pub mod utils;
 
