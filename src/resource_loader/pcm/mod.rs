@@ -33,6 +33,8 @@ impl PcmResource {
         frame: isize,
         buf: &mut [f32],
     ) -> Result<(), ()> {
+        // TODO: Manual SIMD
+        
         if channel >= self.channels {
             buf.fill(0.0);
             return Err(());
@@ -191,6 +193,8 @@ impl PcmResource {
     }
 
     pub fn fill_stereo_f32(&self, frame: isize, buf_l: &mut [f32], buf_r: &mut [f32]) {
+        // TODO: Manual SIMD
+
         debug_assert_eq!(buf_l.len(), buf_r.len());
 
         if self.channels == 1 {
