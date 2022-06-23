@@ -1,5 +1,7 @@
 use meadowlark_core_types::{Frame, MusicalTime, SampleRate, Seconds};
 
+use crate::plugin::events::EventBeatTime;
+
 // TODO: Make tempo map work like series of automation lines/curves between points in time.
 
 /// A map of all tempo changes in the current project.
@@ -27,18 +29,59 @@ pub struct TempoMap {
     /// Temporary static tempo
     beats_per_second: f64,
     seconds_per_beat: f64,
+
+    /// Temporary static time signature
+    tsig_num: u16,
+    tsig_denom: u16,
 }
 
 impl TempoMap {
-    /// Temporary static tempo
-    pub fn new(bpm: f64, sample_rate: SampleRate) -> Self {
-        TempoMap { beats_per_second: bpm / 60.0, seconds_per_beat: 60.0 / bpm, sample_rate }
+    /// Temporary static tempo and time signature
+    pub fn new(bpm: f64, tsig_num: u16, tsig_denom: u16, sample_rate: SampleRate) -> Self {
+        assert_ne!(tsig_num, 0);
+        assert_ne!(tsig_denom, 0);
+
+        TempoMap {
+            beats_per_second: bpm / 60.0,
+            seconds_per_beat: 60.0 / bpm,
+            tsig_num,
+            tsig_denom,
+            sample_rate,
+        }
     }
 
-    /// Temporary static tempo
-    #[inline]
-    pub fn bpm(&self) -> f64 {
+    pub fn bpm_at_musical_time(&self, musical_time: MusicalTime) -> f64 {
+        // temporary static tempo
         self.beats_per_second * 60.0
+    }
+
+    /// `(tempo in bpm, tempo increment for each sample until the next time info event)
+    pub fn bpm_at_frame(&self, frame: Frame) -> (f64, f64) {
+        // temporary static tempo
+        (self.beats_per_second * 60.0, 0.0)
+    }
+
+    /// `(numerator, denomitator)`
+    pub fn tsig_at_musical_time(&self, musical_time: MusicalTime) -> (u16, u16) {
+        // temporary static time signature
+        (self.tsig_num, self.tsig_denom)
+    }
+
+    /// `(numerator, denomitator)`
+    pub fn tsig_at_frame(&self, frame: Frame) -> (u16, u16) {
+        // temporary static time signature
+        (self.tsig_num, self.tsig_denom)
+    }
+
+    /// `(the bar number of the song, the beat where the bar starts)`
+    pub fn current_bar_at_frame(&self, frame: Frame) -> (i32, EventBeatTime) {
+        // temporary static tempo and time signature
+        let current_beat = self.frame_to_musical(frame).beats();
+
+        let bar_number = current_beat / u32::from(self.tsig_num);
+        let bar_start_beat = bar_number * u32::from(self.tsig_denom);
+
+        (bar_number as i32, EventBeatTime::from_u32(bar_start_beat))
     }
 
     /// Temporary static tempo
@@ -47,11 +90,21 @@ impl TempoMap {
         self.seconds_per_beat = 60.0 / bpm;
     }
 
+    /// Temporary static time signature
+    pub fn set_time_signature(&mut self, tsig_num: u16, tsig_denom: u16) {
+        assert_ne!(tsig_num, 0);
+        assert_ne!(tsig_denom, 0);
+
+        self.tsig_num = tsig_num;
+        self.tsig_denom = tsig_denom;
+    }
+
     /// Convert the given `MusicalTime` into the corresponding time in `Seconds`.
     ///
     /// Note that this must be re-calculated after recieving a new `TempoMap`.
     #[inline]
     pub fn musical_to_seconds(&self, musical_time: MusicalTime) -> Seconds {
+        // temporary static tempo
         Seconds(musical_time.as_beats_f64() * self.seconds_per_beat)
     }
 
@@ -60,6 +113,7 @@ impl TempoMap {
     /// Note that this must be re-calculated after recieving a new `TempoMap`.
     #[inline]
     pub fn seconds_to_musical(&self, seconds: Seconds) -> MusicalTime {
+        // temporary static tempo
         MusicalTime::from_beats_f64(seconds.0 * self.beats_per_second)
     }
 
@@ -68,7 +122,17 @@ impl TempoMap {
     /// Note that this must be re-calculated after recieving a new `TempoMap`.
     #[inline]
     pub fn frame_to_musical(&self, frame: Frame) -> MusicalTime {
+        // temporary static tempo
         MusicalTime::from_beats_f64(frame.to_seconds(self.sample_rate).0 * self.beats_per_second)
+    }
+
+    /// Convert the given `Frame` time into the corresponding time in `Seconds`.
+    ///
+    /// Note that this must be re-calculated after recieving a new `TempoMap`.
+    #[inline]
+    pub fn frame_to_seconds(&self, frame: Frame) -> Seconds {
+        // temporary static tempo
+        Seconds::from_frame(frame, self.sample_rate)
     }
 
     /// Convert the given `MusicalTime` into the corresponding discrete `Frame` time.
@@ -77,6 +141,7 @@ impl TempoMap {
     /// Note that this must be re-calculated after recieving a new `TempoMap`.
     #[inline]
     pub fn musical_to_nearest_frame_round(&self, musical_time: MusicalTime) -> Frame {
+        // temporary static tempo
         self.musical_to_seconds(musical_time).to_nearest_frame_round(self.sample_rate)
     }
 
@@ -86,6 +151,7 @@ impl TempoMap {
     /// Note that this must be re-calculated after recieving a new `TempoMap`.
     #[inline]
     pub fn seconds_to_nearest_frame_round(&self, seconds: Seconds) -> Frame {
+        // temporary static tempo
         seconds.to_nearest_frame_round(self.sample_rate)
     }
 
@@ -95,6 +161,7 @@ impl TempoMap {
     /// Note that this must be re-calculated after recieving a new `TempoMap`.
     #[inline]
     pub fn musical_to_nearest_frame_floor(&self, musical_time: MusicalTime) -> Frame {
+        // temporary static tempo
         self.musical_to_seconds(musical_time).to_nearest_frame_floor(self.sample_rate)
     }
 
@@ -104,6 +171,7 @@ impl TempoMap {
     /// Note that this must be re-calculated after recieving a new `TempoMap`.
     #[inline]
     pub fn seconds_to_nearest_frame_floor(&self, seconds: Seconds) -> Frame {
+        // temporary static tempo
         seconds.to_nearest_frame_floor(self.sample_rate)
     }
 
@@ -113,6 +181,7 @@ impl TempoMap {
     /// Note that this must be re-calculated after recieving a new `TempoMap`.
     #[inline]
     pub fn musical_to_nearest_frame_ceil(&self, musical_time: MusicalTime) -> Frame {
+        // temporary static tempo
         self.musical_to_seconds(musical_time).to_nearest_frame_ceil(self.sample_rate)
     }
 
@@ -122,6 +191,7 @@ impl TempoMap {
     /// Note that this must be re-calculated after recieving a new `TempoMap`.
     #[inline]
     pub fn seconds_to_nearest_frame_ceil(&self, seconds: Seconds) -> Frame {
+        // temporary static tempo
         seconds.to_nearest_frame_ceil(self.sample_rate)
     }
 
@@ -131,6 +201,7 @@ impl TempoMap {
     /// Note that this must be re-calculated after recieving a new `TempoMap`.
     #[inline]
     pub fn musical_to_sub_frame(&self, musical_time: MusicalTime) -> (Frame, f64) {
+        // temporary static tempo
         self.musical_to_seconds(musical_time).to_sub_frame(self.sample_rate)
     }
 
@@ -140,12 +211,13 @@ impl TempoMap {
     /// Note that this must be re-calculated after recieving a new `TempoMap`.
     #[inline]
     pub fn seconds_to_sub_frame(&self, seconds: Seconds) -> (Frame, f64) {
+        // temporary static tempo
         seconds.to_sub_frame(self.sample_rate)
     }
 }
 
 impl Default for TempoMap {
     fn default() -> Self {
-        TempoMap::new(110.0, SampleRate::default())
+        TempoMap::new(110.0, 4, 4, SampleRate::default())
     }
 }

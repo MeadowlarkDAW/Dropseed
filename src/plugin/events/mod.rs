@@ -27,13 +27,18 @@ use crate::{FixedPoint64, ParamID};
 
 pub mod event_queue;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EventBeatTime(pub(crate) FixedPoint64);
 
 impl EventBeatTime {
     #[inline]
     pub fn from_f64(val: f64) -> Self {
         Self(FixedPoint64::from_f64(val))
+    }
+
+    #[inline]
+    pub fn from_u32(val: u32) -> Self {
+        Self(FixedPoint64::from_u32(val))
     }
 
     #[inline]
@@ -54,13 +59,18 @@ impl From<EventBeatTime> for f64 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EventSecTime(pub(crate) FixedPoint64);
 
 impl EventSecTime {
     #[inline]
     pub fn from_f64(val: f64) -> Self {
         Self(FixedPoint64::from_f64(val))
+    }
+
+    #[inline]
+    pub fn from_u32(val: u32) -> Self {
+        Self(FixedPoint64::from_u32(val))
     }
 
     #[inline]

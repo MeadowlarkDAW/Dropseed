@@ -8,6 +8,9 @@ mod tempo_map;
 
 pub use tempo_map::TempoMap;
 
+use crate::plugin::events::{
+    EventBeatTime, EventFlags, EventSecTime, EventTransport, TransportFlags,
+};
 use crate::ProcEvent;
 
 pub struct TransportSaveState {
@@ -103,7 +106,17 @@ pub struct TransportTask {
     loop_state_version: u64,
     tempo_map_version: u64,
 
-    tempo_map_changed: bool,
+    loop_start_beats: EventBeatTime,
+    loop_end_beats: EventBeatTime,
+    loop_start_seconds: EventSecTime,
+    loop_end_seconds: EventSecTime,
+
+    tempo: f64,
+    tempo_inc: f64,
+    tsig_num: u16,
+    tsig_denom: u16,
+    bar_start: EventBeatTime,
+    bar_number: i32,
 
     playhead_frame_shared: Arc<AtomicU64>,
 }
@@ -128,17 +141,33 @@ impl TransportTask {
             )),
         );
 
-        let tempo_map = TempoMap::new(120.0, sample_rate);
+        let tempo_map = TempoMap::new(120.0, 4, 4, sample_rate);
 
         let playhead_frame = tempo_map.musical_to_nearest_frame_round(save_state.seek_to);
         let playhead_frame_shared = Arc::new(AtomicU64::new(playhead_frame.0));
         let loop_state = save_state.loop_state.to_proc(&tempo_map);
+
+        let (loop_start_beats, loop_end_beats, loop_start_seconds, loop_end_seconds) =
+            if let LoopState::Active { loop_start, loop_end } = &save_state.loop_state {
+                (
+                    EventBeatTime::from_f64(loop_start.as_beats_f64()),
+                    EventBeatTime::from_f64(loop_end.as_beats_f64()),
+                    EventSecTime::from_f64(tempo_map.musical_to_seconds(*loop_start).0),
+                    EventSecTime::from_f64(tempo_map.musical_to_seconds(*loop_end).0),
+                )
+            } else {
+                (Default::default(), Default::default(), Default::default(), Default::default())
+            };
 
         let tempo_map = Shared::new(&coll_handle, tempo_map);
         let tempo_map_shared = Shared::new(
             &coll_handle,
             SharedCell::new(Shared::new(&coll_handle, (Shared::clone(&tempo_map), 0))),
         );
+
+        let (tempo, tempo_inc) = tempo_map.bpm_at_frame(playhead_frame);
+        let (tsig_num, tsig_denom) = tempo_map.tsig_at_frame(playhead_frame);
+        let (bar_number, bar_start) = tempo_map.current_bar_at_frame(playhead_frame);
 
         (
             TransportTask {
@@ -155,7 +184,16 @@ impl TransportTask {
                 seek_to_version: 0,
                 tempo_map_version: 0,
                 loop_state_version: 0,
-                tempo_map_changed: false,
+                loop_start_beats,
+                loop_end_beats,
+                loop_start_seconds,
+                loop_end_seconds,
+                tempo,
+                tempo_inc,
+                tsig_num,
+                tsig_denom,
+                bar_start,
+                bar_number,
                 playhead_frame_shared: Arc::clone(&playhead_frame_shared),
             },
             TransportHandle {
@@ -185,7 +223,7 @@ impl TransportTask {
         }
 
         // Check if the tempo map has changed.
-        self.tempo_map_changed = false;
+        let mut tempo_map_changed = false;
         let (new_tempo_map, new_version) = &*self.tempo_map_shared.get();
         if self.tempo_map_version != *new_version {
             self.tempo_map_version = *new_version;
@@ -194,7 +232,7 @@ impl TransportTask {
             let playhead_musical = self.tempo_map.frame_to_musical(self.playhead_frame);
 
             self.tempo_map = Shared::clone(new_tempo_map);
-            self.tempo_map_changed = true;
+            tempo_map_changed = true;
 
             // Update proc info.
             self.next_playhead_frame =
@@ -213,14 +251,45 @@ impl TransportTask {
         };
 
         if loop_state_changed {
-            self.loop_state = match loop_state.0 {
-                LoopState::Inactive => LoopStateProcInfo::Inactive,
-                LoopState::Active { loop_start, loop_end } => LoopStateProcInfo::Active {
-                    loop_start_frame: self.tempo_map.musical_to_nearest_frame_round(loop_start),
-                    loop_end_frame: self.tempo_map.musical_to_nearest_frame_round(loop_end),
-                },
+            let (
+                loop_state,
+                loop_start_beats,
+                loop_end_beats,
+                loop_start_seconds,
+                loop_end_seconds,
+            ) = match &loop_state.0 {
+                LoopState::Inactive => (
+                    LoopStateProcInfo::Inactive,
+                    Default::default(),
+                    Default::default(),
+                    Default::default(),
+                    Default::default(),
+                ),
+                LoopState::Active { loop_start, loop_end } => (
+                    LoopStateProcInfo::Active {
+                        loop_start_frame: self
+                            .tempo_map
+                            .musical_to_nearest_frame_round(*loop_start),
+                        loop_end_frame: self.tempo_map.musical_to_nearest_frame_round(*loop_end),
+                    },
+                    EventBeatTime::from_f64(loop_start.as_beats_f64()),
+                    EventBeatTime::from_f64(loop_end.as_beats_f64()),
+                    EventSecTime::from_f64(self.tempo_map.musical_to_seconds(*loop_start).0),
+                    EventSecTime::from_f64(self.tempo_map.musical_to_seconds(*loop_end).0),
+                ),
             };
+
+            self.loop_state = loop_state;
+            self.loop_start_beats = loop_start_beats;
+            self.loop_end_beats = loop_end_beats;
+            self.loop_start_seconds = loop_start_seconds;
+            self.loop_end_seconds = loop_end_seconds;
         }
+
+        // We don't need to return a new transport event if nothing has changed and
+        // we are not currently playing.
+        let do_return_event =
+            self.is_playing || is_playing || tempo_map_changed || loop_state_changed;
 
         self.is_playing = is_playing;
         self.loop_back_info = None;
@@ -259,11 +328,69 @@ impl TransportTask {
 
                 self.range_checker = RangeChecker::Playing { end_frame: self.next_playhead_frame };
             }
+
+            let (tempo, tempo_inc) = self.tempo_map.bpm_at_frame(self.playhead_frame);
+            let (tsig_num, tsig_denom) = self.tempo_map.tsig_at_frame(self.playhead_frame);
+            let (bar_number, bar_start) = self.tempo_map.current_bar_at_frame(self.playhead_frame);
+
+            self.tempo = tempo;
+            self.tempo_inc = tempo_inc;
+            self.tsig_num = tsig_num;
+            self.tsig_denom = tsig_denom;
+            self.bar_start = bar_start;
+            self.bar_number = bar_number;
         } else {
             self.range_checker = RangeChecker::Paused;
         }
 
         self.playhead_frame_shared.store(self.next_playhead_frame.0, Ordering::Relaxed);
+
+        let event: Option<ProcEvent> = if do_return_event {
+            let song_pos_beats = EventBeatTime::from_f64(
+                self.tempo_map.frame_to_musical(self.playhead_frame).as_beats_f64(),
+            );
+            let song_pos_seconds =
+                EventSecTime::from_f64(self.tempo_map.frame_to_seconds(self.playhead_frame).0);
+
+            let mut transport_flags = TransportFlags::HAS_TEMPO
+                | TransportFlags::HAS_BEATS_TIMELINE
+                | TransportFlags::HAS_SECONDS_TIMELINE
+                | TransportFlags::HAS_TIME_SIGNATURE;
+
+            let tempo_inc = if self.is_playing {
+                transport_flags |= TransportFlags::IS_PLAYING;
+                self.tempo_inc
+            } else {
+                0.0
+            };
+            if let LoopStateProcInfo::Active { .. } = self.loop_state {
+                transport_flags |= TransportFlags::IS_LOOP_ACTIVE
+            }
+
+            Some(
+                EventTransport::new(
+                    0, // frame the event occurs from the start of the current process cycle
+                    0, // space_id
+                    EventFlags::empty(),
+                    transport_flags,
+                    song_pos_beats,
+                    song_pos_seconds,
+                    self.tempo,
+                    tempo_inc,
+                    self.loop_start_beats,
+                    self.loop_end_beats,
+                    self.loop_start_seconds,
+                    self.loop_end_seconds,
+                    self.bar_start,
+                    self.bar_number,
+                    self.tsig_num,
+                    self.tsig_denom,
+                )
+                .into(),
+            )
+        } else {
+            None
+        };
 
         TransportInfo {
             playhead_frame: self.playhead_frame,
@@ -272,8 +399,7 @@ impl TransportTask {
             loop_back_info: self.loop_back_info,
             seek_info: self.seek_info,
             range_checker: self.range_checker,
-            // TODO: Create the transport event for non-internal plugins.
-            event: None,
+            event,
         }
     }
 }
