@@ -5,31 +5,27 @@ use std::path::PathBuf;
 
 use basedrop::{Handle, Shared};
 
-use meadowlark_core_types::SampleRate;
+use meadowlark_core_types::{Frame, SampleRate};
 use symphonia::core::audio::AudioBufferRef;
-use symphonia::core::audio::SampleBuffer;
 use symphonia::core::audio::Signal;
-use symphonia::core::codecs::Decoder;
 use symphonia::core::codecs::{CodecRegistry, DecoderOptions};
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::ProbeResult;
 use symphonia::core::probe::{Hint, Probe};
-use symphonia::core::sample::Sample;
-use symphonia::core::sample::{i24, u24};
 
 // TODO: Eventually we should use disk streaming to store large files. Using this as a stop-gap
 // safety check for now.
 pub static MAX_FILE_BYTES: u64 = 1_000_000_000;
 
+use super::{decode, PcmResource, PcmResourceType};
 use crate::utils::twox_hash_map::TwoXHashMap;
 
 pub struct PcmLoader {
-    loaded: TwoXHashMap<PathBuf, Shared<AnyPcm>>,
+    loaded: TwoXHashMap<PathBuf, Shared<PcmResource>>,
 
     /// The resource to send when the resource could not be loaded.
-    empty_pcm: Shared<AnyPcm>,
+    empty_pcm: Shared<PcmResource>,
 
     codec_registry: &'static CodecRegistry,
     probe: &'static Probe,
@@ -39,8 +35,15 @@ pub struct PcmLoader {
 
 impl PcmLoader {
     pub fn new(coll_handle: Handle, sample_rate: SampleRate) -> Self {
-        let empty_pcm =
-            Shared::new(&coll_handle, AnyPcm::Mono(MonoPcm::new(Vec::new(), sample_rate)));
+        let empty_pcm = Shared::new(
+            &coll_handle,
+            PcmResource {
+                pcm_type: PcmResourceType::F32(vec![Vec::new()]),
+                sample_rate,
+                channels: 1,
+                len_frames: Frame(0),
+            },
+        );
 
         Self {
             loaded: Default::default(),
@@ -51,7 +54,7 @@ impl PcmLoader {
         }
     }
 
-    pub fn load(&mut self, path: &PathBuf) -> (Shared<AnyPcm>, Result<(), PcmLoadError>) {
+    pub fn load(&mut self, path: &PathBuf) -> (Shared<PcmResource>, Result<(), PcmLoadError>) {
         match self.try_load(path) {
             Ok(pcm) => (pcm, Ok(())),
             Err(e) => {
@@ -63,8 +66,8 @@ impl PcmLoader {
         }
     }
 
-    fn try_load(&mut self, path: &PathBuf) -> Result<Shared<AnyPcm>, PcmLoadError> {
-        log::info!("Loading PCM file: {:?}", path);
+    fn try_load(&mut self, path: &PathBuf) -> Result<Shared<PcmResource>, PcmLoadError> {
+        log::debug!("Loading PCM file: {:?}", path);
 
         if let Some(pcm) = self.loaded.get(path) {
             // Resource is already loaded.
@@ -113,15 +116,14 @@ impl PcmLoader {
             .ok_or_else(|| PcmLoadError::NoChannelsFound(path.clone()))?
             .count();
 
-        // TODO: Support loading multi-channel audio.
-        if n_channels > 2 {
-            return Err(PcmLoadError::UnkownChannelFormat((path.clone(), n_channels)));
+        if n_channels == 0 {
+            return Err(PcmLoadError::NoChannelsFound(path.clone()));
         }
 
-        let sample_rate = track.codec_params.sample_rate.unwrap_or_else(|| {
-            log::warn!("Could not find sample rate. Assuming a sample rate of 44100");
+        let sample_rate = SampleRate(track.codec_params.sample_rate.unwrap_or_else(|| {
+            log::warn!("Could not find sample rate of PCM resource at {:?}. Assuming a sample rate of 44100", &path);
             44100
-        });
+        }) as f64);
 
         let n_frames = track.codec_params.n_frames;
 
@@ -140,16 +142,37 @@ impl PcmLoader {
             .make(&track.codec_params, &decode_opts)
             .map_err(|e| PcmLoadError::CouldNotCreateDecoder((path.clone(), e)))?;
 
-        let mut decoded_channels = Vec::<Vec<f32>>::new();
-        for _ in 0..n_channels {
-            decoded_channels.push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
-        }
-
         let max_frames = MAX_FILE_BYTES / (4 * n_channels as u64);
         let mut total_frames = 0;
 
-        let mut decoded_u8: Vec<Vec<u8>> = Vec::new();
+        enum FirstPacketType {
+            U8(Vec<Vec<u8>>),
+            U16(Vec<Vec<u16>>),
+            U24(Vec<Vec<[u8; 3]>>),
+            U32(Vec<Vec<f32>>),
+            S8(Vec<Vec<i8>>),
+            S16(Vec<Vec<i16>>),
+            S24(Vec<Vec<[u8; 3]>>),
+            S32(Vec<Vec<f32>>),
+            F32(Vec<Vec<f32>>),
+            F64(Vec<Vec<f64>>),
+        }
 
+        let check_total_frames = |total_frames: &mut u64,
+                                  max_frames: u64,
+                                  packet_len: usize,
+                                  path: &PathBuf|
+         -> Result<(), PcmLoadError> {
+            *total_frames += packet_len as u64;
+            if *total_frames > max_frames {
+                Err(PcmLoadError::FileTooLarge(path.clone()))
+            } else {
+                Ok(())
+            }
+        };
+
+        // Decode the first packet to get the sample format.
+        let mut first_packet = None;
         while let Ok(packet) = probed.format.next_packet() {
             // If the packet does not belong to the selected track, skip over it.
             if packet.track_id() != track_id {
@@ -158,53 +181,492 @@ impl PcmLoader {
 
             match decoder.decode(&packet) {
                 Ok(decoded) => match decoded {
-                    AudioBufferRef::F32(d) => {
-                        total_frames += d.chan(0).len() as u64;
-                        if total_frames > max_frames {
-                            return Err(PcmLoadError::FileTooLarge(path.clone()));
+                    AudioBufferRef::U8(d) => {
+                        let mut decoded_channels = Vec::<Vec<u8>>::new();
+                        for _ in 0..n_channels {
+                            decoded_channels
+                                .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
                         }
-                        for i in 0..n_channels {
-                            decoded_channels[i].extend_from_slice(d.chan(i));
+
+                        check_total_frames(&mut total_frames, max_frames, d.chan(0).len(), path)?;
+
+                        decode::decode_u8_packet(&mut decoded_channels, d, n_channels);
+
+                        first_packet = Some(FirstPacketType::U8(decoded_channels));
+                        break;
+                    }
+                    AudioBufferRef::U16(d) => {
+                        let mut decoded_channels = Vec::<Vec<u16>>::new();
+                        for _ in 0..n_channels {
+                            decoded_channels
+                                .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
                         }
+
+                        check_total_frames(&mut total_frames, max_frames, d.chan(0).len(), path)?;
+
+                        decode::decode_u16_packet(&mut decoded_channels, d, n_channels);
+
+                        first_packet = Some(FirstPacketType::U16(decoded_channels));
+                        break;
+                    }
+                    AudioBufferRef::U24(d) => {
+                        let mut decoded_channels = Vec::<Vec<[u8; 3]>>::new();
+                        for _ in 0..n_channels {
+                            decoded_channels
+                                .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
+                        }
+
+                        check_total_frames(&mut total_frames, max_frames, d.chan(0).len(), path)?;
+
+                        decode::decode_u24_packet(&mut decoded_channels, d, n_channels);
+
+                        first_packet = Some(FirstPacketType::U24(decoded_channels));
+                        break;
+                    }
+                    AudioBufferRef::U32(d) => {
+                        let mut decoded_channels = Vec::<Vec<f32>>::new();
+                        for _ in 0..n_channels {
+                            decoded_channels
+                                .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
+                        }
+
+                        check_total_frames(&mut total_frames, max_frames, d.chan(0).len(), path)?;
+
+                        decode::decode_u32_packet(&mut decoded_channels, d, n_channels);
+
+                        first_packet = Some(FirstPacketType::U32(decoded_channels));
+                        break;
+                    }
+                    AudioBufferRef::S8(d) => {
+                        let mut decoded_channels = Vec::<Vec<i8>>::new();
+                        for _ in 0..n_channels {
+                            decoded_channels
+                                .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
+                        }
+
+                        check_total_frames(&mut total_frames, max_frames, d.chan(0).len(), path)?;
+
+                        decode::decode_i8_packet(&mut decoded_channels, d, n_channels);
+
+                        first_packet = Some(FirstPacketType::S8(decoded_channels));
+                        break;
+                    }
+                    AudioBufferRef::S16(d) => {
+                        let mut decoded_channels = Vec::<Vec<i16>>::new();
+                        for _ in 0..n_channels {
+                            decoded_channels
+                                .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
+                        }
+
+                        check_total_frames(&mut total_frames, max_frames, d.chan(0).len(), path)?;
+
+                        decode::decode_i16_packet(&mut decoded_channels, d, n_channels);
+
+                        first_packet = Some(FirstPacketType::S16(decoded_channels));
+                        break;
+                    }
+                    AudioBufferRef::S24(d) => {
+                        let mut decoded_channels = Vec::<Vec<[u8; 3]>>::new();
+                        for _ in 0..n_channels {
+                            decoded_channels
+                                .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
+                        }
+
+                        check_total_frames(&mut total_frames, max_frames, d.chan(0).len(), path)?;
+
+                        decode::decode_i24_packet(&mut decoded_channels, d, n_channels);
+
+                        first_packet = Some(FirstPacketType::S24(decoded_channels));
+                        break;
                     }
                     AudioBufferRef::S32(d) => {
-                        total_frames += d.chan(0).len() as u64;
-                        if total_frames > max_frames {
-                            return Err(PcmLoadError::FileTooLarge(path.clone()));
+                        let mut decoded_channels = Vec::<Vec<f32>>::new();
+                        for _ in 0..n_channels {
+                            decoded_channels
+                                .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
                         }
-                        for i in 0..n_channels {
-                            for smp in d.chan(i).iter() {
-                                decoded_channels[i].push(*smp as f32 / i32::MAX as f32);
-                            }
+
+                        check_total_frames(&mut total_frames, max_frames, d.chan(0).len(), path)?;
+
+                        decode::decode_i32_packet(&mut decoded_channels, d, n_channels);
+
+                        first_packet = Some(FirstPacketType::S32(decoded_channels));
+                        break;
+                    }
+                    AudioBufferRef::F32(d) => {
+                        let mut decoded_channels = Vec::<Vec<f32>>::new();
+                        for _ in 0..n_channels {
+                            decoded_channels
+                                .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
                         }
+
+                        check_total_frames(&mut total_frames, max_frames, d.chan(0).len(), path)?;
+
+                        decode::decode_f32_packet(&mut decoded_channels, d, n_channels);
+
+                        first_packet = Some(FirstPacketType::F32(decoded_channels));
+                        break;
+                    }
+                    AudioBufferRef::F64(d) => {
+                        let mut decoded_channels = Vec::<Vec<f64>>::new();
+                        for _ in 0..n_channels {
+                            decoded_channels
+                                .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
+                        }
+
+                        check_total_frames(&mut total_frames, max_frames, d.chan(0).len(), path)?;
+
+                        decode::decode_f64_packet(&mut decoded_channels, d, n_channels);
+
+                        first_packet = Some(FirstPacketType::F64(decoded_channels));
+                        break;
                     }
                 },
                 Err(symphonia::core::errors::Error::DecodeError(err)) => {
                     // Decode errors are not fatal. Print the error message and try to decode the next
                     // packet as usual.
-                    log::warn!("decode error: {}", err);
+                    log::warn!("Symphonia decode warning: {}", err);
                 }
                 Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((path.clone(), e))),
-            }
+            };
         }
 
-        let pcm = if n_channels == 1 {
-            AnyPcm::Mono(MonoPcm::new(
-                decoded_channels.pop().unwrap(),
-                SampleRate(sample_rate as f64),
+        if first_packet.is_none() {
+            return Err(PcmLoadError::UnexpectedErrorWhileDecoding((
+                path.clone(),
+                "no packet was found".into(),
+            )));
+        }
+
+        let unexpected_format = |expected: &str| -> PcmLoadError {
+            PcmLoadError::UnexpectedErrorWhileDecoding((
+                path.clone(),
+                format!(
+                    "Symphonia returned a packet that was not the expected format of {}",
+                    expected
+                )
+                .into(),
             ))
-        } else {
-            // Two channels. TODO: Support loading multi-channel audio.
-
-            let right = decoded_channels.pop().unwrap();
-            let left = decoded_channels.pop().unwrap();
-
-            AnyPcm::Stereo(StereoPcm::new(left, right, SampleRate(sample_rate as f64)))
         };
 
-        decoder.close();
+        let decode_warning = |err: &str| {
+            // Decode errors are not fatal. Print the error message and try to decode the next
+            // packet as usual.
+            log::warn!("Symphonia decode warning: {}", err);
+        };
 
-        let pcm = Shared::new(&self.coll_handle, pcm);
+        let pcm_type = match first_packet.take().unwrap() {
+            FirstPacketType::U8(mut decoded_channels) => {
+                while let Ok(packet) = probed.format.next_packet() {
+                    // If the packet does not belong to the selected track, skip over it.
+                    if packet.track_id() != track_id {
+                        continue;
+                    }
+
+                    match decoder.decode(&packet) {
+                        Ok(decoded) => match decoded {
+                            AudioBufferRef::U8(d) => {
+                                check_total_frames(
+                                    &mut total_frames,
+                                    max_frames,
+                                    d.chan(0).len(),
+                                    path,
+                                )?;
+
+                                decode::decode_u8_packet(&mut decoded_channels, d, n_channels);
+                            }
+                            _ => return Err(unexpected_format("u8")),
+                        },
+                        Err(symphonia::core::errors::Error::DecodeError(err)) => {
+                            decode_warning(err)
+                        }
+                        Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((path.clone(), e))),
+                    }
+                }
+
+                PcmResourceType::U8(decoded_channels)
+            }
+            FirstPacketType::U16(mut decoded_channels) => {
+                while let Ok(packet) = probed.format.next_packet() {
+                    // If the packet does not belong to the selected track, skip over it.
+                    if packet.track_id() != track_id {
+                        continue;
+                    }
+
+                    match decoder.decode(&packet) {
+                        Ok(decoded) => match decoded {
+                            AudioBufferRef::U16(d) => {
+                                check_total_frames(
+                                    &mut total_frames,
+                                    max_frames,
+                                    d.chan(0).len(),
+                                    path,
+                                )?;
+
+                                decode::decode_u16_packet(&mut decoded_channels, d, n_channels);
+                            }
+                            _ => return Err(unexpected_format("u16")),
+                        },
+                        Err(symphonia::core::errors::Error::DecodeError(err)) => {
+                            decode_warning(err)
+                        }
+                        Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((path.clone(), e))),
+                    }
+                }
+
+                PcmResourceType::U16(decoded_channels)
+            }
+            FirstPacketType::U24(mut decoded_channels) => {
+                while let Ok(packet) = probed.format.next_packet() {
+                    // If the packet does not belong to the selected track, skip over it.
+                    if packet.track_id() != track_id {
+                        continue;
+                    }
+
+                    match decoder.decode(&packet) {
+                        Ok(decoded) => match decoded {
+                            AudioBufferRef::U24(d) => {
+                                check_total_frames(
+                                    &mut total_frames,
+                                    max_frames,
+                                    d.chan(0).len(),
+                                    path,
+                                )?;
+
+                                decode::decode_u24_packet(&mut decoded_channels, d, n_channels);
+                            }
+                            _ => return Err(unexpected_format("u24")),
+                        },
+                        Err(symphonia::core::errors::Error::DecodeError(err)) => {
+                            decode_warning(err)
+                        }
+                        Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((path.clone(), e))),
+                    }
+                }
+
+                PcmResourceType::U24(decoded_channels)
+            }
+            FirstPacketType::U32(mut decoded_channels) => {
+                while let Ok(packet) = probed.format.next_packet() {
+                    // If the packet does not belong to the selected track, skip over it.
+                    if packet.track_id() != track_id {
+                        continue;
+                    }
+
+                    match decoder.decode(&packet) {
+                        Ok(decoded) => match decoded {
+                            AudioBufferRef::U32(d) => {
+                                check_total_frames(
+                                    &mut total_frames,
+                                    max_frames,
+                                    d.chan(0).len(),
+                                    path,
+                                )?;
+
+                                decode::decode_u32_packet(&mut decoded_channels, d, n_channels);
+                            }
+                            _ => return Err(unexpected_format("u32")),
+                        },
+                        Err(symphonia::core::errors::Error::DecodeError(err)) => {
+                            decode_warning(err)
+                        }
+                        Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((path.clone(), e))),
+                    }
+                }
+
+                PcmResourceType::F32(decoded_channels)
+            }
+            FirstPacketType::S8(mut decoded_channels) => {
+                while let Ok(packet) = probed.format.next_packet() {
+                    // If the packet does not belong to the selected track, skip over it.
+                    if packet.track_id() != track_id {
+                        continue;
+                    }
+
+                    match decoder.decode(&packet) {
+                        Ok(decoded) => match decoded {
+                            AudioBufferRef::S8(d) => {
+                                check_total_frames(
+                                    &mut total_frames,
+                                    max_frames,
+                                    d.chan(0).len(),
+                                    path,
+                                )?;
+
+                                decode::decode_i8_packet(&mut decoded_channels, d, n_channels);
+                            }
+                            _ => return Err(unexpected_format("i8")),
+                        },
+                        Err(symphonia::core::errors::Error::DecodeError(err)) => {
+                            decode_warning(err)
+                        }
+                        Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((path.clone(), e))),
+                    }
+                }
+
+                PcmResourceType::S8(decoded_channels)
+            }
+            FirstPacketType::S16(mut decoded_channels) => {
+                while let Ok(packet) = probed.format.next_packet() {
+                    // If the packet does not belong to the selected track, skip over it.
+                    if packet.track_id() != track_id {
+                        continue;
+                    }
+
+                    match decoder.decode(&packet) {
+                        Ok(decoded) => match decoded {
+                            AudioBufferRef::S16(d) => {
+                                check_total_frames(
+                                    &mut total_frames,
+                                    max_frames,
+                                    d.chan(0).len(),
+                                    path,
+                                )?;
+
+                                decode::decode_i16_packet(&mut decoded_channels, d, n_channels);
+                            }
+                            _ => return Err(unexpected_format("i16")),
+                        },
+                        Err(symphonia::core::errors::Error::DecodeError(err)) => {
+                            decode_warning(err)
+                        }
+                        Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((path.clone(), e))),
+                    }
+                }
+
+                PcmResourceType::S16(decoded_channels)
+            }
+            FirstPacketType::S24(mut decoded_channels) => {
+                while let Ok(packet) = probed.format.next_packet() {
+                    // If the packet does not belong to the selected track, skip over it.
+                    if packet.track_id() != track_id {
+                        continue;
+                    }
+
+                    match decoder.decode(&packet) {
+                        Ok(decoded) => match decoded {
+                            AudioBufferRef::S24(d) => {
+                                check_total_frames(
+                                    &mut total_frames,
+                                    max_frames,
+                                    d.chan(0).len(),
+                                    path,
+                                )?;
+
+                                decode::decode_i24_packet(&mut decoded_channels, d, n_channels);
+                            }
+                            _ => return Err(unexpected_format("i24")),
+                        },
+                        Err(symphonia::core::errors::Error::DecodeError(err)) => {
+                            decode_warning(err)
+                        }
+                        Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((path.clone(), e))),
+                    }
+                }
+
+                PcmResourceType::S24(decoded_channels)
+            }
+            FirstPacketType::S32(mut decoded_channels) => {
+                while let Ok(packet) = probed.format.next_packet() {
+                    // If the packet does not belong to the selected track, skip over it.
+                    if packet.track_id() != track_id {
+                        continue;
+                    }
+
+                    match decoder.decode(&packet) {
+                        Ok(decoded) => match decoded {
+                            AudioBufferRef::S32(d) => {
+                                check_total_frames(
+                                    &mut total_frames,
+                                    max_frames,
+                                    d.chan(0).len(),
+                                    path,
+                                )?;
+
+                                decode::decode_i32_packet(&mut decoded_channels, d, n_channels);
+                            }
+                            _ => return Err(unexpected_format("i32")),
+                        },
+                        Err(symphonia::core::errors::Error::DecodeError(err)) => {
+                            decode_warning(err)
+                        }
+                        Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((path.clone(), e))),
+                    }
+                }
+
+                PcmResourceType::F32(decoded_channels)
+            }
+            FirstPacketType::F32(mut decoded_channels) => {
+                while let Ok(packet) = probed.format.next_packet() {
+                    // If the packet does not belong to the selected track, skip over it.
+                    if packet.track_id() != track_id {
+                        continue;
+                    }
+
+                    match decoder.decode(&packet) {
+                        Ok(decoded) => match decoded {
+                            AudioBufferRef::F32(d) => {
+                                check_total_frames(
+                                    &mut total_frames,
+                                    max_frames,
+                                    d.chan(0).len(),
+                                    path,
+                                )?;
+
+                                decode::decode_f32_packet(&mut decoded_channels, d, n_channels);
+                            }
+                            _ => return Err(unexpected_format("f32")),
+                        },
+                        Err(symphonia::core::errors::Error::DecodeError(err)) => {
+                            decode_warning(err)
+                        }
+                        Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((path.clone(), e))),
+                    }
+                }
+
+                PcmResourceType::F32(decoded_channels)
+            }
+            FirstPacketType::F64(mut decoded_channels) => {
+                while let Ok(packet) = probed.format.next_packet() {
+                    // If the packet does not belong to the selected track, skip over it.
+                    if packet.track_id() != track_id {
+                        continue;
+                    }
+
+                    match decoder.decode(&packet) {
+                        Ok(decoded) => match decoded {
+                            AudioBufferRef::F64(d) => {
+                                check_total_frames(
+                                    &mut total_frames,
+                                    max_frames,
+                                    d.chan(0).len(),
+                                    path,
+                                )?;
+
+                                decode::decode_f64_packet(&mut decoded_channels, d, n_channels);
+                            }
+                            _ => return Err(unexpected_format("f64")),
+                        },
+                        Err(symphonia::core::errors::Error::DecodeError(err)) => {
+                            decode_warning(err)
+                        }
+                        Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((path.clone(), e))),
+                    }
+                }
+
+                PcmResourceType::F64(decoded_channels)
+            }
+        };
+
+        let pcm = Shared::new(
+            &self.coll_handle,
+            PcmResource {
+                pcm_type,
+                sample_rate,
+                channels: n_channels,
+                len_frames: Frame(total_frames),
+            },
+        );
 
         self.loaded.insert(path.to_owned(), Shared::clone(&pcm));
 
@@ -219,57 +681,6 @@ impl PcmLoader {
         // remove that entry.
         self.loaded.retain(|_, pcm| Shared::get_mut(pcm).is_none());
     }
-}
-
-fn decode<S: Sample>(
-    decoder: &mut Box<dyn Decoder>,
-    probed: &mut ProbeResult,
-    max_frames: u64,
-    num_channels: usize,
-    num_frames: Option<u64>,
-    track_id: u32,
-    path: &PathBuf,
-) -> Result<Vec<Vec<u8>>, PcmLoadError> {
-    let mut total_frames = 0;
-
-    let mut decoded_channels = Vec::<Vec<u8>>::new();
-    for _ in 0..num_channels {
-        decoded_channels.push(Vec::with_capacity(num_frames.unwrap_or(0) as usize));
-    }
-
-    while let Ok(packet) = probed.format.next_packet() {
-        // If the packet does not belong to the selected track, skip over it.
-        if packet.track_id() != track_id {
-            continue;
-        }
-
-        match decoder.decode(&packet) {
-            Ok(decoded) => match decoded {
-                AudioBufferRef::U8(d) => {
-                    total_frames += d.chan(0).len() as u64;
-                    if total_frames > max_frames {
-                        return Err(PcmLoadError::FileTooLarge(path.clone()));
-                    }
-                    for i in 0..num_channels {
-                        decoded_channels[i].extend_from_slice(d.chan(i));
-                    }
-                }
-                _ => return Err(PcmLoadError::UnexpectedErrorWhileDecoding((
-                    path.clone(),
-                    "Symphonia returned a decoded packet that was not in the expected format of u8"
-                        .into(),
-                ))),
-            },
-            Err(symphonia::core::errors::Error::DecodeError(err)) => {
-                // Decode errors are not fatal. Print the error message and try to decode the next
-                // packet as usual.
-                log::warn!("Symphonia decode warning: {}", err);
-            }
-            Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((path.clone(), e))),
-        }
-    }
-
-    Ok(decoded_channels)
 }
 
 #[derive(Debug)]
@@ -322,6 +733,12 @@ impl fmt::Display for PcmLoadError {
             ErrorWhileDecoding((path, e)) => write!(
                 f,
                 "Failed to load PCM resource: error while decoding | {} | path: {:?}",
+                e,
+                path
+            ),
+            UnexpectedErrorWhileDecoding((path, e)) => write!(
+                f,
+                "Failed to load PCM resource: unexpected error while decoding | {} | path: {:?}",
                 e,
                 path
             ),

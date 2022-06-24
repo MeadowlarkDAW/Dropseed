@@ -1,10 +1,11 @@
 use basedrop::Handle;
-use rusty_daw_core::SampleRate;
 use std::error::Error;
 use std::fmt;
 
+use meadowlark_core_types::SampleRate;
+
 pub mod pcm;
-pub use pcm::{AnyPcm, MonoPcm, PcmLoadError, PcmLoader, StereoPcm};
+pub use pcm::{PcmLoadError, PcmLoader, PcmResource, PcmResourceType};
 
 pub struct ResourceLoader {
     pub pcm_loader: PcmLoader,

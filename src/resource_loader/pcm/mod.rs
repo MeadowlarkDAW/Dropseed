@@ -5,7 +5,7 @@ pub use loader::{PcmLoadError, PcmLoader};
 use meadowlark_core_types::{Frame, SampleRate};
 
 pub struct PcmResource {
-    pub type_: PcmResourceType,
+    pub pcm_type: PcmResourceType,
     pub sample_rate: SampleRate,
     pub channels: usize,
     pub len_frames: Frame,
@@ -34,16 +34,17 @@ impl PcmResource {
         buf: &mut [f32],
     ) -> Result<(), ()> {
         // TODO: Manual SIMD
-        
+
         if channel >= self.channels {
             buf.fill(0.0);
             return Err(());
         }
 
         let len_frames = self.len_frames.0 as usize;
+        let buf_len = buf.len();
 
         let (buf_range, pcm_range) =
-            if frame >= len_frames as isize || frame + buf.len() as isize <= 0 {
+            if frame >= len_frames as isize || frame + buf_len as isize <= 0 {
                 // out of range, fill buffer with zeros
                 buf.fill(0.0);
                 return Ok(());
@@ -53,30 +54,30 @@ impl PcmResource {
                 // clear the out-of-range part
                 buf[0..skip_frames].fill(0.0);
 
-                let new_buf_len = buf.len() - skip_frames;
+                let new_buf_len = buf_len - skip_frames;
 
                 if new_buf_len <= len_frames {
-                    ((skip_frames..buf.len()), (0..new_buf_len))
+                    ((skip_frames..buf_len), (0..new_buf_len))
                 } else {
                     let copy_frames = len_frames - new_buf_len;
 
                     // clear the out-of-range part
-                    buf[skip_frames + copy_frames..buf.len()].fill(0.0);
+                    buf[skip_frames + copy_frames..buf_len].fill(0.0);
 
                     ((skip_frames..skip_frames + copy_frames), (0..copy_frames))
                 }
-            } else if frame as usize + buf.len() <= len_frames {
-                ((0..buf.len()), (frame as usize..frame as usize + buf.len()))
+            } else if frame as usize + buf_len <= len_frames {
+                ((0..buf_len), (frame as usize..frame as usize + buf_len))
             } else {
                 let copy_frames = len_frames - frame as usize;
 
                 // clear the out-of-range part
-                buf[copy_frames..buf.len()].fill(0.0);
+                buf[copy_frames..buf_len].fill(0.0);
 
                 ((0..copy_frames), (frame as usize..len_frames))
             };
 
-        match &self.type_ {
+        match &self.pcm_type {
             PcmResourceType::U8(pcm) => {
                 let buf_part = &mut buf[buf_range];
                 let pcm_part = &pcm[channel][pcm_range];
@@ -204,9 +205,10 @@ impl PcmResource {
         }
 
         let len_frames = self.len_frames.0 as usize;
+        let buf_l_len = buf_l.len();
 
         let (buf_range, pcm_range) =
-            if frame >= len_frames as isize || frame + buf_l.len() as isize <= 0 {
+            if frame >= len_frames as isize || frame + buf_l_len as isize <= 0 {
                 // out of range, fill buffer with zeros
                 buf_l.fill(0.0);
                 buf_r.fill(0.0);
@@ -218,36 +220,36 @@ impl PcmResource {
                 buf_l[0..skip_frames].fill(0.0);
                 buf_r[0..skip_frames].fill(0.0);
 
-                let new_buf_len = buf_l.len() - skip_frames;
+                let new_buf_len = buf_l_len - skip_frames;
 
                 if new_buf_len <= len_frames {
-                    ((skip_frames..buf_l.len()), (0..new_buf_len))
+                    ((skip_frames..buf_l_len), (0..new_buf_len))
                 } else {
                     let copy_frames = len_frames - new_buf_len;
 
                     // clear the out-of-range part
-                    buf_l[skip_frames + copy_frames..buf_l.len()].fill(0.0);
-                    buf_r[skip_frames + copy_frames..buf_l.len()].fill(0.0);
+                    buf_l[skip_frames + copy_frames..buf_l_len].fill(0.0);
+                    buf_r[skip_frames + copy_frames..buf_l_len].fill(0.0);
 
                     ((skip_frames..skip_frames + copy_frames), (0..copy_frames))
                 }
-            } else if frame as usize + buf_l.len() <= len_frames {
-                ((0..buf_l.len()), (frame as usize..frame as usize + buf_l.len()))
+            } else if frame as usize + buf_l_len <= len_frames {
+                ((0..buf_l_len), (frame as usize..frame as usize + buf_l_len))
             } else {
                 let copy_frames = len_frames - frame as usize;
 
                 // clear the out-of-range part
-                buf_l[copy_frames..buf_l.len()].fill(0.0);
-                buf_r[copy_frames..buf_l.len()].fill(0.0);
+                buf_l[copy_frames..buf_l_len].fill(0.0);
+                buf_r[copy_frames..buf_l_len].fill(0.0);
 
                 ((0..copy_frames), (frame as usize..len_frames))
             };
 
-        match &self.type_ {
+        match &self.pcm_type {
             PcmResourceType::U8(pcm) => {
-                let buf_l_part = &mut buf_l[buf_range];
+                let buf_l_part = &mut buf_l[buf_range.clone()];
                 let buf_r_part = &mut buf_r[buf_range];
-                let pcm_l_part = &pcm[0][pcm_range];
+                let pcm_l_part = &pcm[0][pcm_range.clone()];
                 let pcm_r_part = &pcm[0][pcm_range];
 
                 debug_assert_eq!(buf_l_part.len(), pcm_l_part.len());
@@ -262,9 +264,9 @@ impl PcmResource {
                 }
             }
             PcmResourceType::U16(pcm) => {
-                let buf_l_part = &mut buf_l[buf_range];
+                let buf_l_part = &mut buf_l[buf_range.clone()];
                 let buf_r_part = &mut buf_r[buf_range];
-                let pcm_l_part = &pcm[0][pcm_range];
+                let pcm_l_part = &pcm[0][pcm_range.clone()];
                 let pcm_r_part = &pcm[0][pcm_range];
 
                 debug_assert_eq!(buf_l_part.len(), pcm_l_part.len());
@@ -279,9 +281,9 @@ impl PcmResource {
                 }
             }
             PcmResourceType::U24(pcm) => {
-                let buf_l_part = &mut buf_l[buf_range];
+                let buf_l_part = &mut buf_l[buf_range.clone()];
                 let buf_r_part = &mut buf_r[buf_range];
-                let pcm_l_part = &pcm[0][pcm_range];
+                let pcm_l_part = &pcm[0][pcm_range.clone()];
                 let pcm_r_part = &pcm[0][pcm_range];
 
                 debug_assert_eq!(buf_l_part.len(), pcm_l_part.len());
@@ -315,9 +317,9 @@ impl PcmResource {
                 }
             }
             PcmResourceType::S8(pcm) => {
-                let buf_l_part = &mut buf_l[buf_range];
+                let buf_l_part = &mut buf_l[buf_range.clone()];
                 let buf_r_part = &mut buf_r[buf_range];
-                let pcm_l_part = &pcm[0][pcm_range];
+                let pcm_l_part = &pcm[0][pcm_range.clone()];
                 let pcm_r_part = &pcm[0][pcm_range];
 
                 debug_assert_eq!(buf_l_part.len(), pcm_l_part.len());
@@ -330,9 +332,9 @@ impl PcmResource {
                 }
             }
             PcmResourceType::S16(pcm) => {
-                let buf_l_part = &mut buf_l[buf_range];
+                let buf_l_part = &mut buf_l[buf_range.clone()];
                 let buf_r_part = &mut buf_r[buf_range];
-                let pcm_l_part = &pcm[0][pcm_range];
+                let pcm_l_part = &pcm[0][pcm_range.clone()];
                 let pcm_r_part = &pcm[0][pcm_range];
 
                 debug_assert_eq!(buf_l_part.len(), pcm_l_part.len());
@@ -345,9 +347,9 @@ impl PcmResource {
                 }
             }
             PcmResourceType::S24(pcm) => {
-                let buf_l_part = &mut buf_l[buf_range];
+                let buf_l_part = &mut buf_l[buf_range.clone()];
                 let buf_r_part = &mut buf_r[buf_range];
-                let pcm_l_part = &pcm[0][pcm_range];
+                let pcm_l_part = &pcm[0][pcm_range.clone()];
                 let pcm_r_part = &pcm[0][pcm_range];
 
                 debug_assert_eq!(buf_l_part.len(), pcm_l_part.len());
@@ -381,9 +383,9 @@ impl PcmResource {
                 }
             }
             PcmResourceType::F32(pcm) => {
-                let buf_l_part = &mut buf_l[buf_range];
+                let buf_l_part = &mut buf_l[buf_range.clone()];
                 let buf_r_part = &mut buf_r[buf_range];
-                let pcm_l_part = &pcm[0][pcm_range];
+                let pcm_l_part = &pcm[0][pcm_range.clone()];
                 let pcm_r_part = &pcm[0][pcm_range];
 
                 debug_assert_eq!(buf_l_part.len(), pcm_l_part.len());
@@ -394,9 +396,9 @@ impl PcmResource {
                 buf_r_part.copy_from_slice(pcm_r_part);
             }
             PcmResourceType::F64(pcm) => {
-                let buf_l_part = &mut buf_l[buf_range];
+                let buf_l_part = &mut buf_l[buf_range.clone()];
                 let buf_r_part = &mut buf_r[buf_range];
-                let pcm_l_part = &pcm[0][pcm_range];
+                let pcm_l_part = &pcm[0][pcm_range.clone()];
                 let pcm_r_part = &pcm[0][pcm_range];
 
                 debug_assert_eq!(buf_l_part.len(), pcm_l_part.len());

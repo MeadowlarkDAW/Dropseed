@@ -1,94 +1,126 @@
-use std::path::PathBuf;
+use std::borrow::Cow;
 
-use symphonia::core::audio::{AudioBuffer, AudioBufferRef, Signal, SampleBuffer};
-use symphonia::core::codecs::Decoder;
-use symphonia::core::probe::ProbeResult;
+use symphonia::core::audio::{AudioBuffer, Signal};
+use symphonia::core::sample::{i24, u24};
 
-use super::{AnyPcm, PcmResource};
-use super::loader::PcmLoadError;
-
-fn decode_u8(decoder: &mut Box<dyn Decoder>, probed: &mut ProbeResult, max_frames: u64, num_channels: usize, num_frames: Option<u64>, track_id: u32, path: &PathBuf) -> Result<AnyPcm, PcmLoadError> {
-    let mut total_frames = 0;
-
-    let mut decoded_channels = Vec::<Vec<u8>>::new();
-    for _ in 0..num_channels {
-        decoded_channels.push(Vec::with_capacity(num_frames.unwrap_or(0) as usize));
+#[inline]
+pub(super) fn decode_u8_packet(
+    decoded_channels: &mut Vec<Vec<u8>>,
+    packet: Cow<AudioBuffer<u8>>,
+    num_channels: usize,
+) {
+    for i in 0..num_channels {
+        decoded_channels[i].extend_from_slice(packet.chan(i));
     }
-
-    while let Ok(packet) = probed.format.next_packet() {
-        // If the packet does not belong to the selected track, skip over it.
-        if packet.track_id() != track_id {
-            continue;
-        }
-
-        match decoder.decode(&packet) {
-            Ok(decoded) => {
-                match decoded {
-                    AudioBufferRef::U8(d) => {
-                        total_frames += d.chan(0).len() as u64;
-                        if total_frames > max_frames {
-                            return Err(PcmLoadError::FileTooLarge(path.clone()));
-                        }
-                        for i in 0..num_channels {
-                            decoded_channels[i].extend_from_slice(d.chan(i));
-                        }
-                    }
-                    _ => {
-                        return Err(PcmLoadError::UnexpectedErrorWhileDecoding((path.clone(), "Symphonia returned a decoded packet that was not in the expected format of u8".into())))
-                    }
-                }
-            }
-            Err(symphonia::core::errors::Error::DecodeError(err)) => {
-                // Decode errors are not fatal. Print the error message and try to decode the next
-                // packet as usual.
-                log::warn!("Symphonia decode warning: {}", err);
-            }
-            Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((path.clone(), e))),
-        }
-    }
-
-    Ok(AnyPcm::U8(PcmResource { buffer: decoded_channels }))
 }
 
-fn decode_u16(decoder: &mut Box<dyn Decoder>, probed: &mut ProbeResult, max_frames: u64, num_channels: usize, num_frames: Option<u64>, track_id: u32, path: &PathBuf) -> Result<Vec<Vec<u16>>, PcmLoadError> {
-    let mut total_frames = 0;
-
-    let mut decoded_channels = Vec::<Vec<u16>>::new();
-    for _ in 0..num_channels {
-        decoded_channels.push(Vec::with_capacity(num_frames.unwrap_or(0) as usize));
+#[inline]
+pub(super) fn decode_u16_packet(
+    decoded_channels: &mut Vec<Vec<u16>>,
+    packet: Cow<AudioBuffer<u16>>,
+    num_channels: usize,
+) {
+    for i in 0..num_channels {
+        decoded_channels[i].extend_from_slice(packet.chan(i));
     }
+}
 
-    while let Ok(packet) = probed.format.next_packet() {
-        // If the packet does not belong to the selected track, skip over it.
-        if packet.track_id() != track_id {
-            continue;
-        }
-
-        match decoder.decode(&packet) {
-            Ok(decoded) => {
-                match decoded {
-                    AudioBufferRef::U16(d) => {
-                        total_frames += d.chan(0).len() as u64;
-                        if total_frames > max_frames {
-                            return Err(PcmLoadError::FileTooLarge(path.clone()));
-                        }
-                        for i in 0..num_channels {
-                            decoded_channels[i].extend_from_slice(d.chan(i));
-                        }
-                    }
-                    _ => {
-                        return Err(PcmLoadError::UnexpectedErrorWhileDecoding((path.clone(), "Symphonia returned a decoded packet that was not in the expected format of u16".into())))
-                    }
-                }
-            }
-            Err(symphonia::core::errors::Error::DecodeError(err)) => {
-                // Decode errors are not fatal. Print the error message and try to decode the next
-                // packet as usual.
-                log::warn!("Symphonia decode warning: {}", err);
-            }
-            Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((path.clone(), e))),
+#[inline]
+pub(super) fn decode_u24_packet(
+    decoded_channels: &mut Vec<Vec<[u8; 3]>>,
+    packet: Cow<AudioBuffer<u24>>,
+    num_channels: usize,
+) {
+    for i in 0..num_channels {
+        for s in packet.chan(i).iter() {
+            decoded_channels[i].push(s.to_ne_bytes());
         }
     }
+}
 
-    Ok(decoded_channels)
+#[inline]
+pub(super) fn decode_u32_packet(
+    decoded_channels: &mut Vec<Vec<f32>>,
+    packet: Cow<AudioBuffer<u32>>,
+    num_channels: usize,
+) {
+    for i in 0..num_channels {
+        for s in packet.chan(i).iter() {
+            let s_f32 = ((f64::from(*s) * (2.0 / std::u32::MAX as f64)) - 1.0) as f32;
+
+            decoded_channels[i].push(s_f32);
+        }
+    }
+}
+
+#[inline]
+pub(super) fn decode_i8_packet(
+    decoded_channels: &mut Vec<Vec<i8>>,
+    packet: Cow<AudioBuffer<i8>>,
+    num_channels: usize,
+) {
+    for i in 0..num_channels {
+        decoded_channels[i].extend_from_slice(packet.chan(i));
+    }
+}
+
+#[inline]
+pub(super) fn decode_i16_packet(
+    decoded_channels: &mut Vec<Vec<i16>>,
+    packet: Cow<AudioBuffer<i16>>,
+    num_channels: usize,
+) {
+    for i in 0..num_channels {
+        decoded_channels[i].extend_from_slice(packet.chan(i));
+    }
+}
+
+#[inline]
+pub(super) fn decode_i24_packet(
+    decoded_channels: &mut Vec<Vec<[u8; 3]>>,
+    packet: Cow<AudioBuffer<i24>>,
+    num_channels: usize,
+) {
+    for i in 0..num_channels {
+        for s in packet.chan(i).iter() {
+            decoded_channels[i].push(s.to_ne_bytes());
+        }
+    }
+}
+
+#[inline]
+pub(super) fn decode_i32_packet(
+    decoded_channels: &mut Vec<Vec<f32>>,
+    packet: Cow<AudioBuffer<i32>>,
+    num_channels: usize,
+) {
+    for i in 0..num_channels {
+        for s in packet.chan(i).iter() {
+            let s_f32 = (f64::from(*s) / std::i32::MAX as f64) as f32;
+
+            decoded_channels[i].push(s_f32);
+        }
+    }
+}
+
+#[inline]
+pub(super) fn decode_f32_packet(
+    decoded_channels: &mut Vec<Vec<f32>>,
+    packet: Cow<AudioBuffer<f32>>,
+    num_channels: usize,
+) {
+    for i in 0..num_channels {
+        decoded_channels[i].extend_from_slice(packet.chan(i));
+    }
+}
+
+#[inline]
+pub(super) fn decode_f64_packet(
+    decoded_channels: &mut Vec<Vec<f64>>,
+    packet: Cow<AudioBuffer<f64>>,
+    num_channels: usize,
+) {
+    for i in 0..num_channels {
+        decoded_channels[i].extend_from_slice(packet.chan(i));
+    }
 }
