@@ -127,22 +127,13 @@ impl PcmLoader {
 
         let n_frames = track.codec_params.n_frames;
 
-        // Eventually we should use disk streaming to store large files. Using this as a stop-gap
-        // safety check for now.
-        if let Some(n_frames) = n_frames {
-            let total_bytes = n_channels as u64 * n_frames * 4;
-            if total_bytes > MAX_FILE_BYTES {
-                return Err(PcmLoadError::FileTooLarge(path.clone()));
-            }
-        }
-
         // Create a decoder for the track.
         let mut decoder = self
             .codec_registry
             .make(&track.codec_params, &decode_opts)
             .map_err(|e| PcmLoadError::CouldNotCreateDecoder((path.clone(), e)))?;
 
-        let max_frames = MAX_FILE_BYTES / (4 * n_channels as u64);
+        let mut max_frames = 0;
         let mut total_frames = 0;
 
         enum FirstPacketType {
@@ -188,7 +179,19 @@ impl PcmLoader {
                                 .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
                         }
 
-                        check_total_frames(&mut total_frames, max_frames, d.chan(0).len(), path)?;
+                        max_frames = MAX_FILE_BYTES / n_channels as u64;
+                        if let Some(n_frames) = n_frames {
+                            if n_frames > max_frames {
+                                return Err(PcmLoadError::FileTooLarge(path.clone()));
+                            }
+                        } else {
+                            check_total_frames(
+                                &mut total_frames,
+                                max_frames,
+                                d.chan(0).len(),
+                                path,
+                            )?;
+                        }
 
                         decode::decode_u8_packet(&mut decoded_channels, d, n_channels);
 
@@ -202,7 +205,19 @@ impl PcmLoader {
                                 .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
                         }
 
-                        check_total_frames(&mut total_frames, max_frames, d.chan(0).len(), path)?;
+                        max_frames = MAX_FILE_BYTES / (2 * n_channels as u64);
+                        if let Some(n_frames) = n_frames {
+                            if n_frames > max_frames {
+                                return Err(PcmLoadError::FileTooLarge(path.clone()));
+                            }
+                        } else {
+                            check_total_frames(
+                                &mut total_frames,
+                                max_frames,
+                                d.chan(0).len(),
+                                path,
+                            )?;
+                        }
 
                         decode::decode_u16_packet(&mut decoded_channels, d, n_channels);
 
@@ -216,7 +231,19 @@ impl PcmLoader {
                                 .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
                         }
 
-                        check_total_frames(&mut total_frames, max_frames, d.chan(0).len(), path)?;
+                        max_frames = MAX_FILE_BYTES / (3 * n_channels as u64);
+                        if let Some(n_frames) = n_frames {
+                            if n_frames > max_frames {
+                                return Err(PcmLoadError::FileTooLarge(path.clone()));
+                            }
+                        } else {
+                            check_total_frames(
+                                &mut total_frames,
+                                max_frames,
+                                d.chan(0).len(),
+                                path,
+                            )?;
+                        }
 
                         decode::decode_u24_packet(&mut decoded_channels, d, n_channels);
 
@@ -230,7 +257,19 @@ impl PcmLoader {
                                 .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
                         }
 
-                        check_total_frames(&mut total_frames, max_frames, d.chan(0).len(), path)?;
+                        max_frames = MAX_FILE_BYTES / (4 * n_channels as u64);
+                        if let Some(n_frames) = n_frames {
+                            if n_frames > max_frames {
+                                return Err(PcmLoadError::FileTooLarge(path.clone()));
+                            }
+                        } else {
+                            check_total_frames(
+                                &mut total_frames,
+                                max_frames,
+                                d.chan(0).len(),
+                                path,
+                            )?;
+                        }
 
                         decode::decode_u32_packet(&mut decoded_channels, d, n_channels);
 
@@ -244,7 +283,19 @@ impl PcmLoader {
                                 .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
                         }
 
-                        check_total_frames(&mut total_frames, max_frames, d.chan(0).len(), path)?;
+                        max_frames = MAX_FILE_BYTES / n_channels as u64;
+                        if let Some(n_frames) = n_frames {
+                            if n_frames > max_frames {
+                                return Err(PcmLoadError::FileTooLarge(path.clone()));
+                            }
+                        } else {
+                            check_total_frames(
+                                &mut total_frames,
+                                max_frames,
+                                d.chan(0).len(),
+                                path,
+                            )?;
+                        }
 
                         decode::decode_i8_packet(&mut decoded_channels, d, n_channels);
 
@@ -258,7 +309,19 @@ impl PcmLoader {
                                 .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
                         }
 
-                        check_total_frames(&mut total_frames, max_frames, d.chan(0).len(), path)?;
+                        max_frames = MAX_FILE_BYTES / (2 * n_channels as u64);
+                        if let Some(n_frames) = n_frames {
+                            if n_frames > max_frames {
+                                return Err(PcmLoadError::FileTooLarge(path.clone()));
+                            }
+                        } else {
+                            check_total_frames(
+                                &mut total_frames,
+                                max_frames,
+                                d.chan(0).len(),
+                                path,
+                            )?;
+                        }
 
                         decode::decode_i16_packet(&mut decoded_channels, d, n_channels);
 
@@ -272,7 +335,19 @@ impl PcmLoader {
                                 .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
                         }
 
-                        check_total_frames(&mut total_frames, max_frames, d.chan(0).len(), path)?;
+                        max_frames = MAX_FILE_BYTES / (3 * n_channels as u64);
+                        if let Some(n_frames) = n_frames {
+                            if n_frames > max_frames {
+                                return Err(PcmLoadError::FileTooLarge(path.clone()));
+                            }
+                        } else {
+                            check_total_frames(
+                                &mut total_frames,
+                                max_frames,
+                                d.chan(0).len(),
+                                path,
+                            )?;
+                        }
 
                         decode::decode_i24_packet(&mut decoded_channels, d, n_channels);
 
@@ -286,7 +361,19 @@ impl PcmLoader {
                                 .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
                         }
 
-                        check_total_frames(&mut total_frames, max_frames, d.chan(0).len(), path)?;
+                        max_frames = MAX_FILE_BYTES / (4 * n_channels as u64);
+                        if let Some(n_frames) = n_frames {
+                            if n_frames > max_frames {
+                                return Err(PcmLoadError::FileTooLarge(path.clone()));
+                            }
+                        } else {
+                            check_total_frames(
+                                &mut total_frames,
+                                max_frames,
+                                d.chan(0).len(),
+                                path,
+                            )?;
+                        }
 
                         decode::decode_i32_packet(&mut decoded_channels, d, n_channels);
 
@@ -300,7 +387,19 @@ impl PcmLoader {
                                 .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
                         }
 
-                        check_total_frames(&mut total_frames, max_frames, d.chan(0).len(), path)?;
+                        max_frames = MAX_FILE_BYTES / (4 * n_channels as u64);
+                        if let Some(n_frames) = n_frames {
+                            if n_frames > max_frames {
+                                return Err(PcmLoadError::FileTooLarge(path.clone()));
+                            }
+                        } else {
+                            check_total_frames(
+                                &mut total_frames,
+                                max_frames,
+                                d.chan(0).len(),
+                                path,
+                            )?;
+                        }
 
                         decode::decode_f32_packet(&mut decoded_channels, d, n_channels);
 
@@ -314,7 +413,19 @@ impl PcmLoader {
                                 .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
                         }
 
-                        check_total_frames(&mut total_frames, max_frames, d.chan(0).len(), path)?;
+                        max_frames = MAX_FILE_BYTES / (8 * n_channels as u64);
+                        if let Some(n_frames) = n_frames {
+                            if n_frames > max_frames {
+                                return Err(PcmLoadError::FileTooLarge(path.clone()));
+                            }
+                        } else {
+                            check_total_frames(
+                                &mut total_frames,
+                                max_frames,
+                                d.chan(0).len(),
+                                path,
+                            )?;
+                        }
 
                         decode::decode_f64_packet(&mut decoded_channels, d, n_channels);
 
@@ -366,12 +477,14 @@ impl PcmLoader {
                     match decoder.decode(&packet) {
                         Ok(decoded) => match decoded {
                             AudioBufferRef::U8(d) => {
-                                check_total_frames(
-                                    &mut total_frames,
-                                    max_frames,
-                                    d.chan(0).len(),
-                                    path,
-                                )?;
+                                if n_frames.is_none() {
+                                    check_total_frames(
+                                        &mut total_frames,
+                                        max_frames,
+                                        d.chan(0).len(),
+                                        path,
+                                    )?;
+                                }
 
                                 decode::decode_u8_packet(&mut decoded_channels, d, n_channels);
                             }
@@ -396,12 +509,14 @@ impl PcmLoader {
                     match decoder.decode(&packet) {
                         Ok(decoded) => match decoded {
                             AudioBufferRef::U16(d) => {
-                                check_total_frames(
-                                    &mut total_frames,
-                                    max_frames,
-                                    d.chan(0).len(),
-                                    path,
-                                )?;
+                                if n_frames.is_none() {
+                                    check_total_frames(
+                                        &mut total_frames,
+                                        max_frames,
+                                        d.chan(0).len(),
+                                        path,
+                                    )?;
+                                }
 
                                 decode::decode_u16_packet(&mut decoded_channels, d, n_channels);
                             }
@@ -426,12 +541,14 @@ impl PcmLoader {
                     match decoder.decode(&packet) {
                         Ok(decoded) => match decoded {
                             AudioBufferRef::U24(d) => {
-                                check_total_frames(
-                                    &mut total_frames,
-                                    max_frames,
-                                    d.chan(0).len(),
-                                    path,
-                                )?;
+                                if n_frames.is_none() {
+                                    check_total_frames(
+                                        &mut total_frames,
+                                        max_frames,
+                                        d.chan(0).len(),
+                                        path,
+                                    )?;
+                                }
 
                                 decode::decode_u24_packet(&mut decoded_channels, d, n_channels);
                             }
@@ -456,12 +573,14 @@ impl PcmLoader {
                     match decoder.decode(&packet) {
                         Ok(decoded) => match decoded {
                             AudioBufferRef::U32(d) => {
-                                check_total_frames(
-                                    &mut total_frames,
-                                    max_frames,
-                                    d.chan(0).len(),
-                                    path,
-                                )?;
+                                if n_frames.is_none() {
+                                    check_total_frames(
+                                        &mut total_frames,
+                                        max_frames,
+                                        d.chan(0).len(),
+                                        path,
+                                    )?;
+                                }
 
                                 decode::decode_u32_packet(&mut decoded_channels, d, n_channels);
                             }
@@ -486,12 +605,14 @@ impl PcmLoader {
                     match decoder.decode(&packet) {
                         Ok(decoded) => match decoded {
                             AudioBufferRef::S8(d) => {
-                                check_total_frames(
-                                    &mut total_frames,
-                                    max_frames,
-                                    d.chan(0).len(),
-                                    path,
-                                )?;
+                                if n_frames.is_none() {
+                                    check_total_frames(
+                                        &mut total_frames,
+                                        max_frames,
+                                        d.chan(0).len(),
+                                        path,
+                                    )?;
+                                }
 
                                 decode::decode_i8_packet(&mut decoded_channels, d, n_channels);
                             }
@@ -516,12 +637,14 @@ impl PcmLoader {
                     match decoder.decode(&packet) {
                         Ok(decoded) => match decoded {
                             AudioBufferRef::S16(d) => {
-                                check_total_frames(
-                                    &mut total_frames,
-                                    max_frames,
-                                    d.chan(0).len(),
-                                    path,
-                                )?;
+                                if n_frames.is_none() {
+                                    check_total_frames(
+                                        &mut total_frames,
+                                        max_frames,
+                                        d.chan(0).len(),
+                                        path,
+                                    )?;
+                                }
 
                                 decode::decode_i16_packet(&mut decoded_channels, d, n_channels);
                             }
@@ -546,12 +669,14 @@ impl PcmLoader {
                     match decoder.decode(&packet) {
                         Ok(decoded) => match decoded {
                             AudioBufferRef::S24(d) => {
-                                check_total_frames(
-                                    &mut total_frames,
-                                    max_frames,
-                                    d.chan(0).len(),
-                                    path,
-                                )?;
+                                if n_frames.is_none() {
+                                    check_total_frames(
+                                        &mut total_frames,
+                                        max_frames,
+                                        d.chan(0).len(),
+                                        path,
+                                    )?;
+                                }
 
                                 decode::decode_i24_packet(&mut decoded_channels, d, n_channels);
                             }
@@ -576,12 +701,14 @@ impl PcmLoader {
                     match decoder.decode(&packet) {
                         Ok(decoded) => match decoded {
                             AudioBufferRef::S32(d) => {
-                                check_total_frames(
-                                    &mut total_frames,
-                                    max_frames,
-                                    d.chan(0).len(),
-                                    path,
-                                )?;
+                                if n_frames.is_none() {
+                                    check_total_frames(
+                                        &mut total_frames,
+                                        max_frames,
+                                        d.chan(0).len(),
+                                        path,
+                                    )?;
+                                }
 
                                 decode::decode_i32_packet(&mut decoded_channels, d, n_channels);
                             }
@@ -606,12 +733,14 @@ impl PcmLoader {
                     match decoder.decode(&packet) {
                         Ok(decoded) => match decoded {
                             AudioBufferRef::F32(d) => {
-                                check_total_frames(
-                                    &mut total_frames,
-                                    max_frames,
-                                    d.chan(0).len(),
-                                    path,
-                                )?;
+                                if n_frames.is_none() {
+                                    check_total_frames(
+                                        &mut total_frames,
+                                        max_frames,
+                                        d.chan(0).len(),
+                                        path,
+                                    )?;
+                                }
 
                                 decode::decode_f32_packet(&mut decoded_channels, d, n_channels);
                             }
@@ -636,12 +765,14 @@ impl PcmLoader {
                     match decoder.decode(&packet) {
                         Ok(decoded) => match decoded {
                             AudioBufferRef::F64(d) => {
-                                check_total_frames(
-                                    &mut total_frames,
-                                    max_frames,
-                                    d.chan(0).len(),
-                                    path,
-                                )?;
+                                if n_frames.is_none() {
+                                    check_total_frames(
+                                        &mut total_frames,
+                                        max_frames,
+                                        d.chan(0).len(),
+                                        path,
+                                    )?;
+                                }
 
                                 decode::decode_f64_packet(&mut decoded_channels, d, n_channels);
                             }
