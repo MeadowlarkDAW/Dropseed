@@ -505,8 +505,18 @@ pub struct SeekInfo {
 
 #[derive(Debug, Clone, Copy)]
 enum RangeChecker {
-    Playing { end_frame: Frame },
-    Looping { end_frame_1: Frame, start_frame_2: Frame, end_frame_2: Frame },
+    Playing {
+        /// The end frame (exclusive)
+        end_frame: Frame,
+    },
+    Looping {
+        /// The end frame of the first part before the loop-back (exclusive)
+        end_frame_1: Frame,
+        /// The start frame of the second part after the loop-back (inclusive)
+        start_frame_2: Frame,
+        /// The end frame of the second part after the loop-back (exclusive)
+        end_frame_2: Frame,
+    },
     Paused,
 }
 
@@ -583,7 +593,7 @@ mod tests {
         use super::RangeChecker;
 
         let playhead = Frame(3);
-        let r = RangeChecker::Playing { end_frame: Frame(0) };
+        let r = RangeChecker::Playing { end_frame: Frame(10) };
 
         assert!(r.is_range_active(playhead, Frame(5), Frame(12)));
         assert!(r.is_range_active(playhead, Frame(0), Frame(5)));
