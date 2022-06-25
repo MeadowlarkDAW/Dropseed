@@ -239,7 +239,7 @@ impl PluginScanner {
             }
 
             for binary_path in found_binaries.iter() {
-                match crate::clap::plugin::entry_init(
+                match crate::clap::factory::entry_init(
                     binary_path,
                     self.thread_ids.clone(),
                     &self.coll_handle,
