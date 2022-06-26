@@ -70,6 +70,7 @@ pub struct ParamModifiedInfo {
 #[derive(Debug)]
 pub struct PluginHandle {
     pub params: PluginParamsExt,
+    pub internal: Option<Box<dyn std::any::Any + Send + 'static>>,
     pub(crate) audio_ports: PluginAudioPortsExt,
     pub(crate) note_ports: PluginNotePortsExt,
     pub(crate) has_automation_out_port: bool,
@@ -318,9 +319,9 @@ impl PluginInstanceHost {
         if self.host_request.state_marked_dirty_and_reset_dirty() {
             if let Some(main_thread) = &mut self.main_thread {
                 let preset = match main_thread.collect_save_state() {
-                    Ok(preset) => preset.map(|p| PluginPreset {
+                    Ok(preset) => preset.map(|bytes| PluginPreset {
                         version: self.plugin_version.as_ref().map(|v| String::clone(&*v)),
-                        data: p,
+                        bytes,
                     }),
                     Err(e) => {
                         log::error!(
@@ -433,7 +434,7 @@ impl PluginInstanceHost {
         }
 
         match plugin_main_thread.activate(sample_rate, min_frames, max_frames, coll_handle) {
-            Ok(plugin_audio_thread) => {
+            Ok(info) => {
                 self.host_request.reset_deactivate();
                 self.host_request.request_process();
 
@@ -478,7 +479,7 @@ impl PluginInstanceHost {
                 Ok((
                     PluginInstanceHostAudioThread {
                         id: self.id.clone(),
-                        plugin: plugin_audio_thread,
+                        plugin: info.audio_thread,
                         state: Arc::clone(&self.state),
                         param_queues: param_queues_audio_thread,
                         in_events: EventQueue::new(num_params * 3),
@@ -488,6 +489,7 @@ impl PluginInstanceHost {
                     },
                     PluginHandle {
                         audio_ports,
+                        internal: info.internal_handle,
                         note_ports,
                         params: params_ext,
                         has_automation_out_port,
@@ -1252,11 +1254,11 @@ pub enum ActivatePluginError {
     NotLoaded,
     AlreadyActive,
     RestartScheduled,
-    PluginFailedToGetAudioPortsExt(Box<dyn Error + Send>),
-    PluginFailedToGetNotePortsExt(Box<dyn Error + Send>),
+    PluginFailedToGetAudioPortsExt(String),
+    PluginFailedToGetNotePortsExt(String),
     PluginFailedToGetParamInfo(usize),
     PluginFailedToGetParamValue(ParamID),
-    PluginSpecific(Box<dyn Error + Send>),
+    PluginSpecific(String),
 }
 
 impl Error for ActivatePluginError {}
@@ -1292,8 +1294,8 @@ impl std::fmt::Display for ActivatePluginError {
     }
 }
 
-impl From<Box<dyn Error + Send>> for ActivatePluginError {
-    fn from(e: Box<dyn Error + Send>) -> Self {
+impl From<String> for ActivatePluginError {
+    fn from(e: String) -> Self {
         ActivatePluginError::PluginSpecific(e)
     }
 }

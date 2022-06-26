@@ -9,7 +9,7 @@ pub struct PluginPreset {
     pub version: Option<String>,
 
     /// The preset as raw bytes (use serde and bincode).
-    pub data: Vec<u8>,
+    pub bytes: Vec<u8>,
 }
 
 impl Debug for PluginPreset {
@@ -18,7 +18,7 @@ impl Debug for PluginPreset {
 
         f.field("version", &self.version);
 
-        f.field("preset_size", &self.data.len());
+        f.field("preset_size", &self.bytes.len());
 
         f.finish()
     }

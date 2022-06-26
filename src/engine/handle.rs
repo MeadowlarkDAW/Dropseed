@@ -1,5 +1,4 @@
 use crossbeam::channel::{self, Receiver, Sender};
-use std::error::Error;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -16,7 +15,7 @@ use crate::plugin::PluginFactory;
 
 pub struct DSEngineHandle {
     /// The results of scanning the internal plugins.
-    pub internal_plugins_res: Vec<Result<ScannedPluginKey, Box<dyn Error + Send>>>,
+    pub internal_plugins_res: Vec<Result<ScannedPluginKey, String>>,
 
     handle_to_engine_tx: Sender<DSEngineRequest>,
 
@@ -31,7 +30,7 @@ pub struct DSEngineHandle {
 }
 
 struct SpawnEngineRes {
-    internal_plugin_res: Vec<Result<ScannedPluginKey, Box<dyn Error + Send>>>,
+    internal_plugin_res: Vec<Result<ScannedPluginKey, String>>,
 }
 
 impl DSEngineHandle {

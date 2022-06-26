@@ -1,6 +1,5 @@
 use basedrop::Shared;
 use meadowlark_core_types::SampleRate;
-use std::error::Error;
 
 pub mod audio_buffer;
 pub mod events;
@@ -89,7 +88,12 @@ pub trait PluginFactory: Send {
         host: HostRequest,
         plugin_id: PluginInstanceID,
         coll_handle: &basedrop::Handle,
-    ) -> Result<Box<dyn PluginMainThread>, Box<dyn Error + Send>>;
+    ) -> Result<Box<dyn PluginMainThread>, String>;
+}
+
+pub struct PluginActivatedInfo {
+    pub audio_thread: Box<dyn PluginAudioThread>,
+    pub internal_handle: Option<Box<dyn std::any::Any + Send + 'static>>,
 }
 
 /// The methods of an audio plugin instance which run in the "main" thread.
@@ -107,7 +111,7 @@ pub trait PluginMainThread {
     ///
     /// `[main-thread & !active_state]`
     #[allow(unused)]
-    fn init(&mut self, coll_handle: &basedrop::Handle) -> Result<(), Box<dyn Error + Send>> {
+    fn init(&mut self, coll_handle: &basedrop::Handle) -> Result<(), String> {
         Ok(())
     }
 
@@ -128,7 +132,7 @@ pub trait PluginMainThread {
         min_frames: u32,
         max_frames: u32,
         coll_handle: &basedrop::Handle,
-    ) -> Result<Box<dyn PluginAudioThread>, Box<dyn Error + Send>>;
+    ) -> Result<PluginActivatedInfo, String>;
 
     /// Collect the save state of this plugin as raw bytes (use serde and bincode).
     ///
@@ -138,7 +142,7 @@ pub trait PluginMainThread {
     /// By default this returns `None`.
     ///
     /// `[main-thread]`
-    fn collect_save_state(&mut self) -> Result<Option<Vec<u8>>, Box<dyn Error + Send>> {
+    fn collect_save_state(&mut self) -> Result<Option<Vec<u8>>, String> {
         Ok(None)
     }
 
@@ -148,7 +152,7 @@ pub trait PluginMainThread {
     ///
     /// `[main-thread]`
     #[allow(unused)]
-    fn load_state(&mut self, preset: &PluginPreset) -> Result<(), Box<dyn Error + Send>> {
+    fn load_state(&mut self, preset: &PluginPreset) -> Result<(), String> {
         Ok(())
     }
 
@@ -156,7 +160,7 @@ pub trait PluginMainThread {
     /// counterpart has/will be dropped.
     ///
     /// `[main-thread & active_state]`
-    fn deactivate(&mut self);
+    fn deactivate(&mut self) {}
 
     /// Called by the host on the main thread in response to a previous call to `host.request_callback()`.
     ///
@@ -174,9 +178,7 @@ pub trait PluginMainThread {
     ///
     /// [main-thread & !active_state]
     #[allow(unused)]
-    fn audio_ports_ext(
-        &mut self,
-    ) -> Result<ext::audio_ports::PluginAudioPortsExt, Box<dyn Error + Send>> {
+    fn audio_ports_ext(&mut self) -> Result<ext::audio_ports::PluginAudioPortsExt, String> {
         Ok(ext::audio_ports::EMPTY_AUDIO_PORTS_CONFIG.clone())
     }
 
@@ -188,9 +190,7 @@ pub trait PluginMainThread {
     ///
     /// [main-thread & !active_state]
     #[allow(unused)]
-    fn note_ports_ext(
-        &mut self,
-    ) -> Result<ext::note_ports::PluginNotePortsExt, Box<dyn Error + Send>> {
+    fn note_ports_ext(&mut self) -> Result<ext::note_ports::PluginNotePortsExt, String> {
         Ok(ext::note_ports::EMPTY_NOTE_PORTS_CONFIG.clone())
     }
 
@@ -257,22 +257,6 @@ pub trait PluginMainThread {
     fn param_text_to_value(&self, param_id: ParamID, display: &str) -> Result<f64, ()> {
         Err(())
     }
-
-    /// Flushes a set of parameter changes.
-    ///
-    /// This will only be called while the plugin is inactive.
-    ///
-    /// This will never be called if `PluginMainThread::num_params()` returned 0.
-    ///
-    /// This method will not be called concurrently to clap_plugin->process().
-    ///
-    /// This method will not be used while the plugin is processing.
-    ///
-    /// By default this does nothing.
-    ///
-    /// [!active : main-thread]
-    #[allow(unused)]
-    fn param_flush(&mut self, in_events: &EventQueue, out_events: &mut EventQueue) {}
 
     /// Called when the tempo map is updated.
     ///

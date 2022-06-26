@@ -2,7 +2,6 @@ use basedrop::{Collector, Shared, SharedCell};
 use crossbeam::channel::{Receiver, Sender};
 use fnv::FnvHashSet;
 use meadowlark_core_types::SampleRate;
-use std::error::Error;
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -49,7 +48,7 @@ impl DSEngineMainThread {
         mut internal_plugins: Vec<Box<dyn PluginFactory>>,
         handle_to_engine_rx: Receiver<DSEngineRequest>,
         event_tx: Sender<DSEngineEvent>,
-    ) -> (Self, Vec<Result<ScannedPluginKey, Box<dyn Error + Send>>>) {
+    ) -> (Self, Vec<Result<ScannedPluginKey, String>>) {
         // Set up and run garbage collector wich collects and safely drops garbage from
         // the audio thread.
         let collector = Collector::new();
@@ -62,7 +61,7 @@ impl DSEngineMainThread {
             PluginScanner::new(collector.handle(), Shared::clone(&host_info), thread_ids.clone());
 
         // Scan the user's internal plugins.
-        let internal_plugins_res: Vec<Result<ScannedPluginKey, Box<dyn Error + Send>>> =
+        let internal_plugins_res: Vec<Result<ScannedPluginKey, String>> =
             internal_plugins.drain(..).map(|p| plugin_scanner.scan_internal_plugin(p)).collect();
 
         (

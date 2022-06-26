@@ -311,3 +311,17 @@ impl HostParamsExtAudioThread {
         self.flush_requested.store(true, Ordering::SeqCst);
     }
 }
+
+pub fn default_db_value_to_text(value: f64) -> String {
+    format!("{:.2} dB", value)
+}
+
+pub fn parse_text_to_f64(text: &str) -> Result<f64, ()> {
+    let val: f64 = if let Ok(val) = text.parse() {
+        val
+    } else {
+        return Err(());
+    };
+
+    Ok(val)
+}

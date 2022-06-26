@@ -27,15 +27,15 @@ use crate::engine::events::from_engine::{DSEngineEvent, PluginEvent};
 use crate::engine::plugin_scanner::{NewPluginInstanceError, PluginScanner};
 use crate::graph::plugin_host::PluginInstanceHost;
 use crate::graph::shared_pool::SharedPluginHostAudioThread;
-use plugin::ext::audio_ports::PluginAudioPortsExt;
-use plugin::ext::note_ports::PluginNotePortsExt;
-use plugin::host_request::{HostInfo, HostRequest};
-use plugin::PluginSaveState;
 use crate::transport::TempoMap;
 use crate::transport::TransportHandle;
 use crate::transport::TransportTask;
 use crate::utils::thread_id::SharedThreadIDs;
 use crate::ParamID;
+use plugin::ext::audio_ports::PluginAudioPortsExt;
+use plugin::ext::note_ports::PluginNotePortsExt;
+use plugin::host_request::{HostInfo, HostRequest};
+use plugin::PluginSaveState;
 
 pub use compiler::GraphCompilerError;
 pub use plugin_host::{

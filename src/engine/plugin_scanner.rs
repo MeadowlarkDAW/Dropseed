@@ -164,7 +164,7 @@ impl PluginScanner {
 
         self.scanned_external_plugins.clear();
         let mut scanned_plugins: Vec<ScannedPlugin> = Vec::new();
-        let mut failed_plugins: Vec<(PathBuf, Box<dyn Error + Send>)> = Vec::new();
+        let mut failed_plugins: Vec<(PathBuf, String)> = Vec::new();
 
         for (key, f) in self.scanned_internal_plugins.iter() {
             scanned_plugins.push(ScannedPlugin {
@@ -284,7 +284,7 @@ impl PluginScanner {
                             binary_path,
                             e
                         );
-                        failed_plugins.push((binary_path.clone(), e));
+                        failed_plugins.push((binary_path.clone(), format!("{}", e)));
                     }
                 }
             }
@@ -296,7 +296,7 @@ impl PluginScanner {
     pub fn scan_internal_plugin(
         &mut self,
         factory: Box<dyn PluginFactory>,
-    ) -> Result<ScannedPluginKey, Box<dyn Error + Send>> {
+    ) -> Result<ScannedPluginKey, String> {
         let description = factory.description();
 
         let key =
@@ -455,13 +455,13 @@ pub(crate) struct CreatePluginResult {
 #[derive(Debug)]
 pub struct RescanPluginDirectoriesRes {
     pub scanned_plugins: Vec<ScannedPlugin>,
-    pub failed_plugins: Vec<(PathBuf, Box<dyn Error + Send>)>,
+    pub failed_plugins: Vec<(PathBuf, String)>,
 }
 
 #[derive(Debug)]
 pub enum NewPluginInstanceError {
-    FactoryFailedToCreateNewInstance(String, Box<dyn Error + Send>),
-    PluginFailedToInit(String, Box<dyn Error + Send>),
+    FactoryFailedToCreateNewInstance(String, String),
+    PluginFailedToInit(String, String),
     NotFound(String),
     FormatNotFound(String, PluginFormat),
 }
