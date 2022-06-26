@@ -12,6 +12,8 @@ pub(crate) mod plugin_host;
 pub(crate) mod schedule;
 pub(crate) mod shared_pool;
 
+pub mod plugin;
+
 mod compiler;
 mod save_state;
 mod verifier;
@@ -25,10 +27,10 @@ use crate::engine::events::from_engine::{DSEngineEvent, PluginEvent};
 use crate::engine::plugin_scanner::{NewPluginInstanceError, PluginScanner};
 use crate::graph::plugin_host::PluginInstanceHost;
 use crate::graph::shared_pool::SharedPluginHostAudioThread;
-use crate::plugin::ext::audio_ports::PluginAudioPortsExt;
-use crate::plugin::ext::note_ports::PluginNotePortsExt;
-use crate::plugin::host_request::{HostInfo, HostRequest};
-use crate::plugin::PluginSaveState;
+use plugin::ext::audio_ports::PluginAudioPortsExt;
+use plugin::ext::note_ports::PluginNotePortsExt;
+use plugin::host_request::{HostInfo, HostRequest};
+use plugin::PluginSaveState;
 use crate::transport::TempoMap;
 use crate::transport::TransportHandle;
 use crate::transport::TransportTask;

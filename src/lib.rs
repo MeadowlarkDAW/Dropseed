@@ -6,7 +6,6 @@ mod graph;
 #[cfg(feature = "clap-host")]
 mod clap;
 
-pub mod plugin;
 pub mod resource_loader;
 pub mod transport;
 pub mod utils;
@@ -26,11 +25,12 @@ pub use graph::{
     AudioGraphSaveState, Edge, ParamGestureInfo, ParamModifiedInfo, PluginActivationStatus,
     PluginEdges, PluginHandle, PluginParamsExt, PortType,
 };
-pub use plugin::audio_buffer::{AudioPortBuffer, AudioPortBufferMut};
-pub use plugin::events::event_queue::{EventQueue, ProcEvent, ProcEventRef, ProcEventRefMut};
-pub use plugin::ext::audio_ports::{AudioPortInfo, MainPortsLayout, PluginAudioPortsExt};
-pub use plugin::ext::params::{ParamID, ParamInfo, ParamInfoFlags};
-pub use plugin::host_request::{HostInfo, HostRequest};
-pub use plugin::process_info::{ProcBuffers, ProcInfo, ProcessStatus};
+pub use graph::plugin;
+pub use graph::plugin::audio_buffer::{AudioPortBuffer, AudioPortBufferMut};
+pub use graph::plugin::events::event_queue::{EventQueue, ProcEvent, ProcEventRef, ProcEventRefMut};
+pub use graph::plugin::ext::audio_ports::{AudioPortInfo, MainPortsLayout, PluginAudioPortsExt};
+pub use graph::plugin::ext::params::{ParamID, ParamInfo, ParamInfoFlags};
+pub use graph::plugin::host_request::{HostInfo, HostRequest};
+pub use graph::plugin::process_info::{ProcBuffers, ProcInfo, ProcessStatus};
 pub use transport::TransportInfo;
 pub use utils::fixed_point::FixedPoint64;
