@@ -1,6 +1,8 @@
+use basedrop::{Owned, Shared};
 use meadowlark_core_types::{
     ParamF32, ParamF32Handle, SampleRate, Unit, DEFAULT_DB_GRADIENT, DEFAULT_SMOOTH_SECS,
 };
+use rtrb::{Consumer, Producer, RingBuffer};
 use serde::{Deserialize, Serialize};
 
 use crate::plugin::ext::params::{default_db_value_to_text, parse_text_to_f64};
@@ -8,18 +10,22 @@ use crate::plugin::{
     ext, PluginActivatedInfo, PluginAudioThread, PluginDescriptor, PluginFactory, PluginMainThread,
     PluginPreset,
 };
+use crate::resource_loader::PcmResource;
 use crate::{
     EventQueue, HostRequest, ParamID, ParamInfoFlags, PluginInstanceID, ProcBuffers, ProcEventRef,
     ProcInfo, ProcessStatus,
 };
-use crate::resource_loader::{ResourceLoader, PcmResource};
+
+pub static SAMPLE_BROWSER_PLUG_RDN: &'static str = "app.meadowlark.sample-browser";
+
+const MSG_BUFFER_SIZE: usize = 16;
 
 pub struct SampleBrowserPlugFactory;
 
 impl PluginFactory for SampleBrowserPlugFactory {
     fn description(&self) -> PluginDescriptor {
         PluginDescriptor {
-            id: "app.meadowlark.sample-browser".into(),
+            id: SAMPLE_BROWSER_PLUG_RDN.into(),
             version: "0.1".into(),
             name: "Sample Browser".into(),
             vendor: "Meadowlark".into(),
@@ -32,11 +38,11 @@ impl PluginFactory for SampleBrowserPlugFactory {
 
     fn new(
         &mut self,
-        _host: HostRequest,
+        host: HostRequest,
         _plugin_id: PluginInstanceID,
         _coll_handle: &basedrop::Handle,
     ) -> Result<Box<dyn PluginMainThread>, String> {
-        Ok(Box::new(SampleBrowserPlugMainThread::new()))
+        Ok(Box::new(SampleBrowserPlugMainThread::new(host)))
     }
 }
 
@@ -52,8 +58,42 @@ impl Default for SampleBrowserPlugPreset {
 }
 
 pub struct SampleBrowserPlugHandle {
-    
+    to_audio_thread_tx: Producer<ProcessMsg>,
 }
+
+impl SampleBrowserPlugHandle {
+    pub fn play_sample(&mut self, pcm: Shared<PcmResource>) {
+        self.send(ProcessMsg::PlayNewSample { pcm });
+    }
+
+    pub fn replay_sample(&mut self) {
+        self.send(ProcessMsg::ReplaySample);
+    }
+
+    pub fn stop(&mut self) {
+        self.send(ProcessMsg::Stop);
+    }
+
+    pub fn discard_sample(&mut self) {
+        self.send(ProcessMsg::DiscardSample);
+    }
+
+    fn send(&mut self, msg: ProcessMsg) {
+        if let Err(e) = self.to_audio_thread_tx.push(msg) {
+            log::error!("Sample browser plugin failed to send message: {}", e);
+        }
+    }
+}
+
+enum ProcessMsg {
+    PlayNewSample { pcm: Shared<PcmResource> },
+    ReplaySample,
+    Stop,
+    DiscardSample,
+}
+
+unsafe impl Send for ProcessMsg {}
+unsafe impl Sync for ProcessMsg {}
 
 struct ParamsHandle {
     pub gain: ParamF32Handle,
@@ -93,16 +133,17 @@ impl Params {
 
 pub struct SampleBrowserPlugMainThread {
     params: ParamsHandle,
+    host_request: HostRequest,
 }
 
 impl SampleBrowserPlugMainThread {
-    fn new() -> Self {
+    fn new(host_request: HostRequest) -> Self {
         // These parameters will be re-initialized later with the correct sample_rate
         // and max_frames when the plugin is activated.
         let (_params, params_handle) =
             Params::new(&SampleBrowserPlugPreset::default(), Default::default(), 0);
 
-        Self { params: params_handle }
+        Self { params: params_handle, host_request }
     }
 
     fn save_state(&self) -> SampleBrowserPlugPreset {
@@ -116,17 +157,27 @@ impl PluginMainThread for SampleBrowserPlugMainThread {
         sample_rate: SampleRate,
         _min_frames: u32,
         max_frames: u32,
-        _coll_handle: &basedrop::Handle,
+        coll_handle: &basedrop::Handle,
     ) -> Result<PluginActivatedInfo, String> {
         let preset = self.save_state();
 
         let (params, params_handle) = Params::new(&preset, sample_rate, max_frames as usize);
-
         self.params = params_handle;
 
+        let (to_audio_thread_tx, from_handle_rx) = RingBuffer::<ProcessMsg>::new(MSG_BUFFER_SIZE);
+        let from_handle_rx = Owned::new(coll_handle, from_handle_rx);
+
         Ok(PluginActivatedInfo {
-            audio_thread: Box::new(SampleBrowserPlugAudioThread { params }),
-            internal_handle: None,
+            audio_thread: Box::new(SampleBrowserPlugAudioThread {
+                params,
+                from_handle_rx,
+                pcm: None,
+                host_request: self.host_request.clone(),
+                is_playing: false,
+                playhead: 0,
+                is_processing: false,
+            }),
+            internal_handle: Some(Box::new(SampleBrowserPlugHandle { to_audio_thread_tx })),
         })
     }
 
@@ -194,26 +245,20 @@ impl PluginMainThread for SampleBrowserPlugMainThread {
 
 pub struct SampleBrowserPlugAudioThread {
     params: Params,
+
+    from_handle_rx: Owned<Consumer<ProcessMsg>>,
+    pcm: Option<Shared<PcmResource>>,
+
+    host_request: HostRequest,
+
+    is_playing: bool,
+    playhead: usize,
+
+    is_processing: bool,
 }
 
-impl PluginAudioThread for SampleBrowserPlugAudioThread {
-    fn start_processing(&mut self) -> Result<(), ()> {
-        Ok(())
-    }
-
-    fn stop_processing(&mut self) {}
-
-    fn process(
-        &mut self,
-        proc_info: &ProcInfo,
-        buffers: &mut ProcBuffers,
-        in_events: &EventQueue,
-        out_events: &mut EventQueue,
-    ) -> ProcessStatus {
-        todo!()
-    }
-
-    fn param_flush(&mut self, in_events: &EventQueue, out_events: &mut EventQueue) {
+impl SampleBrowserPlugAudioThread {
+    fn poll(&mut self, in_events: &EventQueue) {
         for e in in_events.iter() {
             match e.get() {
                 Ok(ProcEventRef::ParamValue(e, _)) => match e.param_id() {
@@ -223,5 +268,85 @@ impl PluginAudioThread for SampleBrowserPlugAudioThread {
                 _ => {}
             }
         }
+
+        while let Ok(msg) = self.from_handle_rx.pop() {
+            match msg {
+                ProcessMsg::PlayNewSample { pcm } => {
+                    self.pcm = Some(pcm);
+                    self.is_playing = true;
+                    self.playhead = 0;
+
+                    if !self.is_processing {
+                        self.host_request.request_process();
+                    }
+                }
+                ProcessMsg::ReplaySample => {
+                    self.is_playing = true;
+                    self.playhead = 0;
+
+                    if !self.is_processing {
+                        self.host_request.request_process();
+                    }
+                }
+                ProcessMsg::Stop => {
+                    self.is_playing = false;
+                }
+                ProcessMsg::DiscardSample => {
+                    self.is_playing = false;
+                    self.pcm = None;
+                }
+            }
+        }
+    }
+}
+
+impl PluginAudioThread for SampleBrowserPlugAudioThread {
+    fn start_processing(&mut self) -> Result<(), ()> {
+        self.is_processing = true;
+
+        Ok(())
+    }
+
+    fn stop_processing(&mut self) {
+        self.is_processing = false;
+    }
+
+    fn process(
+        &mut self,
+        proc_info: &ProcInfo,
+        buffers: &mut ProcBuffers,
+        in_events: &EventQueue,
+        _out_events: &mut EventQueue,
+    ) -> ProcessStatus {
+        self.poll(in_events);
+
+        if self.is_playing && self.pcm.is_some() {
+            let pcm = self.pcm.as_ref().unwrap();
+
+            if self.playhead < pcm.len_frames.0 as usize {
+                let (mut buf_l, mut buf_r) =
+                    unsafe { buffers.audio_out[0].stereo_f32_unchecked_mut() };
+
+                debug_assert!(proc_info.frames <= buf_l.len());
+                debug_assert!(proc_info.frames <= buf_r.len());
+
+                let buf_l_part = &mut buf_l[0..proc_info.frames];
+                let buf_r_part = &mut buf_r[0..proc_info.frames];
+
+                pcm.fill_stereo_f32(self.playhead as isize, buf_l_part, buf_r_part);
+
+                return ProcessStatus::Continue;
+            } else {
+                self.is_playing = false;
+            }
+        }
+
+        buffers.audio_out[0].clear_all(proc_info.frames);
+
+        ProcessStatus::Sleep
+    }
+
+    fn param_flush(&mut self, in_events: &EventQueue, _out_events: &mut EventQueue) {
+        self.poll(in_events);
     }
 }

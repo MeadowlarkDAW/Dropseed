@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use basedrop::{Shared, SharedCell};
-use meadowlark_core_types::{Frame, MusicalTime, SampleRate};
+use meadowlark_core_types::{Frames, MusicalTime, SampleRate};
 
 mod tempo_map;
 
@@ -30,7 +30,7 @@ pub struct TransportHandle {
     tempo_map_shared: Shared<SharedCell<(Shared<TempoMap>, u64)>>,
 
     playhead_frame_shared: Arc<AtomicU64>,
-    playhead_frame: Frame,
+    playhead_frame: Frames,
     playhead_musical: MusicalTime,
 
     seek_to: MusicalTime,
@@ -61,7 +61,7 @@ impl TransportHandle {
     }
 
     pub fn playhead_position(&mut self) -> MusicalTime {
-        let new_pos_frame = Frame(self.playhead_frame_shared.load(Ordering::Relaxed));
+        let new_pos_frame = Frames(self.playhead_frame_shared.load(Ordering::Relaxed));
         if self.playhead_frame != new_pos_frame {
             self.playhead_frame = new_pos_frame;
 
@@ -91,7 +91,7 @@ pub struct TransportTask {
     tempo_map_shared: Shared<SharedCell<(Shared<TempoMap>, u64)>>,
     tempo_map: Shared<TempoMap>,
 
-    playhead_frame: Frame,
+    playhead_frame: Frames,
     is_playing: bool,
 
     loop_state: LoopStateProcInfo,
@@ -100,7 +100,7 @@ pub struct TransportTask {
     seek_info: Option<SeekInfo>,
 
     range_checker: RangeChecker,
-    next_playhead_frame: Frame,
+    next_playhead_frame: Frames,
 
     seek_to_version: u64,
     loop_state_version: u64,
@@ -212,7 +212,7 @@ impl TransportTask {
     pub fn process(&mut self, frames: usize) -> TransportInfo {
         let Parameters { seek_to, is_playing, loop_state } = *self.parameters.get();
 
-        let proc_frames = Frame(frames as u64);
+        let proc_frames = Frames(frames as u64);
 
         self.playhead_frame = self.next_playhead_frame;
 
@@ -406,7 +406,7 @@ impl TransportTask {
 
 #[derive(Clone)]
 pub struct TransportInfo {
-    playhead_frame: Frame,
+    playhead_frame: Frames,
     is_playing: bool,
     loop_state: LoopStateProcInfo,
     loop_back_info: Option<LoopBackInfo>,
@@ -434,7 +434,7 @@ impl TransportInfo {
     /// When `plackback_state()` is of type `Playing`, then this position is the frame at the start
     /// of this process block. (And `playhead + proc_info.frames` is the end position (exclusive) of
     /// this process block.)
-    pub fn playhead_frame(&self) -> Frame {
+    pub fn playhead_frame(&self) -> Frames {
         self.playhead_frame
     }
 
@@ -466,7 +466,7 @@ impl TransportInfo {
     ///
     /// * `start` - The start of the range (inclusive).
     /// * `end` - The end of the range (exclusive).
-    pub fn is_range_active(&self, start: Frame, end: Frame) -> bool {
+    pub fn is_range_active(&self, start: Frames, end: Frames) -> bool {
         self.range_checker.is_range_active(self.playhead_frame, start, end)
     }
 
@@ -475,7 +475,7 @@ impl TransportInfo {
     /// This will properly handle playing, paused, and looping conditions.
     ///
     /// This will always return false when the transport status is `Paused` or `Clear`.
-    pub fn is_frame_active(&self, frame: Frame) -> bool {
+    pub fn is_frame_active(&self, frame: Frames) -> bool {
         self.range_checker.is_frame_active(self.playhead_frame, frame)
     }
 
@@ -487,42 +487,42 @@ impl TransportInfo {
 #[derive(Debug, Clone, Copy)]
 pub struct LoopBackInfo {
     /// The frame where the loop starts on the timeline (inclusive).
-    pub loop_start: Frame,
+    pub loop_start: Frames,
 
     /// The frame where the loop ends on the timeline (exclusive).
-    pub loop_end: Frame,
+    pub loop_end: Frames,
 
     /// The frame where the playhead will end on this current process cycle (exclusive).
-    pub playhead_end: Frame,
+    pub playhead_end: Frames,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct SeekInfo {
     /// This is what the playhead would have been if the transport did not seek this
     /// process cycle.
-    pub seeked_from_playhead: Frame,
+    pub seeked_from_playhead: Frames,
 }
 
 #[derive(Debug, Clone, Copy)]
 enum RangeChecker {
     Playing {
         /// The end frame (exclusive)
-        end_frame: Frame,
+        end_frame: Frames,
     },
     Looping {
         /// The end frame of the first part before the loop-back (exclusive)
-        end_frame_1: Frame,
+        end_frame_1: Frames,
         /// The start frame of the second part after the loop-back (inclusive)
-        start_frame_2: Frame,
+        start_frame_2: Frames,
         /// The end frame of the second part after the loop-back (exclusive)
-        end_frame_2: Frame,
+        end_frame_2: Frames,
     },
     Paused,
 }
 
 impl RangeChecker {
     #[inline]
-    pub fn is_range_active(&self, playhead: Frame, start: Frame, end: Frame) -> bool {
+    pub fn is_range_active(&self, playhead: Frames, start: Frames, end: Frames) -> bool {
         match self {
             RangeChecker::Playing { end_frame } => playhead < end && start < *end_frame,
             RangeChecker::Looping { end_frame_1, start_frame_2, end_frame_2 } => {
@@ -533,7 +533,7 @@ impl RangeChecker {
         }
     }
     #[inline]
-    pub fn is_frame_active(&self, playhead: Frame, frame: Frame) -> bool {
+    pub fn is_frame_active(&self, playhead: Frames, frame: Frames) -> bool {
         match self {
             RangeChecker::Playing { end_frame } => frame >= playhead && frame < *end_frame,
             RangeChecker::Looping { end_frame_1, start_frame_2, end_frame_2 } => {
@@ -579,9 +579,9 @@ pub enum LoopStateProcInfo {
     /// The transport is currently looping.
     Active {
         /// The start of the loop (inclusive).
-        loop_start_frame: Frame,
+        loop_start_frame: Frames,
         /// The end of the loop (exclusive).
-        loop_end_frame: Frame,
+        loop_end_frame: Frames,
     },
 }
 
@@ -589,56 +589,56 @@ pub enum LoopStateProcInfo {
 mod tests {
     #[test]
     fn transport_range_checker() {
-        use super::Frame;
+        use super::Frames;
         use super::RangeChecker;
 
-        let playhead = Frame(3);
-        let r = RangeChecker::Playing { end_frame: Frame(10) };
+        let playhead = Frames(3);
+        let r = RangeChecker::Playing { end_frame: Frames(10) };
 
-        assert!(r.is_range_active(playhead, Frame(5), Frame(12)));
-        assert!(r.is_range_active(playhead, Frame(0), Frame(5)));
-        assert!(r.is_range_active(playhead, Frame(3), Frame(10)));
-        assert!(!r.is_range_active(playhead, Frame(10), Frame(12)));
-        assert!(!r.is_range_active(playhead, Frame(12), Frame(14)));
-        assert!(r.is_range_active(playhead, Frame(9), Frame(12)));
-        assert!(!r.is_range_active(playhead, Frame(0), Frame(2)));
-        assert!(!r.is_range_active(playhead, Frame(0), Frame(3)));
-        assert!(r.is_range_active(playhead, Frame(0), Frame(4)));
-        assert!(r.is_range_active(playhead, Frame(4), Frame(8)));
+        assert!(r.is_range_active(playhead, Frames(5), Frames(12)));
+        assert!(r.is_range_active(playhead, Frames(0), Frames(5)));
+        assert!(r.is_range_active(playhead, Frames(3), Frames(10)));
+        assert!(!r.is_range_active(playhead, Frames(10), Frames(12)));
+        assert!(!r.is_range_active(playhead, Frames(12), Frames(14)));
+        assert!(r.is_range_active(playhead, Frames(9), Frames(12)));
+        assert!(!r.is_range_active(playhead, Frames(0), Frames(2)));
+        assert!(!r.is_range_active(playhead, Frames(0), Frames(3)));
+        assert!(r.is_range_active(playhead, Frames(0), Frames(4)));
+        assert!(r.is_range_active(playhead, Frames(4), Frames(8)));
 
-        assert!(!r.is_frame_active(playhead, Frame(0)));
-        assert!(!r.is_frame_active(playhead, Frame(2)));
-        assert!(r.is_frame_active(playhead, Frame(3)));
-        assert!(r.is_frame_active(playhead, Frame(9)));
-        assert!(!r.is_frame_active(playhead, Frame(10)));
-        assert!(!r.is_frame_active(playhead, Frame(11)));
+        assert!(!r.is_frame_active(playhead, Frames(0)));
+        assert!(!r.is_frame_active(playhead, Frames(2)));
+        assert!(r.is_frame_active(playhead, Frames(3)));
+        assert!(r.is_frame_active(playhead, Frames(9)));
+        assert!(!r.is_frame_active(playhead, Frames(10)));
+        assert!(!r.is_frame_active(playhead, Frames(11)));
 
-        let playhead = Frame(20);
+        let playhead = Frames(20);
         let r = RangeChecker::Looping {
-            end_frame_1: Frame(24),
-            start_frame_2: Frame(2),
-            end_frame_2: Frame(10),
+            end_frame_1: Frames(24),
+            start_frame_2: Frames(2),
+            end_frame_2: Frames(10),
         };
 
-        assert!(r.is_range_active(playhead, Frame(0), Frame(5)));
-        assert!(r.is_range_active(playhead, Frame(0), Frame(3)));
-        assert!(!r.is_range_active(playhead, Frame(0), Frame(2)));
-        assert!(r.is_range_active(playhead, Frame(15), Frame(27)));
-        assert!(r.is_range_active(playhead, Frame(15), Frame(21)));
-        assert!(!r.is_range_active(playhead, Frame(15), Frame(20)));
-        assert!(r.is_range_active(playhead, Frame(4), Frame(23)));
-        assert!(r.is_range_active(playhead, Frame(0), Frame(30)));
-        assert!(!r.is_range_active(playhead, Frame(10), Frame(18)));
-        assert!(!r.is_range_active(playhead, Frame(12), Frame(20)));
+        assert!(r.is_range_active(playhead, Frames(0), Frames(5)));
+        assert!(r.is_range_active(playhead, Frames(0), Frames(3)));
+        assert!(!r.is_range_active(playhead, Frames(0), Frames(2)));
+        assert!(r.is_range_active(playhead, Frames(15), Frames(27)));
+        assert!(r.is_range_active(playhead, Frames(15), Frames(21)));
+        assert!(!r.is_range_active(playhead, Frames(15), Frames(20)));
+        assert!(r.is_range_active(playhead, Frames(4), Frames(23)));
+        assert!(r.is_range_active(playhead, Frames(0), Frames(30)));
+        assert!(!r.is_range_active(playhead, Frames(10), Frames(18)));
+        assert!(!r.is_range_active(playhead, Frames(12), Frames(20)));
 
-        assert!(!r.is_frame_active(playhead, Frame(0)));
-        assert!(r.is_frame_active(playhead, Frame(2)));
-        assert!(r.is_frame_active(playhead, Frame(3)));
-        assert!(!r.is_frame_active(playhead, Frame(10)));
-        assert!(!r.is_frame_active(playhead, Frame(15)));
-        assert!(r.is_frame_active(playhead, Frame(20)));
-        assert!(r.is_frame_active(playhead, Frame(23)));
-        assert!(!r.is_frame_active(playhead, Frame(24)));
-        assert!(!r.is_frame_active(playhead, Frame(25)));
+        assert!(!r.is_frame_active(playhead, Frames(0)));
+        assert!(r.is_frame_active(playhead, Frames(2)));
+        assert!(r.is_frame_active(playhead, Frames(3)));
+        assert!(!r.is_frame_active(playhead, Frames(10)));
+        assert!(!r.is_frame_active(playhead, Frames(15)));
+        assert!(r.is_frame_active(playhead, Frames(20)));
+        assert!(r.is_frame_active(playhead, Frames(23)));
+        assert!(!r.is_frame_active(playhead, Frames(24)));
+        assert!(!r.is_frame_active(playhead, Frames(25)));
     }
 }

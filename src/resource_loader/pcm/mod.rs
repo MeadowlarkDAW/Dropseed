@@ -2,13 +2,13 @@ mod decode;
 pub mod loader;
 
 pub use loader::{PcmLoadError, PcmLoader};
-use meadowlark_core_types::{Frame, SampleRate};
+use meadowlark_core_types::{Frames, SampleRate};
 
 pub struct PcmResource {
     pub pcm_type: PcmResourceType,
     pub sample_rate: SampleRate,
     pub channels: usize,
-    pub len_frames: Frame,
+    pub len_frames: Frames,
 }
 
 /// The format of the raw PCM samples
@@ -200,7 +200,7 @@ impl PcmResource {
 
         if self.channels == 1 {
             self.fill_channel_f32(0, frame, buf_l).unwrap();
-            buf_r.fill(0.0);
+            buf_r.copy_from_slice(buf_l);
             return;
         }
 

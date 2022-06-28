@@ -281,7 +281,7 @@ pub trait PluginMainThread {
 }
 
 /// The methods of an audio plugin instance which run in the "audio" thread.
-pub trait PluginAudioThread: Send + Sync + 'static {
+pub trait PluginAudioThread: Send + 'static {
     /// This will be called when the plugin should start processing after just activing/
     /// waking up from sleep.
     ///

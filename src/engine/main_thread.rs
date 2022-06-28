@@ -195,28 +195,41 @@ impl DSEngineMainThread {
             self.thread_ids.clone(),
         );
 
+        let graph_in_node_id = audio_graph.graph_in_node_id().clone();
+        let graph_out_node_id = audio_graph.graph_out_node_id().clone();
+
         // TODO: Remove this once compiler is fixed.
         audio_graph
-            .connect_edge(&Edge {
-                edge_type: PortType::Audio,
-                src_plugin_id: audio_graph.graph_in_node_id().clone(),
-                dst_plugin_id: audio_graph.graph_out_node_id().clone(),
-                src_port_stable_id: 0,
-                src_port_channel: 0,
-                dst_port_stable_id: 0,
-                dst_port_channel: 0,
-            })
+            .connect_edge(
+                &EdgeReq {
+                    edge_type: PortType::Audio,
+                    src_plugin_id: PluginIDReq::Added(0),
+                    dst_plugin_id: PluginIDReq::Added(0),
+                    src_port_id: EdgeReqPortID::Main,
+                    src_port_channel: 0,
+                    dst_port_id: EdgeReqPortID::Main,
+                    dst_port_channel: 0,
+                    log_error_on_fail: true,
+                },
+                &graph_in_node_id,
+                &graph_out_node_id,
+            )
             .unwrap();
         audio_graph
-            .connect_edge(&Edge {
-                edge_type: PortType::Audio,
-                src_plugin_id: audio_graph.graph_in_node_id().clone(),
-                dst_plugin_id: audio_graph.graph_out_node_id().clone(),
-                src_port_stable_id: 0,
-                src_port_channel: 1,
-                dst_port_stable_id: 0,
-                dst_port_channel: 1,
-            })
+            .connect_edge(
+                &EdgeReq {
+                    edge_type: PortType::Audio,
+                    src_plugin_id: PluginIDReq::Added(0),
+                    dst_plugin_id: PluginIDReq::Added(0),
+                    src_port_id: EdgeReqPortID::Main,
+                    src_port_channel: 1,
+                    dst_port_id: EdgeReqPortID::Main,
+                    dst_port_channel: 1,
+                    log_error_on_fail: true,
+                },
+                &graph_in_node_id,
+                &graph_out_node_id,
+            )
             .unwrap();
 
         self.audio_graph = Some(audio_graph);
@@ -312,10 +325,9 @@ impl DSEngineMainThread {
 
             for edge in req.connect_new_edges.iter() {
                 let src_plugin_id = match &edge.src_plugin_id {
-                    PluginIDReq::Existing(id) => id.clone(),
                     PluginIDReq::Added(index) => {
                         if let Some(new_plugin_id) = new_plugin_ids.get(*index) {
-                            new_plugin_id.clone()
+                            new_plugin_id
                         } else {
                             log::error!(
                                 "Could not connect edge {:?}: Source plugin index out of bounds",
@@ -324,35 +336,36 @@ impl DSEngineMainThread {
                             continue;
                         }
                     }
+                    PluginIDReq::Existing(id) => id,
                 };
 
                 let dst_plugin_id = match &edge.dst_plugin_id {
-                    PluginIDReq::Existing(id) => id.clone(),
                     PluginIDReq::Added(index) => {
                         if let Some(new_plugin_id) = new_plugin_ids.get(*index) {
-                            new_plugin_id.clone()
+                            new_plugin_id
                         } else {
-                            log::error!("Could not connect edge {:?}: Destination plugin index out of bounds", edge);
+                            log::error!(
+                                "Could not connect edge {:?}: Destination plugin index out of bounds",
+                                edge
+                            );
                             continue;
                         }
                     }
+                    PluginIDReq::Existing(id) => id,
                 };
 
-                let new_edge = Edge {
-                    edge_type: edge.edge_type,
-                    src_plugin_id,
-                    dst_plugin_id,
-                    src_port_stable_id: edge.src_port_stable_id,
-                    src_port_channel: edge.src_port_channel,
-                    dst_port_stable_id: edge.dst_port_stable_id,
-                    dst_port_channel: edge.dst_port_channel,
-                };
-
-                if let Err(e) = audio_graph.connect_edge(&new_edge) {
-                    log::error!("Could not connect edge {:?}: {}", edge, e);
+                if let Err(e) = audio_graph.connect_edge(&edge, src_plugin_id, dst_plugin_id) {
+                    if edge.log_error_on_fail {
+                        log::error!("Could not connect edge: {}", e);
+                    }
                 } else {
-                    let _ = affected_plugins.insert(new_edge.src_plugin_id.clone());
-                    let _ = affected_plugins.insert(new_edge.dst_plugin_id.clone());
+                    // These will always be true.
+                    if let PluginIDReq::Existing(id) = &edge.src_plugin_id {
+                        let _ = affected_plugins.insert(id.clone());
+                    }
+                    if let PluginIDReq::Existing(id) = &edge.dst_plugin_id {
+                        let _ = affected_plugins.insert(id.clone());
+                    }
                 }
             }
 
@@ -484,7 +497,7 @@ impl DSEngineMainThread {
                     self.event_tx
                         .send(DSEngineEvent::EngineDeactivated(
                             EngineDeactivatedInfo::EngineCrashed {
-                                error_msg: Box::new(e),
+                                error_msg: format!("{}", e),
                                 recovered_save_state: None,
                             },
                         ))
@@ -553,17 +566,38 @@ pub enum PluginIDReq {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum EdgeReqPortID {
+    /// Use the main port.
+    ///
+    /// This can be useful if you don't know the layout of the plugin's ports yet
+    /// (because the plugin hasn't been added to the graph yet and activated).
+    Main,
+    /// Use the port with this specific stable ID.
+    StableID(u32),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct EdgeReq {
     pub edge_type: PortType,
 
     pub src_plugin_id: PluginIDReq,
     pub dst_plugin_id: PluginIDReq,
 
-    pub src_port_stable_id: u32,
+    pub src_port_id: EdgeReqPortID,
     pub src_port_channel: u16,
 
-    pub dst_port_stable_id: u32,
+    pub dst_port_id: EdgeReqPortID,
     pub dst_port_channel: u16,
+
+    /// If true, then the engine should log the error if it failed to connect this edge
+    /// for any reason.
+    ///
+    /// If false, then the engine should not log the error if it failed to connect this
+    /// edge for any reason. This can be useful in the common case where when adding a
+    /// new plugin to the graph, and you don't know the layout of the plugin's ports yet
+    /// (because it hasn't been added to the graph yet and activated), yet you still want
+    /// to try and connect any main stereo inputs/outputs to the graph.
+    pub log_error_on_fail: bool,
 }
 
 #[derive(Debug, Clone)]

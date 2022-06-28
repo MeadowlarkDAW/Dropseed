@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use basedrop::{Handle, Shared};
 
-use meadowlark_core_types::{Frame, SampleRate};
+use meadowlark_core_types::{Frames, SampleRate};
 use symphonia::core::audio::AudioBufferRef;
 use symphonia::core::audio::Signal;
 use symphonia::core::codecs::{CodecRegistry, DecoderOptions};
@@ -41,7 +41,7 @@ impl PcmLoader {
                 pcm_type: PcmResourceType::F32(vec![Vec::new()]),
                 sample_rate,
                 channels: 1,
-                len_frames: Frame(0),
+                len_frames: Frames(0),
             },
         );
 
@@ -795,7 +795,7 @@ impl PcmLoader {
                 pcm_type,
                 sample_rate,
                 channels: n_channels,
-                len_frames: Frame(total_frames),
+                len_frames: Frames(total_frames),
             },
         );
 

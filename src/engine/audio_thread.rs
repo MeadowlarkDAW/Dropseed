@@ -1,6 +1,6 @@
 use basedrop::Owned;
 use meadowlark_core_types::SampleRate;
-use rtrb_basedrop::{Consumer, Producer, RingBuffer};
+use rtrb::{Consumer, Producer, RingBuffer};
 use std::fmt::Debug;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
@@ -21,8 +21,8 @@ static AUDIO_THREAD_POLL_INTERVAL: Duration = Duration::from_micros(5);
 static COPY_OUT_TIME_WINDOW: Duration = Duration::from_micros(60);
 
 pub struct DSEngineAudioThread {
-    to_engine_audio_in_tx: Producer<f32>,
-    from_engine_audio_out_rx: Consumer<f32>,
+    to_engine_audio_in_tx: Owned<Producer<f32>>,
+    from_engine_audio_out_rx: Owned<Consumer<f32>>,
 
     in_channels: usize,
     out_channels: usize,
@@ -57,9 +57,14 @@ impl DSEngineAudioThread {
         sample_rate: SampleRate,
     ) -> (Self, DSEngineProcessThread) {
         let (to_engine_audio_in_tx, from_audio_thread_audio_in_rx) =
-            RingBuffer::<f32>::new(in_channels * ALLOCATED_FRAMES_PER_CHANNEL, coll_handle);
+            RingBuffer::<f32>::new(in_channels * ALLOCATED_FRAMES_PER_CHANNEL);
         let (to_audio_thread_audio_out_tx, from_engine_audio_out_rx) =
-            RingBuffer::<f32>::new(out_channels * ALLOCATED_FRAMES_PER_CHANNEL, coll_handle);
+            RingBuffer::<f32>::new(out_channels * ALLOCATED_FRAMES_PER_CHANNEL);
+
+        let to_engine_audio_in_tx = Owned::new(coll_handle, to_engine_audio_in_tx);
+        let from_audio_thread_audio_in_rx = Owned::new(coll_handle, from_audio_thread_audio_in_rx);
+        let to_audio_thread_audio_out_tx = Owned::new(coll_handle, to_audio_thread_audio_out_tx);
+        let from_engine_audio_out_rx = Owned::new(coll_handle, from_engine_audio_out_rx);
 
         let in_temp_buffer =
             Owned::new(coll_handle, vec![0.0; in_channels * ALLOCATED_FRAMES_PER_CHANNEL]);
@@ -119,10 +124,9 @@ impl DSEngineAudioThread {
 
         // Discard any output from previous cycles that failed to render on time.
         if !self.from_engine_audio_out_rx.is_empty() {
-            let chunks = self
-                .from_engine_audio_out_rx
-                .read_chunk(self.from_engine_audio_out_rx.slots())
-                .unwrap();
+            let num_slots = self.from_engine_audio_out_rx.slots();
+
+            let chunks = self.from_engine_audio_out_rx.read_chunk(num_slots).unwrap();
             chunks.commit_all();
         }
 

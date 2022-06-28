@@ -277,6 +277,12 @@ pub(crate) struct PluginInstanceHostEntry {
     pub audio_thread: Option<SharedPluginHostAudioThread>,
 
     pub port_channels_refs: FnvHashMap<PortChannelID, audio_graph::PortRef>,
+    pub main_audio_in_port_refs: Vec<audio_graph::PortRef>,
+    pub main_audio_out_port_refs: Vec<audio_graph::PortRef>,
+    pub automation_in_port_ref: Option<audio_graph::PortRef>,
+    pub automation_out_port_ref: Option<audio_graph::PortRef>,
+    pub main_note_in_port_ref: Option<audio_graph::PortRef>,
+    pub main_note_out_port_ref: Option<audio_graph::PortRef>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]

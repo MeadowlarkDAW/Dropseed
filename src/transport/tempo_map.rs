@@ -1,4 +1,4 @@
-use meadowlark_core_types::{Frame, MusicalTime, SampleRate, Seconds};
+use meadowlark_core_types::{Frames, MusicalTime, SampleRate, Seconds};
 
 use crate::plugin::events::EventBeatTime;
 
@@ -56,7 +56,7 @@ impl TempoMap {
     }
 
     /// `(tempo in bpm, tempo increment for each sample until the next time info event)
-    pub fn bpm_at_frame(&self, frame: Frame) -> (f64, f64) {
+    pub fn bpm_at_frame(&self, frame: Frames) -> (f64, f64) {
         // temporary static tempo
         (self.beats_per_second * 60.0, 0.0)
     }
@@ -68,13 +68,13 @@ impl TempoMap {
     }
 
     /// `(numerator, denomitator)`
-    pub fn tsig_at_frame(&self, frame: Frame) -> (u16, u16) {
+    pub fn tsig_at_frame(&self, frame: Frames) -> (u16, u16) {
         // temporary static time signature
         (self.tsig_num, self.tsig_denom)
     }
 
     /// `(the bar number of the song, the beat where the bar starts)`
-    pub fn current_bar_at_frame(&self, frame: Frame) -> (i32, EventBeatTime) {
+    pub fn current_bar_at_frame(&self, frame: Frames) -> (i32, EventBeatTime) {
         // temporary static tempo and time signature
         let current_beat = self.frame_to_musical(frame).beats();
 
@@ -117,100 +117,100 @@ impl TempoMap {
         MusicalTime::from_beats_f64(seconds.0 * self.beats_per_second)
     }
 
-    /// Convert the given `Frame` time into the corresponding `MusicalTime`.
+    /// Convert the given `Frames` time into the corresponding `MusicalTime`.
     ///
     /// Note that this must be re-calculated after recieving a new `TempoMap`.
     #[inline]
-    pub fn frame_to_musical(&self, frame: Frame) -> MusicalTime {
+    pub fn frame_to_musical(&self, frame: Frames) -> MusicalTime {
         // temporary static tempo
         MusicalTime::from_beats_f64(frame.to_seconds(self.sample_rate).0 * self.beats_per_second)
     }
 
-    /// Convert the given `Frame` time into the corresponding time in `Seconds`.
+    /// Convert the given `Frames` time into the corresponding time in `Seconds`.
     ///
     /// Note that this must be re-calculated after recieving a new `TempoMap`.
     #[inline]
-    pub fn frame_to_seconds(&self, frame: Frame) -> Seconds {
+    pub fn frame_to_seconds(&self, frame: Frames) -> Seconds {
         // temporary static tempo
         Seconds::from_frame(frame, self.sample_rate)
     }
 
-    /// Convert the given `MusicalTime` into the corresponding discrete `Frame` time.
+    /// Convert the given `MusicalTime` into the corresponding discrete `Frames` time.
     /// This will be rounded to the nearest frame.
     ///
     /// Note that this must be re-calculated after recieving a new `TempoMap`.
     #[inline]
-    pub fn musical_to_nearest_frame_round(&self, musical_time: MusicalTime) -> Frame {
+    pub fn musical_to_nearest_frame_round(&self, musical_time: MusicalTime) -> Frames {
         // temporary static tempo
         self.musical_to_seconds(musical_time).to_nearest_frame_round(self.sample_rate)
     }
 
-    /// Convert the given `Seconds` into the corresponding discrete `Frame` time.
+    /// Convert the given `Seconds` into the corresponding discrete `Frames` time.
     /// This will be rounded to the nearest frame.
     ///
     /// Note that this must be re-calculated after recieving a new `TempoMap`.
     #[inline]
-    pub fn seconds_to_nearest_frame_round(&self, seconds: Seconds) -> Frame {
+    pub fn seconds_to_nearest_frame_round(&self, seconds: Seconds) -> Frames {
         // temporary static tempo
         seconds.to_nearest_frame_round(self.sample_rate)
     }
 
-    /// Convert the given `MusicalTime` into the corresponding discrete `Frame` time.
+    /// Convert the given `MusicalTime` into the corresponding discrete `Frames` time.
     /// This will be floored to the nearest frame.
     ///
     /// Note that this must be re-calculated after recieving a new `TempoMap`.
     #[inline]
-    pub fn musical_to_nearest_frame_floor(&self, musical_time: MusicalTime) -> Frame {
+    pub fn musical_to_nearest_frame_floor(&self, musical_time: MusicalTime) -> Frames {
         // temporary static tempo
         self.musical_to_seconds(musical_time).to_nearest_frame_floor(self.sample_rate)
     }
 
-    /// Convert the given `Seconds` into the corresponding discrete `Frame` time.
+    /// Convert the given `Seconds` into the corresponding discrete `Frames` time.
     /// This will be floored to the nearest frame.
     ///
     /// Note that this must be re-calculated after recieving a new `TempoMap`.
     #[inline]
-    pub fn seconds_to_nearest_frame_floor(&self, seconds: Seconds) -> Frame {
+    pub fn seconds_to_nearest_frame_floor(&self, seconds: Seconds) -> Frames {
         // temporary static tempo
         seconds.to_nearest_frame_floor(self.sample_rate)
     }
 
-    /// Convert the given `MusicalTime` into the corresponding discrete `Frame` time.
+    /// Convert the given `MusicalTime` into the corresponding discrete `Frames` time.
     /// This will be ceil-ed to the nearest frame.
     ///
     /// Note that this must be re-calculated after recieving a new `TempoMap`.
     #[inline]
-    pub fn musical_to_nearest_frame_ceil(&self, musical_time: MusicalTime) -> Frame {
+    pub fn musical_to_nearest_frame_ceil(&self, musical_time: MusicalTime) -> Frames {
         // temporary static tempo
         self.musical_to_seconds(musical_time).to_nearest_frame_ceil(self.sample_rate)
     }
 
-    /// Convert the given `Seconds` into the corresponding discrete `Frame` time.
+    /// Convert the given `Seconds` into the corresponding discrete `Frames` time.
     /// This will be ceil-ed to the nearest frame.
     ///
     /// Note that this must be re-calculated after recieving a new `TempoMap`.
     #[inline]
-    pub fn seconds_to_nearest_frame_ceil(&self, seconds: Seconds) -> Frame {
+    pub fn seconds_to_nearest_frame_ceil(&self, seconds: Seconds) -> Frames {
         // temporary static tempo
         seconds.to_nearest_frame_ceil(self.sample_rate)
     }
 
-    /// Convert the given `MusicalTime` into the corresponding discrete `Frame` time
+    /// Convert the given `MusicalTime` into the corresponding discrete `Frames` time
     /// floored to the nearest frame, while also returning the fractional sub-frame part.
     ///
     /// Note that this must be re-calculated after recieving a new `TempoMap`.
     #[inline]
-    pub fn musical_to_sub_frame(&self, musical_time: MusicalTime) -> (Frame, f64) {
+    pub fn musical_to_sub_frame(&self, musical_time: MusicalTime) -> (Frames, f64) {
         // temporary static tempo
         self.musical_to_seconds(musical_time).to_sub_frame(self.sample_rate)
     }
 
-    /// Convert the given `Seconds` into the corresponding discrete `Frame` time
+    /// Convert the given `Seconds` into the corresponding discrete `Frames` time
     /// floored to the nearest frame, while also returning the fractional sub-frame part.
     ///
     /// Note that this must be re-calculated after recieving a new `TempoMap`.
     #[inline]
-    pub fn seconds_to_sub_frame(&self, seconds: Seconds) -> (Frame, f64) {
+    pub fn seconds_to_sub_frame(&self, seconds: Seconds) -> (Frames, f64) {
         // temporary static tempo
         seconds.to_sub_frame(self.sample_rate)
     }

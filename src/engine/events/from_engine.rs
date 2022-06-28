@@ -76,10 +76,7 @@ pub enum EngineDeactivatedInfo {
     /// `DSEngineRequest::DeactivateEngine` request.
     DeactivatedGracefully { recovered_save_state: AudioGraphSaveState },
     /// The engine has crashed.
-    EngineCrashed {
-        error_msg: Box<dyn Error + Send>,
-        recovered_save_state: Option<AudioGraphSaveState>,
-    },
+    EngineCrashed { error_msg: String, recovered_save_state: Option<AudioGraphSaveState> },
 }
 
 #[derive(Debug)]

@@ -1,5 +1,5 @@
 use basedrop::Owned;
-use rtrb_basedrop::{Consumer, Producer};
+use rtrb::{Consumer, Producer};
 use std::time::Duration;
 use std::{
     mem::MaybeUninit,
@@ -17,8 +17,8 @@ pub(crate) static PROCESS_THREAD_PRIORITY: u8 = 90;
 static PROCESS_THREAD_POLL_INTERVAL: Duration = Duration::from_micros(5);
 
 pub(crate) struct DSEngineProcessThread {
-    to_audio_thread_audio_out_tx: Producer<f32>,
-    from_audio_thread_audio_in_rx: Consumer<f32>,
+    to_audio_thread_audio_out_tx: Owned<Producer<f32>>,
+    from_audio_thread_audio_in_rx: Owned<Consumer<f32>>,
 
     /// In case there are no inputs, use this to let the engine know when there
     /// are frames to render.
@@ -35,8 +35,8 @@ pub(crate) struct DSEngineProcessThread {
 
 impl DSEngineProcessThread {
     pub fn new(
-        to_audio_thread_audio_out_tx: Producer<f32>,
-        from_audio_thread_audio_in_rx: Consumer<f32>,
+        to_audio_thread_audio_out_tx: Owned<Producer<f32>>,
+        from_audio_thread_audio_in_rx: Owned<Consumer<f32>>,
         num_frames_wanted: Option<Arc<AtomicU32>>,
         in_temp_buffer: Owned<Vec<f32>>,
         out_temp_buffer: Owned<Vec<f32>>,
