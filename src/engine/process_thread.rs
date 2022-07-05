@@ -89,15 +89,7 @@ impl DSEngineProcessThread {
             };
 
             self.out_temp_buffer.clear();
-
-            // This is safe because:
-            // - self.out_temp_buffer has an allocated length of
-            //   (ALLOCATED_FRAMES_PER_CHANNEL * self.out_channels), and `num_frames` will
-            //   never be larger than ALLOCATED_FRAMES_PER_CHANNEL
-            // - The schedule will always completely fill the buffer.
-            unsafe {
-                self.out_temp_buffer.set_len(num_frames * self.out_channels);
-            }
+            self.out_temp_buffer.resize(num_frames * self.out_channels, 0.0);
 
             self.schedule.process_interleaved(
                 &*self.in_temp_buffer,
@@ -106,27 +98,22 @@ impl DSEngineProcessThread {
                 self.out_channels,
             );
 
-            match self
-                .to_audio_thread_audio_out_tx
-                .write_chunk_uninit(num_frames * self.in_channels)
-            {
+            match self.to_audio_thread_audio_out_tx.write_chunk(num_frames * self.in_channels) {
                 Ok(mut chunk) => {
                     let (slice_1, slice_2) = chunk.as_mut_slices();
 
                     let out_part = &self.out_temp_buffer[0..slice_1.len()];
                     for i in 0..slice_1.len() {
-                        slice_1[i] = MaybeUninit::new(out_part[i]);
+                        slice_1[i] = out_part[i];
                     }
 
                     let out_part =
                         &self.out_temp_buffer[slice_1.len()..slice_1.len() + slice_2.len()];
                     for i in 0..slice_2.len() {
-                        slice_2[i] = MaybeUninit::new(out_part[i]);
+                        slice_2[i] = out_part[i];
                     }
 
-                    unsafe {
-                        chunk.commit_all();
-                    }
+                    chunk.commit_all();
                 }
                 Err(_) => {
                     log::error!("Ran out of space in engine_to_audio_thread_audio_out buffer");

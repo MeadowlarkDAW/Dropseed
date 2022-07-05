@@ -125,8 +125,8 @@ impl ClapProcess {
     }
 
     pub fn update_buffers(&mut self, buffers: &ProcBuffers) {
-        debug_assert_eq!(buffers.audio_in.len(), self.audio_in_port_list.len());
-        debug_assert_eq!(buffers.audio_out.len(), self.audio_out_port_list.len());
+        assert_eq!(buffers.audio_in.len(), self.audio_in_port_list.len());
+        assert_eq!(buffers.audio_out.len(), self.audio_out_port_list.len());
 
         unsafe {
             for i in 0..buffers.audio_in.len() {
@@ -139,7 +139,7 @@ impl ClapProcess {
                     RawAudioChannelBuffers::F32(new_buffers) => {
                         let buffers = self.audio_in_buffer_lists_f32.get_unchecked_mut(i);
 
-                        debug_assert_eq!(new_buffers.len(), buffers.len());
+                        assert_eq!(new_buffers.len(), buffers.len());
 
                         for (buf, new_buf) in buffers.iter_mut().zip(new_buffers.iter()) {
                             *buf = new_buf.buffer.data.borrow().as_ptr();
@@ -151,7 +151,7 @@ impl ClapProcess {
                     RawAudioChannelBuffers::F64(new_buffers) => {
                         let buffers = self.audio_in_buffer_lists_f64.get_unchecked_mut(i);
 
-                        debug_assert_eq!(new_buffers.len(), buffers.len());
+                        assert_eq!(new_buffers.len(), buffers.len());
 
                         for (buf, new_buf) in buffers.iter_mut().zip(new_buffers.iter()) {
                             *buf = new_buf.buffer.data.borrow().as_ptr();
@@ -173,7 +173,7 @@ impl ClapProcess {
                     RawAudioChannelBuffers::F32(new_buffers) => {
                         let buffers = self.audio_out_buffer_lists_f32.get_unchecked_mut(i);
 
-                        debug_assert_eq!(new_buffers.len(), buffers.len());
+                        assert_eq!(new_buffers.len(), buffers.len());
 
                         for (buf, new_buf) in buffers.iter_mut().zip(new_buffers.iter()) {
                             *buf = new_buf.buffer.data.borrow().as_ptr();
@@ -185,7 +185,7 @@ impl ClapProcess {
                     RawAudioChannelBuffers::F64(new_buffers) => {
                         let buffers = self.audio_out_buffer_lists_f64.get_unchecked_mut(i);
 
-                        debug_assert_eq!(new_buffers.len(), buffers.len());
+                        assert_eq!(new_buffers.len(), buffers.len());
 
                         for (buf, new_buf) in buffers.iter_mut().zip(new_buffers.iter()) {
                             *buf = new_buf.buffer.data.borrow().as_ptr();
@@ -212,7 +212,7 @@ impl ClapProcess {
         self.in_events.sync(in_events);
         self.out_events.sync(out_events);
 
-        debug_assert_eq!(buffers.audio_in.len(), self.audio_in_port_list.len());
+        assert_eq!(buffers.audio_in.len(), self.audio_in_port_list.len());
         for (audio_in_port, host_audio_in_port) in
             self.audio_in_port_list.iter_mut().zip(buffers.audio_in.iter())
         {
@@ -236,7 +236,7 @@ impl ClapProcess {
     }
 
     pub fn sync_output_constant_masks(&mut self, buffers: &mut ProcBuffers) {
-        debug_assert_eq!(buffers.audio_out.len(), self.audio_out_port_list.len());
+        assert_eq!(buffers.audio_out.len(), self.audio_out_port_list.len());
         for (audio_out_port, host_audio_out_port) in
             self.audio_out_port_list.iter().zip(buffers.audio_out.iter_mut())
         {

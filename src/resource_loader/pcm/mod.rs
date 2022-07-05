@@ -82,7 +82,7 @@ impl PcmResource {
                 let buf_part = &mut buf[buf_range];
                 let pcm_part = &pcm[channel][pcm_range];
 
-                debug_assert_eq!(buf_part.len(), pcm_part.len());
+                assert_eq!(buf_part.len(), pcm_part.len());
 
                 for (b, p) in buf_part.iter_mut().zip(pcm_part.iter()) {
                     *b = ((f32::from(*p)) * (2.0 / std::u8::MAX as f32)) - 1.0;
@@ -92,7 +92,7 @@ impl PcmResource {
                 let buf_part = &mut buf[buf_range];
                 let pcm_part = &pcm[channel][pcm_range];
 
-                debug_assert_eq!(buf_part.len(), pcm_part.len());
+                assert_eq!(buf_part.len(), pcm_part.len());
 
                 for (b, p) in buf_part.iter_mut().zip(pcm_part.iter()) {
                     *b = ((f32::from(*p)) * (2.0 / std::u16::MAX as f32)) - 1.0;
@@ -102,7 +102,7 @@ impl PcmResource {
                 let buf_part = &mut buf[buf_range];
                 let pcm_part = &pcm[channel][pcm_range];
 
-                debug_assert_eq!(buf_part.len(), pcm_part.len());
+                assert_eq!(buf_part.len(), pcm_part.len());
 
                 if cfg!(target_endian = "little") {
                     for (b, p) in buf_part.iter_mut().zip(pcm_part.iter()) {
@@ -128,7 +128,7 @@ impl PcmResource {
                 let buf_part = &mut buf[buf_range];
                 let pcm_part = &pcm[channel][pcm_range];
 
-                debug_assert_eq!(buf_part.len(), pcm_part.len());
+                assert_eq!(buf_part.len(), pcm_part.len());
 
                 for (b, p) in buf_part.iter_mut().zip(pcm_part.iter()) {
                     *b = f32::from(*p) / std::i8::MAX as f32;
@@ -138,7 +138,7 @@ impl PcmResource {
                 let buf_part = &mut buf[buf_range];
                 let pcm_part = &pcm[channel][pcm_range];
 
-                debug_assert_eq!(buf_part.len(), pcm_part.len());
+                assert_eq!(buf_part.len(), pcm_part.len());
 
                 for (b, p) in buf_part.iter_mut().zip(pcm_part.iter()) {
                     *b = f32::from(*p) / std::i16::MAX as f32;
@@ -148,7 +148,7 @@ impl PcmResource {
                 let buf_part = &mut buf[buf_range];
                 let pcm_part = &pcm[channel][pcm_range];
 
-                debug_assert_eq!(buf_part.len(), pcm_part.len());
+                assert_eq!(buf_part.len(), pcm_part.len());
 
                 if cfg!(target_endian = "little") {
                     for (b, p) in buf_part.iter_mut().zip(pcm_part.iter()) {
@@ -174,7 +174,7 @@ impl PcmResource {
                 let buf_part = &mut buf[buf_range];
                 let pcm_part = &pcm[channel][pcm_range];
 
-                debug_assert_eq!(buf_part.len(), pcm_part.len());
+                assert_eq!(buf_part.len(), pcm_part.len());
 
                 buf_part.copy_from_slice(pcm_part);
             }
@@ -182,7 +182,7 @@ impl PcmResource {
                 let buf_part = &mut buf[buf_range];
                 let pcm_part = &pcm[channel][pcm_range];
 
-                debug_assert_eq!(buf_part.len(), pcm_part.len());
+                assert_eq!(buf_part.len(), pcm_part.len());
 
                 for (b, p) in buf_part.iter_mut().zip(pcm_part.iter()) {
                     *b = *p as f32;
@@ -196,7 +196,7 @@ impl PcmResource {
     pub fn fill_stereo_f32(&self, frame: isize, buf_l: &mut [f32], buf_r: &mut [f32]) {
         // TODO: Manual SIMD
 
-        debug_assert_eq!(buf_l.len(), buf_r.len());
+        assert_eq!(buf_l.len(), buf_r.len());
 
         if self.channels == 1 {
             self.fill_channel_f32(0, frame, buf_l).unwrap();
@@ -252,9 +252,9 @@ impl PcmResource {
                 let pcm_l_part = &pcm[0][pcm_range.clone()];
                 let pcm_r_part = &pcm[0][pcm_range];
 
-                debug_assert_eq!(buf_l_part.len(), pcm_l_part.len());
-                debug_assert_eq!(buf_r_part.len(), pcm_r_part.len());
-                debug_assert_eq!(buf_l_part.len(), buf_r_part.len());
+                assert_eq!(buf_l_part.len(), pcm_l_part.len());
+                assert_eq!(buf_r_part.len(), pcm_r_part.len());
+                assert_eq!(buf_l_part.len(), buf_r_part.len());
 
                 for i in 0..buf_l_part.len() {
                     buf_l_part[i] =
@@ -269,9 +269,9 @@ impl PcmResource {
                 let pcm_l_part = &pcm[0][pcm_range.clone()];
                 let pcm_r_part = &pcm[0][pcm_range];
 
-                debug_assert_eq!(buf_l_part.len(), pcm_l_part.len());
-                debug_assert_eq!(buf_r_part.len(), pcm_r_part.len());
-                debug_assert_eq!(buf_l_part.len(), buf_r_part.len());
+                assert_eq!(buf_l_part.len(), pcm_l_part.len());
+                assert_eq!(buf_r_part.len(), pcm_r_part.len());
+                assert_eq!(buf_l_part.len(), buf_r_part.len());
 
                 for i in 0..buf_l_part.len() {
                     buf_l_part[i] =
@@ -286,9 +286,9 @@ impl PcmResource {
                 let pcm_l_part = &pcm[0][pcm_range.clone()];
                 let pcm_r_part = &pcm[0][pcm_range];
 
-                debug_assert_eq!(buf_l_part.len(), pcm_l_part.len());
-                debug_assert_eq!(buf_r_part.len(), pcm_r_part.len());
-                debug_assert_eq!(buf_l_part.len(), buf_r_part.len());
+                assert_eq!(buf_l_part.len(), pcm_l_part.len());
+                assert_eq!(buf_r_part.len(), pcm_r_part.len());
+                assert_eq!(buf_l_part.len(), buf_r_part.len());
 
                 if cfg!(target_endian = "little") {
                     for i in 0..buf_l_part.len() {
@@ -322,9 +322,9 @@ impl PcmResource {
                 let pcm_l_part = &pcm[0][pcm_range.clone()];
                 let pcm_r_part = &pcm[0][pcm_range];
 
-                debug_assert_eq!(buf_l_part.len(), pcm_l_part.len());
-                debug_assert_eq!(buf_r_part.len(), pcm_r_part.len());
-                debug_assert_eq!(buf_l_part.len(), buf_r_part.len());
+                assert_eq!(buf_l_part.len(), pcm_l_part.len());
+                assert_eq!(buf_r_part.len(), pcm_r_part.len());
+                assert_eq!(buf_l_part.len(), buf_r_part.len());
 
                 for i in 0..buf_l_part.len() {
                     buf_l_part[i] = f32::from(pcm_l_part[i]) / std::i8::MAX as f32;
@@ -337,9 +337,9 @@ impl PcmResource {
                 let pcm_l_part = &pcm[0][pcm_range.clone()];
                 let pcm_r_part = &pcm[0][pcm_range];
 
-                debug_assert_eq!(buf_l_part.len(), pcm_l_part.len());
-                debug_assert_eq!(buf_r_part.len(), pcm_r_part.len());
-                debug_assert_eq!(buf_l_part.len(), buf_r_part.len());
+                assert_eq!(buf_l_part.len(), pcm_l_part.len());
+                assert_eq!(buf_r_part.len(), pcm_r_part.len());
+                assert_eq!(buf_l_part.len(), buf_r_part.len());
 
                 for i in 0..buf_l_part.len() {
                     buf_l_part[i] = f32::from(pcm_l_part[i]) / std::i16::MAX as f32;
@@ -352,9 +352,9 @@ impl PcmResource {
                 let pcm_l_part = &pcm[0][pcm_range.clone()];
                 let pcm_r_part = &pcm[0][pcm_range];
 
-                debug_assert_eq!(buf_l_part.len(), pcm_l_part.len());
-                debug_assert_eq!(buf_r_part.len(), pcm_r_part.len());
-                debug_assert_eq!(buf_l_part.len(), buf_r_part.len());
+                assert_eq!(buf_l_part.len(), pcm_l_part.len());
+                assert_eq!(buf_r_part.len(), pcm_r_part.len());
+                assert_eq!(buf_l_part.len(), buf_r_part.len());
 
                 if cfg!(target_endian = "little") {
                     for i in 0..buf_l_part.len() {
@@ -388,9 +388,9 @@ impl PcmResource {
                 let pcm_l_part = &pcm[0][pcm_range.clone()];
                 let pcm_r_part = &pcm[0][pcm_range];
 
-                debug_assert_eq!(buf_l_part.len(), pcm_l_part.len());
-                debug_assert_eq!(buf_r_part.len(), pcm_r_part.len());
-                debug_assert_eq!(buf_l_part.len(), buf_r_part.len());
+                assert_eq!(buf_l_part.len(), pcm_l_part.len());
+                assert_eq!(buf_r_part.len(), pcm_r_part.len());
+                assert_eq!(buf_l_part.len(), buf_r_part.len());
 
                 buf_l_part.copy_from_slice(pcm_l_part);
                 buf_r_part.copy_from_slice(pcm_r_part);
@@ -401,9 +401,9 @@ impl PcmResource {
                 let pcm_l_part = &pcm[0][pcm_range.clone()];
                 let pcm_r_part = &pcm[0][pcm_range];
 
-                debug_assert_eq!(buf_l_part.len(), pcm_l_part.len());
-                debug_assert_eq!(buf_r_part.len(), pcm_r_part.len());
-                debug_assert_eq!(buf_l_part.len(), buf_r_part.len());
+                assert_eq!(buf_l_part.len(), pcm_l_part.len());
+                assert_eq!(buf_r_part.len(), pcm_r_part.len());
+                assert_eq!(buf_l_part.len(), buf_r_part.len());
 
                 for i in 0..buf_l_part.len() {
                     buf_l_part[i] = pcm_l_part[i] as f32;

@@ -153,7 +153,7 @@ impl HostRequest {
     /// [main-thread]
     pub fn supported_note_dialects(&self) -> NoteDialect {
         // todo: more
-        NoteDialect::CLAP | NoteDialect::MIDI
+        NoteDialect::CLAP | NoteDialect::MIDI | NoteDialect::MIDI2
     }
 
     /// Rescan the full list of audio ports according to the flags.
@@ -192,16 +192,14 @@ impl HostRequest {
     pub(crate) fn load_requested(&self) -> RequestFlags {
         // TODO: Are we able to use relaxed ordering here?
 
-        // Safe because this u32 can only be set via a `RequestFlags` value.
-        unsafe { RequestFlags::from_bits_unchecked(self.request_flags.load(Ordering::SeqCst)) }
+        RequestFlags::from_bits_truncate(self.request_flags.load(Ordering::SeqCst))
     }
 
     pub(crate) fn load_requested_and_reset_all(&self) -> RequestFlags {
         // TODO: Are we able to use relaxed ordering here?
         let flags = self.request_flags.fetch_and(0, Ordering::SeqCst);
 
-        // Safe because this u32 can only be set via a `RequestFlags` value.
-        unsafe { RequestFlags::from_bits_unchecked(flags) }
+        RequestFlags::from_bits_truncate(flags)
     }
 
     /// Returns true if the previous value had the `RequestFlags::RESTART` flag set.
@@ -209,8 +207,7 @@ impl HostRequest {
         // TODO: Are we able to use relaxed ordering here?
         let flags = self.request_flags.fetch_and(!RequestFlags::RESTART.bits(), Ordering::SeqCst);
 
-        // Safe because this u32 can only be set via a `RequestFlags` value.
-        unsafe { RequestFlags::from_bits_unchecked(flags).contains(RequestFlags::RESTART) }
+        RequestFlags::from_bits_truncate(flags).contains(RequestFlags::RESTART)
     }
 
     pub(crate) fn reset_process(&self) {
@@ -222,12 +219,9 @@ impl HostRequest {
     pub(crate) fn load_requests_and_reset_callback(&self) -> RequestFlags {
         // TODO: Are we able to use relaxed ordering here?
 
-        // Safe because this u32 can only be set via a `RequestFlags` value.
-        unsafe {
-            RequestFlags::from_bits_unchecked(
-                self.request_flags.fetch_and(!RequestFlags::CALLBACK.bits(), Ordering::SeqCst),
-            )
-        }
+        RequestFlags::from_bits_truncate(
+            self.request_flags.fetch_and(!RequestFlags::CALLBACK.bits(), Ordering::SeqCst),
+        )
     }
 
     pub(crate) fn reset_deactivate(&self) {
@@ -251,14 +245,10 @@ impl HostRequest {
     pub(crate) fn state_marked_dirty_and_reset_dirty(&self) -> bool {
         // TODO: Are we able to use relaxed ordering here?
 
-        // Safe because this u32 can only be set via a `RequestFlags` value.
-        let flags = unsafe {
-            RequestFlags::from_bits_unchecked(
-                self.request_flags.fetch_and(!RequestFlags::STATE_DIRTY.bits(), Ordering::SeqCst),
-            )
-        };
-
-        flags.contains(RequestFlags::STATE_DIRTY)
+        RequestFlags::from_bits_truncate(
+            self.request_flags.fetch_and(!RequestFlags::STATE_DIRTY.bits(), Ordering::SeqCst),
+        )
+        .contains(RequestFlags::STATE_DIRTY)
     }
 }
 

@@ -92,8 +92,8 @@ enum ProcessMsg {
     DiscardSample,
 }
 
-unsafe impl Send for ProcessMsg {}
-unsafe impl Sync for ProcessMsg {}
+//unsafe impl Send for ProcessMsg {}
+//unsafe impl Sync for ProcessMsg {}
 
 struct ParamsHandle {
     pub gain: ParamF32Handle,
@@ -324,11 +324,10 @@ impl PluginAudioThread for SampleBrowserPlugAudioThread {
             let pcm = self.pcm.as_ref().unwrap();
 
             if self.playhead < pcm.len_frames.0 as usize {
-                let (mut buf_l, mut buf_r) =
-                    unsafe { buffers.audio_out[0].stereo_f32_unchecked_mut() };
+                let (mut buf_l, mut buf_r) = buffers.audio_out[0].stereo_f32_mut().unwrap();
 
-                debug_assert!(proc_info.frames <= buf_l.len());
-                debug_assert!(proc_info.frames <= buf_r.len());
+                assert!(proc_info.frames <= buf_l.len());
+                assert!(proc_info.frames <= buf_r.len());
 
                 let buf_l_part = &mut buf_l[0..proc_info.frames];
                 let buf_r_part = &mut buf_r[0..proc_info.frames];

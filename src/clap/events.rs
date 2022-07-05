@@ -5,7 +5,6 @@ use std::ptr;
 use clap_sys::events::clap_event_header as RawClapEventHeader;
 use clap_sys::events::clap_event_midi as RawClapEventMidi;
 use clap_sys::events::clap_event_midi2 as RawClapEventMidi2;
-use clap_sys::events::clap_event_midi_sysex as RawClapEventMidiSysex;
 use clap_sys::events::clap_event_note as RawClapEventNote;
 use clap_sys::events::clap_event_note_expression as RawClapEventNoteExpression;
 use clap_sys::events::clap_event_param_gesture as RawClapEventParamGesture;
@@ -17,8 +16,8 @@ use clap_sys::events::clap_output_events as RawClapOutputEvents;
 
 use crate::plugin::events::event_queue::ProcEvent;
 use crate::plugin::events::{
-    EventMidi, EventMidi2, EventMidiSysex, EventNote, EventNoteExpression, EventParamGesture,
-    EventParamMod, EventParamValue, EventTransport,
+    EventMidi, EventMidi2, EventNote, EventNoteExpression, EventParamGesture, EventParamMod,
+    EventParamValue, EventTransport,
 };
 use crate::EventQueue;
 
@@ -162,7 +161,8 @@ unsafe extern "C" fn try_push(
         }
         CLAP_EVENT_MIDI => EventMidi::from_raw(*(event as *const RawClapEventMidi)).into(),
         CLAP_EVENT_MIDI_SYSEX => {
-            EventMidiSysex::from_raw(*(event as *const RawClapEventMidiSysex)).into()
+            log::warn!("Received an unsupported CLAP_EVENT_MIDI_SYSEX event from plugin");
+            return false;
         }
         CLAP_EVENT_MIDI2 => EventMidi2::from_raw(*(event as *const RawClapEventMidi2)).into(),
         _ => {

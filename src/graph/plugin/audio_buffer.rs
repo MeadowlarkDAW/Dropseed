@@ -1,4 +1,4 @@
-use maybe_atomic_refcell::{MaybeAtomicRef, MaybeAtomicRefMut};
+use atomic_refcell::{AtomicRef, AtomicRefMut};
 use smallvec::SmallVec;
 
 use crate::graph::shared_pool::SharedBuffer;
@@ -16,38 +16,26 @@ impl RawAudioChannelBuffers {
             RawAudioChannelBuffers::F64(c) => c.len(),
         }
     }
-
-    unsafe fn f32_unchecked(&self) -> &SmallVec<[SharedBuffer<f32>; 2]> {
-        if let RawAudioChannelBuffers::F32(b) = &self {
-            b
-        } else {
-            #[cfg(debug_assertions)]
-            std::unreachable!();
-
-            #[cfg(not(debug_assertions))]
-            std::hint::unreachable_unchecked();
-        }
-    }
 }
 
 pub enum MonoBuffer<'a> {
-    F32(MaybeAtomicRef<'a, Vec<f32>>),
-    F64(MaybeAtomicRef<'a, Vec<f64>>),
+    F32(AtomicRef<'a, Vec<f32>>),
+    F64(AtomicRef<'a, Vec<f64>>),
 }
 
 pub enum MonoBufferMut<'a> {
-    F32(MaybeAtomicRefMut<'a, Vec<f32>>),
-    F64(MaybeAtomicRefMut<'a, Vec<f64>>),
+    F32(AtomicRefMut<'a, Vec<f32>>),
+    F64(AtomicRefMut<'a, Vec<f64>>),
 }
 
 pub enum StereoBuffer<'a> {
-    F32(MaybeAtomicRef<'a, Vec<f32>>, MaybeAtomicRef<'a, Vec<f32>>),
-    F64(MaybeAtomicRef<'a, Vec<f64>>, MaybeAtomicRef<'a, Vec<f64>>),
+    F32(AtomicRef<'a, Vec<f32>>, AtomicRef<'a, Vec<f32>>),
+    F64(AtomicRef<'a, Vec<f64>>, AtomicRef<'a, Vec<f64>>),
 }
 
 pub enum StereoBufferMut<'a> {
-    F32(MaybeAtomicRefMut<'a, Vec<f32>>, MaybeAtomicRefMut<'a, Vec<f32>>),
-    F64(MaybeAtomicRefMut<'a, Vec<f64>>, MaybeAtomicRefMut<'a, Vec<f64>>),
+    F32(AtomicRefMut<'a, Vec<f32>>, AtomicRefMut<'a, Vec<f32>>),
+    F64(AtomicRefMut<'a, Vec<f64>>, AtomicRefMut<'a, Vec<f64>>),
 }
 
 pub struct AudioPortBuffer {
@@ -132,70 +120,62 @@ impl AudioPortBuffer {
     pub fn channel<'a>(&'a self, index: usize) -> Option<MonoBuffer<'a>> {
         match &self.raw_channels {
             RawAudioChannelBuffers::F32(b) => {
-                b.get(index).map(|b| MonoBuffer::F32(unsafe { b.buffer.data.borrow() }))
+                b.get(index).map(|b| MonoBuffer::F32(b.buffer.data.borrow()))
             }
             RawAudioChannelBuffers::F64(b) => {
-                b.get(index).map(|b| MonoBuffer::F64(unsafe { b.buffer.data.borrow() }))
+                b.get(index).map(|b| MonoBuffer::F64(b.buffer.data.borrow()))
             }
         }
     }
 
     #[inline]
     pub fn mono<'a>(&'a self) -> MonoBuffer<'a> {
-        // Safe because we are guaranteed to have at-least one channel.
-        unsafe {
-            match &self.raw_channels {
-                RawAudioChannelBuffers::F32(b) => {
-                    MonoBuffer::F32(b.get_unchecked(0).buffer.data.borrow())
-                }
-                RawAudioChannelBuffers::F64(b) => {
-                    MonoBuffer::F64(b.get_unchecked(0).buffer.data.borrow())
-                }
-            }
+        match &self.raw_channels {
+            RawAudioChannelBuffers::F32(b) => MonoBuffer::F32(b[0].buffer.data.borrow()),
+            RawAudioChannelBuffers::F64(b) => MonoBuffer::F64(b[0].buffer.data.borrow()),
         }
     }
 
     #[inline]
     pub fn stereo<'a>(&'a self) -> Option<StereoBuffer<'a>> {
-        unsafe {
-            match &self.raw_channels {
-                RawAudioChannelBuffers::F32(b) => {
-                    if b.len() > 1 {
-                        Some(StereoBuffer::F32(
-                            b.get_unchecked(0).buffer.data.borrow(),
-                            b.get_unchecked(1).buffer.data.borrow(),
-                        ))
-                    } else {
-                        None
-                    }
+        match &self.raw_channels {
+            RawAudioChannelBuffers::F32(b) => {
+                if b.len() > 1 {
+                    Some(StereoBuffer::F32(b[0].buffer.data.borrow(), b[1].buffer.data.borrow()))
+                } else {
+                    None
                 }
-                RawAudioChannelBuffers::F64(b) => {
-                    if b.len() > 1 {
-                        Some(StereoBuffer::F64(
-                            b.get_unchecked(0).buffer.data.borrow(),
-                            b.get_unchecked(1).buffer.data.borrow(),
-                        ))
-                    } else {
-                        None
-                    }
+            }
+            RawAudioChannelBuffers::F64(b) => {
+                if b.len() > 1 {
+                    Some(StereoBuffer::F64(b[0].buffer.data.borrow(), b[1].buffer.data.borrow()))
+                } else {
+                    None
                 }
             }
         }
     }
 
     #[inline]
-    pub unsafe fn mono_f32_unchecked<'a>(&'a self) -> MaybeAtomicRef<'a, Vec<f32>> {
-        self.raw_channels.f32_unchecked().get_unchecked(0).buffer.data.borrow()
+    pub fn mono_f32<'a>(&'a self) -> Option<AtomicRef<'a, Vec<f32>>> {
+        match &self.raw_channels {
+            RawAudioChannelBuffers::F32(b) => Some(b[0].buffer.data.borrow()),
+            _ => None,
+        }
     }
 
     #[inline]
-    pub unsafe fn stereo_f32_unchecked<'a>(
-        &'a self,
-    ) -> (MaybeAtomicRef<'a, Vec<f32>>, MaybeAtomicRef<'a, Vec<f32>>) {
-        (
-            self.raw_channels.f32_unchecked().get_unchecked(0).buffer.data.borrow(),
-            self.raw_channels.f32_unchecked().get_unchecked(1).buffer.data.borrow(),
-        )
+    pub fn stereo_f32<'a>(&'a self) -> Option<(AtomicRef<'a, Vec<f32>>, AtomicRef<'a, Vec<f32>>)> {
+        match &self.raw_channels {
+            RawAudioChannelBuffers::F32(b) => {
+                if b.len() > 1 {
+                    Some((b[0].buffer.data.borrow(), b[1].buffer.data.borrow()))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
     }
 
     pub fn is_silent(&self, frames: usize) -> bool {
@@ -203,7 +183,7 @@ impl AudioPortBuffer {
             match &self.raw_channels {
                 RawAudioChannelBuffers::F32(buffers) => {
                     for rc_buf in buffers.iter() {
-                        let buf_ref = unsafe { rc_buf.borrow() };
+                        let buf_ref = rc_buf.borrow();
                         if buf_ref[0] != 0.0 {
                             return false;
                         }
@@ -211,7 +191,7 @@ impl AudioPortBuffer {
                 }
                 RawAudioChannelBuffers::F64(buffers) => {
                     for rc_buf in buffers.iter() {
-                        let buf_ref = unsafe { rc_buf.borrow() };
+                        let buf_ref = rc_buf.borrow();
                         if buf_ref[0] != 0.0 {
                             return false;
                         }
@@ -222,8 +202,9 @@ impl AudioPortBuffer {
             match &self.raw_channels {
                 RawAudioChannelBuffers::F32(buffers) => {
                     for rc_buf in buffers.iter() {
-                        let buf_ref = unsafe { rc_buf.borrow() };
-                        let buf = &buf_ref[0..frames];
+                        let buf_ref = rc_buf.borrow();
+                        let f = frames.min(buf_ref.len());
+                        let buf = &buf_ref[0..f];
                         for x in buf.iter() {
                             if *x != 0.0 {
                                 return false;
@@ -233,8 +214,9 @@ impl AudioPortBuffer {
                 }
                 RawAudioChannelBuffers::F64(buffers) => {
                     for rc_buf in buffers.iter() {
-                        let buf_ref = unsafe { rc_buf.borrow() };
-                        let buf = &buf_ref[0..frames];
+                        let buf_ref = rc_buf.borrow();
+                        let f = frames.min(buf_ref.len());
+                        let buf = &buf_ref[0..f];
                         for x in buf.iter() {
                             if *x != 0.0 {
                                 return false;
@@ -339,10 +321,10 @@ impl AudioPortBufferMut {
     pub fn channel<'a>(&'a self, index: usize) -> Option<MonoBuffer<'a>> {
         match &self.raw_channels {
             RawAudioChannelBuffers::F32(b) => {
-                b.get(index).map(|b| MonoBuffer::F32(unsafe { b.buffer.data.borrow() }))
+                b.get(index).map(|b| MonoBuffer::F32(b.buffer.data.borrow()))
             }
             RawAudioChannelBuffers::F64(b) => {
-                b.get(index).map(|b| MonoBuffer::F64(unsafe { b.buffer.data.borrow() }))
+                b.get(index).map(|b| MonoBuffer::F64(b.buffer.data.borrow()))
             }
         }
     }
@@ -351,67 +333,45 @@ impl AudioPortBufferMut {
     pub fn channel_mut<'a>(&'a mut self, index: usize) -> Option<MonoBufferMut<'a>> {
         match &mut self.raw_channels {
             RawAudioChannelBuffers::F32(b) => {
-                b.get(index).map(|b| MonoBufferMut::F32(unsafe { b.buffer.data.borrow_mut() }))
+                b.get(index).map(|b| MonoBufferMut::F32(b.buffer.data.borrow_mut()))
             }
             RawAudioChannelBuffers::F64(b) => {
-                b.get(index).map(|b| MonoBufferMut::F64(unsafe { b.buffer.data.borrow_mut() }))
+                b.get(index).map(|b| MonoBufferMut::F64(b.buffer.data.borrow_mut()))
             }
         }
     }
 
     #[inline]
     pub fn mono<'a>(&'a self) -> MonoBuffer<'a> {
-        // Safe because we are guaranteed to have at-least one channel.
-        unsafe {
-            match &self.raw_channels {
-                RawAudioChannelBuffers::F32(b) => {
-                    MonoBuffer::F32(b.get_unchecked(0).buffer.data.borrow())
-                }
-                RawAudioChannelBuffers::F64(b) => {
-                    MonoBuffer::F64(b.get_unchecked(0).buffer.data.borrow())
-                }
-            }
+        match &self.raw_channels {
+            RawAudioChannelBuffers::F32(b) => MonoBuffer::F32(b[0].buffer.data.borrow()),
+            RawAudioChannelBuffers::F64(b) => MonoBuffer::F64(b[0].buffer.data.borrow()),
         }
     }
 
     #[inline]
     pub fn mono_mut<'a>(&'a mut self) -> MonoBufferMut<'a> {
-        // Safe because we are guaranteed to have at-least one channel.
-        unsafe {
-            match &mut self.raw_channels {
-                RawAudioChannelBuffers::F32(b) => {
-                    MonoBufferMut::F32(b.get_unchecked(0).buffer.data.borrow_mut())
-                }
-                RawAudioChannelBuffers::F64(b) => {
-                    MonoBufferMut::F64(b.get_unchecked(0).buffer.data.borrow_mut())
-                }
-            }
+        match &mut self.raw_channels {
+            RawAudioChannelBuffers::F32(b) => MonoBufferMut::F32(b[0].buffer.data.borrow_mut()),
+            RawAudioChannelBuffers::F64(b) => MonoBufferMut::F64(b[0].buffer.data.borrow_mut()),
         }
     }
 
     #[inline]
     pub fn stereo<'a>(&'a self) -> Option<StereoBuffer<'a>> {
-        unsafe {
-            match &self.raw_channels {
-                RawAudioChannelBuffers::F32(b) => {
-                    if b.len() > 1 {
-                        Some(StereoBuffer::F32(
-                            b.get_unchecked(0).buffer.data.borrow(),
-                            b.get_unchecked(1).buffer.data.borrow(),
-                        ))
-                    } else {
-                        None
-                    }
+        match &self.raw_channels {
+            RawAudioChannelBuffers::F32(b) => {
+                if b.len() > 1 {
+                    Some(StereoBuffer::F32(b[0].buffer.data.borrow(), b[1].buffer.data.borrow()))
+                } else {
+                    None
                 }
-                RawAudioChannelBuffers::F64(b) => {
-                    if b.len() > 1 {
-                        Some(StereoBuffer::F64(
-                            b.get_unchecked(0).buffer.data.borrow(),
-                            b.get_unchecked(1).buffer.data.borrow(),
-                        ))
-                    } else {
-                        None
-                    }
+            }
+            RawAudioChannelBuffers::F64(b) => {
+                if b.len() > 1 {
+                    Some(StereoBuffer::F64(b[0].buffer.data.borrow(), b[1].buffer.data.borrow()))
+                } else {
+                    None
                 }
             }
         }
@@ -419,87 +379,93 @@ impl AudioPortBufferMut {
 
     #[inline]
     pub fn stereo_mut<'a>(&'a mut self) -> Option<StereoBufferMut<'a>> {
-        unsafe {
-            match &mut self.raw_channels {
-                RawAudioChannelBuffers::F32(b) => {
-                    if b.len() > 1 {
-                        Some(StereoBufferMut::F32(
-                            b.get_unchecked(0).buffer.data.borrow_mut(),
-                            b.get_unchecked(1).buffer.data.borrow_mut(),
-                        ))
-                    } else {
-                        None
-                    }
+        match &mut self.raw_channels {
+            RawAudioChannelBuffers::F32(b) => {
+                if b.len() > 1 {
+                    Some(StereoBufferMut::F32(
+                        b[0].buffer.data.borrow_mut(),
+                        b[1].buffer.data.borrow_mut(),
+                    ))
+                } else {
+                    None
                 }
-                RawAudioChannelBuffers::F64(b) => {
-                    if b.len() > 1 {
-                        Some(StereoBufferMut::F64(
-                            b.get_unchecked(0).buffer.data.borrow_mut(),
-                            b.get_unchecked(1).buffer.data.borrow_mut(),
-                        ))
-                    } else {
-                        None
-                    }
+            }
+            RawAudioChannelBuffers::F64(b) => {
+                if b.len() > 1 {
+                    Some(StereoBufferMut::F64(
+                        b[0].buffer.data.borrow_mut(),
+                        b[1].buffer.data.borrow_mut(),
+                    ))
+                } else {
+                    None
                 }
             }
         }
     }
 
     #[inline]
-    pub unsafe fn mono_f32_unchecked<'a>(&'a self) -> MaybeAtomicRef<'a, Vec<f32>> {
-        self.raw_channels.f32_unchecked().get_unchecked(0).buffer.data.borrow()
+    pub fn channel_f32<'a>(&'a self, index: usize) -> Option<AtomicRef<'a, Vec<f32>>> {
+        match &self.raw_channels {
+            RawAudioChannelBuffers::F32(b) => b.get(index).map(|b| b.buffer.data.borrow()),
+            _ => None,
+        }
     }
 
     #[inline]
-    pub unsafe fn mono_f32_unchecked_mut<'a>(&'a mut self) -> MaybeAtomicRefMut<'a, Vec<f32>> {
-        self.raw_channels.f32_unchecked().get_unchecked(0).buffer.data.borrow_mut()
+    pub fn channel_f32_mut<'a>(&'a mut self, index: usize) -> Option<AtomicRefMut<'a, Vec<f32>>> {
+        match &mut self.raw_channels {
+            RawAudioChannelBuffers::F32(b) => b.get_mut(index).map(|b| b.buffer.data.borrow_mut()),
+            _ => None,
+        }
     }
 
     #[inline]
-    pub unsafe fn stereo_f32_unchecked<'a>(
-        &'a self,
-    ) -> (MaybeAtomicRef<'a, Vec<f32>>, MaybeAtomicRef<'a, Vec<f32>>) {
-        (
-            self.raw_channels.f32_unchecked().get_unchecked(0).buffer.data.borrow(),
-            self.raw_channels.f32_unchecked().get_unchecked(1).buffer.data.borrow(),
-        )
+    pub fn mono_f32<'a>(&'a self) -> Option<AtomicRef<'a, Vec<f32>>> {
+        match &self.raw_channels {
+            RawAudioChannelBuffers::F32(b) => Some(b[0].buffer.data.borrow()),
+            _ => None,
+        }
     }
 
     #[inline]
-    pub unsafe fn stereo_f32_unchecked_mut<'a>(
+    pub fn mono_f32_mut<'a>(&'a mut self) -> Option<AtomicRefMut<'a, Vec<f32>>> {
+        match &mut self.raw_channels {
+            RawAudioChannelBuffers::F32(b) => Some(b[0].buffer.data.borrow_mut()),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn stereo_f32<'a>(&'a self) -> Option<(AtomicRef<'a, Vec<f32>>, AtomicRef<'a, Vec<f32>>)> {
+        match &self.raw_channels {
+            RawAudioChannelBuffers::F32(b) => {
+                if b.len() > 1 {
+                    Some((b[0].buffer.data.borrow(), b[1].buffer.data.borrow()))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn stereo_f32_mut<'a>(
         &'a mut self,
-    ) -> (MaybeAtomicRefMut<'a, Vec<f32>>, MaybeAtomicRefMut<'a, Vec<f32>>) {
-        (
-            self.raw_channels.f32_unchecked().get_unchecked(0).buffer.data.borrow_mut(),
-            self.raw_channels.f32_unchecked().get_unchecked(1).buffer.data.borrow_mut(),
-        )
+    ) -> Option<(AtomicRefMut<'a, Vec<f32>>, AtomicRefMut<'a, Vec<f32>>)> {
+        match &mut self.raw_channels {
+            RawAudioChannelBuffers::F32(b) => {
+                if b.len() > 1 {
+                    Some((b[0].buffer.data.borrow_mut(), b[1].buffer.data.borrow_mut()))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
     }
 
     pub fn clear_all(&mut self, frames: usize) {
-        // TODO: set silence flags
-
-        self.set_constant_mask(0);
-
-        match &self.raw_channels {
-            RawAudioChannelBuffers::F32(buffers) => {
-                for rc_buf in buffers.iter() {
-                    let clear_frames = frames.min(rc_buf.max_frames());
-
-                    unsafe { rc_buf.clear_f32(clear_frames) };
-                }
-            }
-            RawAudioChannelBuffers::F64(buffers) => {
-                for rc_buf in buffers.iter() {
-                    let clear_frames = frames.min(rc_buf.max_frames());
-
-                    unsafe { rc_buf.clear_f64(clear_frames) };
-                }
-            }
-        }
-    }
-
-    #[allow(unused_unsafe)]
-    pub unsafe fn clear_all_unchecked(&mut self, frames: usize) {
         // TODO: set silence flags
 
         self.set_constant_mask(0);
@@ -523,7 +489,7 @@ impl AudioPortBufferMut {
             match &self.raw_channels {
                 RawAudioChannelBuffers::F32(buffers) => {
                     for rc_buf in buffers.iter() {
-                        let buf_ref = unsafe { rc_buf.borrow() };
+                        let buf_ref = rc_buf.borrow();
                         if buf_ref[0] != 0.0 {
                             return false;
                         }
@@ -531,7 +497,7 @@ impl AudioPortBufferMut {
                 }
                 RawAudioChannelBuffers::F64(buffers) => {
                     for rc_buf in buffers.iter() {
-                        let buf_ref = unsafe { rc_buf.borrow() };
+                        let buf_ref = rc_buf.borrow();
                         if buf_ref[0] != 0.0 {
                             return false;
                         }
@@ -542,8 +508,9 @@ impl AudioPortBufferMut {
             match &self.raw_channels {
                 RawAudioChannelBuffers::F32(buffers) => {
                     for rc_buf in buffers.iter() {
-                        let buf_ref = unsafe { rc_buf.borrow() };
-                        let buf = &buf_ref[0..frames];
+                        let buf_ref = rc_buf.borrow();
+                        let f = frames.min(buf_ref.len());
+                        let buf = &buf_ref[0..f];
                         for x in buf.iter() {
                             if *x != 0.0 {
                                 return false;
@@ -553,8 +520,9 @@ impl AudioPortBufferMut {
                 }
                 RawAudioChannelBuffers::F64(buffers) => {
                     for rc_buf in buffers.iter() {
-                        let buf_ref = unsafe { rc_buf.borrow() };
-                        let buf = &buf_ref[0..frames];
+                        let buf_ref = rc_buf.borrow();
+                        let f = frames.min(buf_ref.len());
+                        let buf = &buf_ref[0..f];
                         for x in buf.iter() {
                             if *x != 0.0 {
                                 return false;

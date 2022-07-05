@@ -8,7 +8,7 @@ use std::sync::{
     Arc,
 };
 
-use maybe_atomic_refcell::{MaybeAtomicRef, MaybeAtomicRefMut};
+use atomic_refcell::{AtomicRef, AtomicRefMut};
 use smallvec::SmallVec;
 
 use clap_sys::entry::clap_plugin_entry as RawClapEntry;
@@ -861,30 +861,28 @@ impl PluginAudioThread for ClapPluginAudioThread {
         }
 
         let res = {
-            #[cfg(debug_assertions)]
+            //#[cfg(debug_assertions)]
             // In debug mode, borrow all of the atomic ref cells to properly use the
             // safety checks, since external plugins just use the raw pointer to each
             // buffer.
             let (mut input_refs_f32, mut input_refs_f64, mut output_refs_f32, mut output_refs_f64) = {
-                let mut input_refs_f32: SmallVec<[MaybeAtomicRef<'_, Vec<f32>>; 32]> =
+                let mut input_refs_f32: SmallVec<[AtomicRef<'_, Vec<f32>>; 32]> = SmallVec::new();
+                let mut input_refs_f64: SmallVec<[AtomicRef<'_, Vec<f64>>; 32]> = SmallVec::new();
+                let mut output_refs_f32: SmallVec<[AtomicRefMut<'_, Vec<f32>>; 32]> =
                     SmallVec::new();
-                let mut input_refs_f64: SmallVec<[MaybeAtomicRef<'_, Vec<f64>>; 32]> =
-                    SmallVec::new();
-                let mut output_refs_f32: SmallVec<[MaybeAtomicRefMut<'_, Vec<f32>>; 32]> =
-                    SmallVec::new();
-                let mut output_refs_f64: SmallVec<[MaybeAtomicRefMut<'_, Vec<f64>>; 32]> =
+                let mut output_refs_f64: SmallVec<[AtomicRefMut<'_, Vec<f64>>; 32]> =
                     SmallVec::new();
 
                 for in_port in buffers.audio_in.iter() {
                     match &in_port.raw_channels {
                         RawAudioChannelBuffers::F32(buffers) => {
                             for b in buffers.iter() {
-                                input_refs_f32.push(unsafe { b.buffer.data.borrow() });
+                                input_refs_f32.push(b.buffer.data.borrow());
                             }
                         }
                         RawAudioChannelBuffers::F64(buffers) => {
                             for b in buffers.iter() {
-                                input_refs_f64.push(unsafe { b.buffer.data.borrow() });
+                                input_refs_f64.push(b.buffer.data.borrow());
                             }
                         }
                     }
@@ -894,12 +892,12 @@ impl PluginAudioThread for ClapPluginAudioThread {
                     match &out_port.raw_channels {
                         RawAudioChannelBuffers::F32(buffers) => {
                             for b in buffers.iter() {
-                                output_refs_f32.push(unsafe { b.buffer.data.borrow_mut() });
+                                output_refs_f32.push(b.buffer.data.borrow_mut());
                             }
                         }
                         RawAudioChannelBuffers::F64(buffers) => {
                             for b in buffers.iter() {
-                                output_refs_f64.push(unsafe { b.buffer.data.borrow_mut() });
+                                output_refs_f64.push(b.buffer.data.borrow_mut());
                             }
                         }
                     }
@@ -915,13 +913,13 @@ impl PluginAudioThread for ClapPluginAudioThread {
                 )
             };
 
-            #[cfg(debug_assertions)]
+            //#[cfg(debug_assertions)]
             input_refs_f32.clear();
-            #[cfg(debug_assertions)]
+            //#[cfg(debug_assertions)]
             input_refs_f64.clear();
-            #[cfg(debug_assertions)]
+            //#[cfg(debug_assertions)]
             output_refs_f32.clear();
-            #[cfg(debug_assertions)]
+            //#[cfg(debug_assertions)]
             output_refs_f64.clear();
 
             res

@@ -2,8 +2,8 @@ use clap_sys::events::clap_event_header as ClapEventHeader;
 use std::iter::Iterator;
 
 use super::{
-    EventMidi, EventMidi2, EventMidiSysex, EventNote, EventNoteExpression, EventParamGesture,
-    EventParamMod, EventParamValue, EventTransport,
+    EventMidi, EventMidi2, EventNote, EventNoteExpression, EventParamGesture, EventParamMod,
+    EventParamValue, EventTransport,
 };
 
 // TODO: Use an event queue that supports variable sizes for messages to
@@ -54,7 +54,7 @@ pub enum ProcEventRef<'a> {
     ParamGesture(&'a EventParamGesture),
     Transport(&'a EventTransport),
     Midi(&'a EventMidi),
-    MidiSysex(&'a EventMidiSysex),
+    //MidiSysex(&'a EventMidiSysex),
     Midi2(&'a EventMidi2),
 }
 
@@ -66,7 +66,7 @@ pub enum ProcEventRefMut<'a> {
     ParamGesture(&'a mut EventParamGesture),
     Transport(&'a mut EventTransport),
     Midi(&'a mut EventMidi),
-    MidiSysex(&'a mut EventMidiSysex),
+    //MidiSysex(&'a mut EventMidiSysex),
     Midi2(&'a mut EventMidi2),
 }
 
@@ -80,13 +80,17 @@ pub union ProcEvent {
     param_gesture: EventParamGesture,
     transport: EventTransport,
     midi: EventMidi,
-    midi_sysex: EventMidiSysex,
+    //midi_sysex: EventMidiSysex,
     midi2: EventMidi2,
 }
 
 impl ProcEvent {
     pub fn raw_pointer(&self) -> *const ClapEventHeader {
-        unsafe { &self.note.0.header }
+        // This is safe because all union options start with the `ClapEventHeader` struct,
+        // and all bit patterns for that struct are valid (except for `ClapEventHeader::size`,
+        // but the constructor of each event and its `from_raw()` methods ensures that this is
+        // always the correct value).
+        &unsafe { self.note.0.header }
     }
 
     pub fn param_value(
@@ -113,13 +117,14 @@ impl ProcEvent {
             ProcEventRef::ParamGesture(e) => ProcEvent { param_gesture: *e },
             ProcEventRef::Transport(e) => ProcEvent { transport: *e },
             ProcEventRef::Midi(e) => ProcEvent { midi: *e },
-            ProcEventRef::MidiSysex(e) => ProcEvent { midi_sysex: *e },
+            //ProcEventRef::MidiSysex(e) => ProcEvent { midi_sysex: *e },
             ProcEventRef::Midi2(e) => ProcEvent { midi2: *e },
         }
     }
 
     pub fn get<'a>(&'a self) -> Result<ProcEventRef<'a>, ()> {
-        // The event header is always the first bytes in every event.
+        // This is safe because all union options start with the `ClapEventHeader` struct,
+        // and all bit patterns for that struct are valid.
         let header = unsafe { self.note.0.header };
 
         match header.type_ {
@@ -127,39 +132,51 @@ impl ProcEvent {
             | clap_sys::events::CLAP_EVENT_NOTE_OFF
             | clap_sys::events::CLAP_EVENT_NOTE_CHOKE
             | clap_sys::events::CLAP_EVENT_NOTE_END => {
+                // Safe because all bit patterns for this struct are valid.
                 Ok(ProcEventRef::Note(unsafe { &self.note }))
             }
             clap_sys::events::CLAP_EVENT_NOTE_EXPRESSION => {
+                // Safe because all bit patterns for this struct are valid.
                 Ok(ProcEventRef::NoteExpression(unsafe { &self.note_expression }))
             }
             clap_sys::events::CLAP_EVENT_PARAM_VALUE => {
+                // Safe because all bit patterns for this struct are valid.
                 Ok(ProcEventRef::ParamValue(unsafe { &self.param_value.0 }, unsafe {
                     self.param_value.1
                 }))
             }
             clap_sys::events::CLAP_EVENT_PARAM_MOD => {
+                // Safe because all bit patterns for this struct are valid.
                 Ok(ProcEventRef::ParamMod(unsafe { &self.param_mod.0 }, unsafe {
                     self.param_mod.1
                 }))
             }
             clap_sys::events::CLAP_EVENT_PARAM_GESTURE_BEGIN
             | clap_sys::events::CLAP_EVENT_PARAM_GESTURE_END => {
+                // Safe because all bit patterns for this struct are valid.
                 Ok(ProcEventRef::ParamGesture(unsafe { &self.param_gesture }))
             }
             clap_sys::events::CLAP_EVENT_TRANSPORT => {
+                // Safe because all bit patterns for this struct are valid.
                 Ok(ProcEventRef::Transport(unsafe { &self.transport }))
             }
+            // Safe because all bit patterns for this struct are valid.
             clap_sys::events::CLAP_EVENT_MIDI => Ok(ProcEventRef::Midi(unsafe { &self.midi })),
+            /*
             clap_sys::events::CLAP_EVENT_MIDI_SYSEX => {
+                // Safe because all bit patterns for this struct are valid.
                 Ok(ProcEventRef::MidiSysex(unsafe { &self.midi_sysex }))
             }
+            */
+            // Safe because all bit patterns for this struct are valid.
             clap_sys::events::CLAP_EVENT_MIDI2 => Ok(ProcEventRef::Midi2(unsafe { &self.midi2 })),
             _ => Err(()),
         }
     }
 
     pub fn get_mut<'a>(&'a mut self) -> Result<ProcEventRefMut<'a>, ()> {
-        // The event header is always the first bytes in every event.
+        // This is safe because all union options start with the `ClapEventHeader` struct,
+        // and all bit patterns for that struct are valid.
         let header = unsafe { self.note.0.header };
 
         match header.type_ {
@@ -167,35 +184,46 @@ impl ProcEvent {
             | clap_sys::events::CLAP_EVENT_NOTE_OFF
             | clap_sys::events::CLAP_EVENT_NOTE_CHOKE
             | clap_sys::events::CLAP_EVENT_NOTE_END => {
+                // Safe because all bit patterns for this struct are valid.
                 Ok(ProcEventRefMut::Note(unsafe { &mut self.note }))
             }
             clap_sys::events::CLAP_EVENT_NOTE_EXPRESSION => {
+                // Safe because all bit patterns for this struct are valid.
                 Ok(ProcEventRefMut::NoteExpression(unsafe { &mut self.note_expression }))
             }
             clap_sys::events::CLAP_EVENT_PARAM_VALUE => {
+                // Safe because all bit patterns for this struct are valid.
                 Ok(ProcEventRefMut::ParamValue(unsafe { &mut self.param_value.0 }, unsafe {
                     self.param_value.1.as_mut()
                 }))
             }
             clap_sys::events::CLAP_EVENT_PARAM_MOD => {
+                // Safe because all bit patterns for this struct are valid.
                 Ok(ProcEventRefMut::ParamMod(unsafe { &mut self.param_mod.0 }, unsafe {
                     self.param_mod.1.as_mut()
                 }))
             }
             clap_sys::events::CLAP_EVENT_PARAM_GESTURE_BEGIN
             | clap_sys::events::CLAP_EVENT_PARAM_GESTURE_END => {
+                // Safe because all bit patterns for this struct are valid.
                 Ok(ProcEventRefMut::ParamGesture(unsafe { &mut self.param_gesture }))
             }
             clap_sys::events::CLAP_EVENT_TRANSPORT => {
+                // Safe because all bit patterns for this struct are valid.
                 Ok(ProcEventRefMut::Transport(unsafe { &mut self.transport }))
             }
             clap_sys::events::CLAP_EVENT_MIDI => {
+                // Safe because all bit patterns for this struct are valid.
                 Ok(ProcEventRefMut::Midi(unsafe { &mut self.midi }))
             }
+            /*
             clap_sys::events::CLAP_EVENT_MIDI_SYSEX => {
+                // Safe because all bit patterns for this struct are valid.
                 Ok(ProcEventRefMut::MidiSysex(unsafe { &mut self.midi_sysex }))
             }
+            */
             clap_sys::events::CLAP_EVENT_MIDI2 => {
+                // Safe because all bit patterns for this struct are valid.
                 Ok(ProcEventRefMut::Midi2(unsafe { &mut self.midi2 }))
             }
             _ => Err(()),
@@ -233,11 +261,13 @@ impl From<EventMidi> for ProcEvent {
     }
 }
 
+/*
 impl From<EventMidiSysex> for ProcEvent {
     fn from(e: EventMidiSysex) -> Self {
         ProcEvent { midi_sysex: e }
     }
 }
+*/
 
 impl From<EventMidi2> for ProcEvent {
     fn from(e: EventMidi2) -> Self {

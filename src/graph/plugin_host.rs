@@ -32,7 +32,13 @@ struct MainToAudioParamValue {
     _cookie: *const std::ffi::c_void,
 }
 
+// This is necessary because this event has a pointer which the CLAP plugin
+// owns (if it is a CLAP plugin). This should be safe since only the plugin
+// itself ever reads/writes to that pointer.
 unsafe impl Sync for MainToAudioParamValue {}
+// This is necessary because this event has a pointer which the CLAP plugin
+// owns (if it is a CLAP plugin). This should be safe since only the plugin
+// itself ever reads/writes to that pointer.
 unsafe impl Send for MainToAudioParamValue {}
 
 impl ReducFnvValue for MainToAudioParamValue {}
@@ -682,11 +688,7 @@ impl PluginInstanceHostAudioThread {
         note_out_buffers: &[Option<SharedBuffer<ProcEvent>>],
     ) {
         let clear_outputs = |proc_info: &ProcInfo, buffers: &mut ProcBuffers| {
-            // Safe because this `proc_info.frames` will always be less than or
-            // equal to the length of all audio buffers.
-            unsafe {
-                buffers.clear_all_outputs_unchecked(proc_info.frames);
-            }
+            buffers.clear_all_outputs(proc_info.frames);
             for b in buffers.audio_out.iter_mut() {
                 b.sync_constant_mask_to_buffers();
             }
@@ -694,12 +696,12 @@ impl PluginInstanceHostAudioThread {
 
         // Always clear event and note output buffers.
         if let Some(out_buf) = event_out_buffer {
-            let mut b = unsafe { out_buf.borrow_mut() };
+            let mut b = out_buf.borrow_mut();
             b.clear();
         }
         for out_buf in note_out_buffers.iter() {
             if let Some(out_buf) = out_buf {
-                let mut b = unsafe { out_buf.borrow_mut() };
+                let mut b = out_buf.borrow_mut();
                 b.clear();
             }
         }
@@ -792,7 +794,7 @@ impl PluginInstanceHostAudioThread {
         for (port_i, in_buffers) in note_in_buffers.iter().enumerate() {
             if let Some(in_buffers) = in_buffers {
                 for in_buf in in_buffers.iter() {
-                    let mut b = unsafe { in_buf.borrow_mut() };
+                    let mut b = in_buf.borrow_mut();
 
                     for mut event in b.drain(..) {
                         let mut do_add = true;
@@ -805,7 +807,7 @@ impl PluginInstanceHostAudioThread {
                                     e.set_port_index(port_i as i16)
                                 }
                                 ProcEventRefMut::Midi(e) => e.set_port_index(port_i as u16),
-                                ProcEventRefMut::MidiSysex(e) => e.set_port_index(port_i as u16),
+                                //ProcEventRefMut::MidiSysex(e) => e.set_port_index(port_i as u16),
                                 ProcEventRefMut::Midi2(e) => e.set_port_index(port_i as u16),
                                 _ => do_add = false,
                             }
@@ -822,7 +824,7 @@ impl PluginInstanceHostAudioThread {
 
         if let Some(event_in_buffers) = event_in_buffers {
             for in_buf in event_in_buffers.iter() {
-                let mut b = unsafe { in_buf.borrow_mut() };
+                let mut b = in_buf.borrow_mut();
 
                 for mut event in b.drain(..) {
                     let do_add = if let Ok(event) = ProcEvent::get_mut(&mut event) {
@@ -1034,11 +1036,13 @@ impl PluginInstanceHostAudioThread {
                                 push_to_note_out_i = Some(event.port_index() as usize);
                             }
                         }
+                        /*
                         Ok(ProcEventRefMut::MidiSysex(event)) => {
                             if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
                                 push_to_note_out_i = Some(event.port_index() as usize);
                             }
                         }
+                        */
                         Ok(ProcEventRefMut::Midi2(event)) => {
                             if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
                                 push_to_note_out_i = Some(event.port_index() as usize);
@@ -1050,13 +1054,13 @@ impl PluginInstanceHostAudioThread {
                     if push_to_event_out {
                         let out_buf = event_out_buffer.as_ref().unwrap();
 
-                        let mut b = unsafe { out_buf.borrow_mut() };
+                        let mut b = out_buf.borrow_mut();
 
                         b.push(out_event);
                     } else if let Some(buf_i) = push_to_note_out_i {
                         let out_buf = note_out_buffers[buf_i].as_ref().unwrap();
 
-                        let mut b = unsafe { out_buf.borrow_mut() };
+                        let mut b = out_buf.borrow_mut();
 
                         b.push(out_event);
                     }
@@ -1105,11 +1109,13 @@ impl PluginInstanceHostAudioThread {
                             push_to_note_out_i = Some(event.port_index() as usize);
                         }
                     }
+                    /*
                     Ok(ProcEventRefMut::MidiSysex(event)) => {
                         if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
                             push_to_note_out_i = Some(event.port_index() as usize);
                         }
                     }
+                    */
                     Ok(ProcEventRefMut::Midi2(event)) => {
                         if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
                             push_to_note_out_i = Some(event.port_index() as usize);
@@ -1121,13 +1127,13 @@ impl PluginInstanceHostAudioThread {
                 if push_to_event_out {
                     let out_buf = event_out_buffer.as_ref().unwrap();
 
-                    let mut b = unsafe { out_buf.borrow_mut() };
+                    let mut b = out_buf.borrow_mut();
 
                     b.push(out_event);
                 } else if let Some(buf_i) = push_to_note_out_i {
                     let out_buf = note_out_buffers[buf_i].as_ref().unwrap();
 
-                    let mut b = unsafe { out_buf.borrow_mut() };
+                    let mut b = out_buf.borrow_mut();
 
                     b.push(out_event);
                 }
@@ -1221,6 +1227,21 @@ impl PluginState {
     }
 }
 
+impl From<u32> for PluginState {
+    fn from(s: u32) -> Self {
+        match s {
+            0 => PluginState::Inactive,
+            1 => PluginState::InactiveWithError,
+            2 => PluginState::ActiveAndSleeping,
+            3 => PluginState::ActiveAndProcessing,
+            4 => PluginState::ActiveAndWaitingForQuiet,
+            5 => PluginState::ActiveWithError,
+            6 => PluginState::ActiveAndReadyToDeactivate,
+            _ => PluginState::InactiveWithError,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct SharedPluginState(AtomicU32);
 
@@ -1234,18 +1255,13 @@ impl SharedPluginState {
         // TODO: Are we able to use relaxed ordering here?
         let s = self.0.load(Ordering::SeqCst);
 
-        // Safe because we set `#[repr(u32)]` on this enum, and this AtomicU32
-        // can never be set to a value that is out of range.
-        unsafe { *(&s as *const u32 as *const PluginState) }
+        s.into()
     }
 
     #[inline]
     pub fn set(&self, state: PluginState) {
-        // Safe because we set `#[repr(u32)]` on this enum.
-        let s = unsafe { *(&state as *const PluginState as *const u32) };
-
         // TODO: Are we able to use relaxed ordering here?
-        self.0.store(s, Ordering::SeqCst);
+        self.0.store(state as u32, Ordering::SeqCst);
     }
 }
 

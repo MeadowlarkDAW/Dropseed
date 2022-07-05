@@ -1,7 +1,7 @@
+use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut};
 use audio_graph::NodeRef;
 use basedrop::Shared;
 use fnv::FnvHashMap;
-use maybe_atomic_refcell::{MaybeAtomicRef, MaybeAtomicRefCell, MaybeAtomicRefMut};
 use std::hash::Hash;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -49,7 +49,7 @@ impl std::fmt::Debug for DebugBufferID {
 }
 
 pub(crate) struct Buffer<T: Clone + Copy + Send + 'static> {
-    pub data: MaybeAtomicRefCell<Vec<T>>,
+    pub data: AtomicRefCell<Vec<T>>,
     pub is_constant: AtomicBool,
     pub debug_id: DebugBufferID,
 }
@@ -57,7 +57,7 @@ pub(crate) struct Buffer<T: Clone + Copy + Send + 'static> {
 impl<T: Clone + Copy + Send + 'static> Buffer<T> {
     pub fn new(max_frames: usize, debug_id: DebugBufferID) -> Self {
         Self {
-            data: MaybeAtomicRefCell::new(Vec::with_capacity(max_frames)),
+            data: AtomicRefCell::new(Vec::with_capacity(max_frames)),
             is_constant: AtomicBool::new(true),
             debug_id,
         }
@@ -67,7 +67,7 @@ impl<T: Clone + Copy + Send + 'static> Buffer<T> {
 impl Buffer<f32> {
     pub fn new_f32(max_frames: usize, debug_id: DebugBufferID) -> Self {
         Self {
-            data: MaybeAtomicRefCell::new(vec![0.0; max_frames]),
+            data: AtomicRefCell::new(vec![0.0; max_frames]),
             is_constant: AtomicBool::new(true),
             debug_id,
         }
@@ -77,7 +77,7 @@ impl Buffer<f32> {
 impl Buffer<f64> {
     pub fn new_f64(max_frames: usize, debug_id: DebugBufferID) -> Self {
         Self {
-            data: MaybeAtomicRefCell::new(vec![0.0; max_frames]),
+            data: AtomicRefCell::new(vec![0.0; max_frames]),
             is_constant: AtomicBool::new(true),
             debug_id,
         }
@@ -90,12 +90,12 @@ pub(crate) struct SharedBuffer<T: Clone + Copy + Send + 'static> {
 
 impl<T: Clone + Copy + Send + 'static> SharedBuffer<T> {
     #[inline]
-    pub unsafe fn borrow<'a>(&'a self) -> MaybeAtomicRef<'a, Vec<T>> {
+    pub fn borrow<'a>(&'a self) -> AtomicRef<'a, Vec<T>> {
         self.buffer.data.borrow()
     }
 
     #[inline]
-    pub unsafe fn borrow_mut<'a>(&'a self) -> MaybeAtomicRefMut<'a, Vec<T>> {
+    pub fn borrow_mut<'a>(&'a self) -> AtomicRefMut<'a, Vec<T>> {
         self.buffer.data.borrow_mut()
     }
 
@@ -113,7 +113,7 @@ impl<T: Clone + Copy + Send + 'static> SharedBuffer<T> {
 
     #[inline]
     pub fn max_frames(&self) -> usize {
-        unsafe { self.borrow().len() }
+        self.borrow().len()
     }
 
     pub fn id(&self) -> &DebugBufferID {
@@ -122,13 +122,11 @@ impl<T: Clone + Copy + Send + 'static> SharedBuffer<T> {
 }
 
 impl SharedBuffer<f32> {
-    pub unsafe fn clear_f32(&self, frames: usize) {
+    pub fn clear_f32(&self, frames: usize) {
         let mut buf_ref = self.borrow_mut();
+        let frames = frames.min(buf_ref.len());
 
-        #[cfg(debug_assertions)]
         let buf = &mut buf_ref[0..frames];
-        #[cfg(not(debug_assertions))]
-        let buf = std::slice::from_raw_parts_mut(buf_ref.as_mut_ptr(), frames);
 
         buf.fill(0.0);
 
@@ -137,13 +135,11 @@ impl SharedBuffer<f32> {
 }
 
 impl SharedBuffer<f64> {
-    pub unsafe fn clear_f64(&self, frames: usize) {
+    pub fn clear_f64(&self, frames: usize) {
         let mut buf_ref = self.borrow_mut();
+        let frames = frames.min(buf_ref.len());
 
-        #[cfg(debug_assertions)]
         let buf = &mut buf_ref[0..frames];
-        #[cfg(not(debug_assertions))]
-        let buf = std::slice::from_raw_parts_mut(buf_ref.as_mut_ptr(), frames);
 
         buf.fill(0.0);
 
@@ -249,20 +245,19 @@ impl Hash for PluginInstanceID {
 }
 
 pub(crate) struct SharedPluginHostAudioThread {
-    pub plugin: Shared<MaybeAtomicRefCell<PluginInstanceHostAudioThread>>,
+    pub plugin: Shared<AtomicRefCell<PluginInstanceHostAudioThread>>,
     pub task_version: u64,
 }
 
 impl SharedPluginHostAudioThread {
     pub fn new(plugin: PluginInstanceHostAudioThread, coll_handle: &basedrop::Handle) -> Self {
-        Self { plugin: Shared::new(coll_handle, MaybeAtomicRefCell::new(plugin)), task_version: 0 }
+        Self { plugin: Shared::new(coll_handle, AtomicRefCell::new(plugin)), task_version: 0 }
     }
 }
 
 impl SharedPluginHostAudioThread {
     pub fn id(&self) -> PluginInstanceID {
-        // Safe because we are just borrowing this immutably.
-        unsafe { self.plugin.borrow().id.clone() }
+        self.plugin.borrow().id.clone()
     }
 }
 
@@ -294,14 +289,14 @@ pub(crate) struct DelayCompKey {
 }
 
 pub(crate) struct SharedDelayCompNode {
-    pub node: Shared<MaybeAtomicRefCell<DelayCompNode>>,
+    pub node: Shared<AtomicRefCell<DelayCompNode>>,
     pub active: bool,
 }
 
 impl SharedDelayCompNode {
     pub fn new(delay: u32, coll_handle: &basedrop::Handle) -> Self {
         Self {
-            node: Shared::new(coll_handle, MaybeAtomicRefCell::new(DelayCompNode::new(delay))),
+            node: Shared::new(coll_handle, AtomicRefCell::new(DelayCompNode::new(delay))),
             active: true,
         }
     }
@@ -315,8 +310,7 @@ impl Clone for SharedDelayCompNode {
 
 impl SharedDelayCompNode {
     pub fn delay(&self) -> u32 {
-        // Safe because we are just borrowing this immutably.
-        unsafe { self.node.borrow().delay() }
+        self.node.borrow().delay()
     }
 }
 

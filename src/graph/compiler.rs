@@ -1,6 +1,6 @@
+use atomic_refcell::AtomicRefCell;
 use audio_graph::{Graph, ScheduledNode};
 use basedrop::Shared;
-use maybe_atomic_refcell::MaybeAtomicRefCell;
 use smallvec::SmallVec;
 use std::error::Error;
 
@@ -22,7 +22,7 @@ pub(crate) fn compile_graph(
     shared_plugin_pool: &mut SharedPluginPool,
     shared_buffer_pool: &mut SharedBufferPool,
     abstract_graph: &mut Graph<PluginInstanceID, PortChannelID, PortType>,
-    shared_transport_task: &Shared<MaybeAtomicRefCell<TransportTask>>,
+    shared_transport_task: &Shared<AtomicRefCell<TransportTask>>,
     graph_in_node_id: &PluginInstanceID,
     graph_out_node_id: &PluginInstanceID,
     verifier: &mut Verifier,

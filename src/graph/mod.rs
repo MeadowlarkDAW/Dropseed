@@ -1,9 +1,9 @@
+use atomic_refcell::AtomicRefCell;
 use audio_graph::{Graph, NodeRef};
 use basedrop::Shared;
 use crossbeam::channel::Sender;
 use fnv::FnvHashMap;
 use fnv::FnvHashSet;
-use maybe_atomic_refcell::MaybeAtomicRefCell;
 use meadowlark_core_types::SampleRate;
 use smallvec::SmallVec;
 use std::error::Error;
@@ -98,7 +98,7 @@ pub(crate) struct AudioGraph {
     graph_out_rdn: Shared<String>,
     temp_rdn: Shared<String>,
 
-    shared_transport_task: Shared<MaybeAtomicRefCell<TransportTask>>,
+    shared_transport_task: Shared<AtomicRefCell<TransportTask>>,
 
     sample_rate: SampleRate,
     min_frames: u32,
@@ -134,8 +134,7 @@ impl AudioGraph {
         let (transport_task, transport_handle) =
             TransportTask::new(None, sample_rate, coll_handle.clone());
 
-        let shared_transport_task =
-            Shared::new(&coll_handle, MaybeAtomicRefCell::new(transport_task));
+        let shared_transport_task = Shared::new(&coll_handle, AtomicRefCell::new(transport_task));
 
         let (shared_schedule, shared_schedule_clone) = SharedSchedule::new(
             Schedule::new(max_frames as usize, Shared::clone(&shared_transport_task)),

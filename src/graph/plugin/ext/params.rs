@@ -134,7 +134,13 @@ pub struct ParamInfo {
     pub(crate) cookie: *const c_void,
 }
 
+// This is necessary because this struct has a pointer which the CLAP plugin
+// owns (if it is a CLAP plugin). This should be safe since only the plugin
+// itself ever reads/writes to that pointer.
 unsafe impl Send for ParamInfo {}
+// This is necessary because this struct has a pointer which the CLAP plugin
+// owns (if it is a CLAP plugin). This should be safe since only the plugin
+// itself ever reads/writes to that pointer.
 unsafe impl Sync for ParamInfo {}
 
 impl ParamInfo {

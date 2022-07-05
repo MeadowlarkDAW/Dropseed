@@ -14,7 +14,6 @@ use clap_sys::events::clap_event_flags as ClapEventFlags;
 use clap_sys::events::clap_event_header as ClapEventHeader;
 use clap_sys::events::clap_event_midi as ClapEventMidi;
 use clap_sys::events::clap_event_midi2 as ClapEventMidi2;
-use clap_sys::events::clap_event_midi_sysex as ClapEventMidiSysex;
 use clap_sys::events::clap_event_note as ClapEventNote;
 use clap_sys::events::clap_event_note_expression as ClapEventNoteExpression;
 use clap_sys::events::clap_event_param_gesture as ClapEventParamGesture;
@@ -114,11 +113,25 @@ pub enum EventNoteType {
     NoteEnd = clap_sys::events::CLAP_EVENT_NOTE_END,
 }
 
+impl From<u16> for EventNoteType {
+    fn from(e: u16) -> Self {
+        match e {
+            clap_sys::events::CLAP_EVENT_NOTE_ON => EventNoteType::NoteOn,
+            clap_sys::events::CLAP_EVENT_NOTE_OFF => EventNoteType::NoteOff,
+            clap_sys::events::CLAP_EVENT_NOTE_CHOKE => EventNoteType::NoteChoke,
+            clap_sys::events::CLAP_EVENT_NOTE_END => EventNoteType::NoteEnd,
+            _ => EventNoteType::NoteOff,
+        }
+    }
+}
+
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct EventNote(ClapEventNote);
 
 impl EventNote {
+    pub const SIZE: u32 = std::mem::size_of::<ClapEventNote>() as u32;
+
     /// Construct a new note event
     ///
     /// - `time`: sample offset within the buffer for this event
@@ -143,11 +156,10 @@ impl EventNote {
     ) -> Self {
         Self(ClapEventNote {
             header: ClapEventHeader {
-                size: std::mem::size_of::<ClapEventNote>() as u32,
+                size: Self::SIZE,
                 time,
                 space_id,
-                // Safe because this enum is represented with u16
-                type_: unsafe { *(&event_type as *const EventNoteType as *const u16) },
+                type_: event_type as u16,
                 flags: event_flags.bits(),
             },
             note_id,
@@ -160,7 +172,7 @@ impl EventNote {
 
     pub(crate) fn from_raw(mut event: ClapEventNote) -> Self {
         // I don't trust the plugin to always set this correctly.
-        event.header.size = std::mem::size_of::<ClapEventNote>() as u32;
+        event.header.size = Self::SIZE;
 
         Self(event)
     }
@@ -180,9 +192,7 @@ impl EventNote {
     }
 
     pub fn event_type(&self) -> EventNoteType {
-        // Safe because this enum is represented with u16, and the constructor
-        // and the event queue ensures that this is a valid value.
-        unsafe { *(&self.0.header.type_ as *const u16 as *const EventNoteType) }
+        self.0.header.type_.into()
     }
 
     /// -1 if unspecified, otherwise >=0
@@ -224,9 +234,7 @@ impl NoteExpressionType {
     #[inline]
     pub fn from_i32(val: i32) -> Self {
         if val >= 0 && val <= clap_sys::events::CLAP_NOTE_EXPRESSION_PRESSURE {
-            // Safe because this enum is represented with an i32, and we checked that the
-            // value is within range.
-            NoteExpressionType::Known(unsafe { *(&val as *const i32 as *const NoteExpression) })
+            NoteExpressionType::Known(val.into())
         } else {
             NoteExpressionType::Unkown(val)
         }
@@ -235,10 +243,7 @@ impl NoteExpressionType {
     #[inline]
     pub fn to_i32(&self) -> i32 {
         match self {
-            NoteExpressionType::Known(val) => {
-                // Safe because this enum is represented with an i32.
-                unsafe { *(val as *const NoteExpression as *const i32) }
-            }
+            NoteExpressionType::Known(val) => *val as i32,
             NoteExpressionType::Unkown(val) => *val,
         }
     }
@@ -263,11 +268,28 @@ pub enum NoteExpression {
     Pressure = clap_sys::events::CLAP_NOTE_EXPRESSION_PRESSURE,
 }
 
+impl From<i32> for NoteExpression {
+    fn from(e: i32) -> Self {
+        match e {
+            clap_sys::events::CLAP_NOTE_EXPRESSION_VOLUME => NoteExpression::Volume,
+            clap_sys::events::CLAP_NOTE_EXPRESSION_PAN => NoteExpression::Pan,
+            clap_sys::events::CLAP_NOTE_EXPRESSION_TUNING => NoteExpression::Tuning,
+            clap_sys::events::CLAP_NOTE_EXPRESSION_VIBRATO => NoteExpression::Vibrato,
+            clap_sys::events::CLAP_NOTE_EXPRESSION_EXPRESSION => NoteExpression::Expression,
+            clap_sys::events::CLAP_NOTE_EXPRESSION_BRIGHTNESS => NoteExpression::Brightness,
+            clap_sys::events::CLAP_NOTE_EXPRESSION_PRESSURE => NoteExpression::Pressure,
+            _ => NoteExpression::Pressure,
+        }
+    }
+}
+
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct EventNoteExpression(ClapEventNoteExpression);
 
 impl EventNoteExpression {
+    pub const SIZE: u32 = std::mem::size_of::<ClapEventNoteExpression>() as u32;
+
     /// Construct a new note event
     ///
     /// - `time`: sample offset within the buffer for this event
@@ -292,7 +314,7 @@ impl EventNoteExpression {
     ) -> Self {
         Self(ClapEventNoteExpression {
             header: ClapEventHeader {
-                size: std::mem::size_of::<ClapEventNoteExpression>() as u32,
+                size: Self::SIZE,
                 time,
                 space_id,
                 // Safe because this enum is represented with u16
@@ -310,7 +332,7 @@ impl EventNoteExpression {
 
     pub(crate) fn from_raw(mut event: ClapEventNoteExpression) -> Self {
         // I don't trust the plugin to always set this correctly.
-        event.header.size = std::mem::size_of::<ClapEventNoteExpression>() as u32;
+        event.header.size = Self::SIZE;
 
         Self(event)
     }
@@ -365,10 +387,18 @@ impl EventNoteExpression {
 #[derive(Clone, Copy)]
 pub struct EventParamValue(ClapEventParamValue);
 
+// This is necessary because this event has a pointer which the CLAP plugin
+// owns (if it is a CLAP plugin). This should be safe since only the plugin
+// itself ever reads/writes to that pointer.
 unsafe impl Send for EventParamValue {}
+// This is necessary because this event has a pointer which the CLAP plugin
+// owns (if it is a CLAP plugin). This should be safe since only the plugin
+// itself ever reads/writes to that pointer.
 unsafe impl Sync for EventParamValue {}
 
 impl EventParamValue {
+    pub const SIZE: u32 = std::mem::size_of::<ClapEventParamValue>() as u32;
+
     /// Construct a new note event
     ///
     /// - `time`: sample offset within the buffer for this event
@@ -393,10 +423,9 @@ impl EventParamValue {
     ) -> Self {
         Self(ClapEventParamValue {
             header: ClapEventHeader {
-                size: std::mem::size_of::<ClapEventParamValue>() as u32,
+                size: Self::SIZE,
                 time,
                 space_id,
-                // Safe because this enum is represented with u16
                 type_: clap_sys::events::CLAP_EVENT_PARAM_VALUE,
                 flags: event_flags.bits(),
             },
@@ -412,7 +441,7 @@ impl EventParamValue {
 
     pub(crate) fn from_raw(mut event: ClapEventParamValue) -> Self {
         // I don't trust the plugin to always set this correctly.
-        event.header.size = std::mem::size_of::<ClapEventParamValue>() as u32;
+        event.header.size = Self::SIZE;
 
         Self(event)
     }
@@ -464,10 +493,18 @@ impl EventParamValue {
 #[derive(Clone, Copy)]
 pub struct EventParamMod(ClapEventParamMod);
 
+// This is necessary because this event has a pointer which the CLAP plugin
+// owns (if it is a CLAP plugin). This should be safe since only the plugin
+// itself ever reads/writes to that pointer.
 unsafe impl Send for EventParamMod {}
+// This is necessary because this event has a pointer which the CLAP plugin
+// owns (if it is a CLAP plugin). This should be safe since only the plugin
+// itself ever reads/writes to that pointer.
 unsafe impl Sync for EventParamMod {}
 
 impl EventParamMod {
+    pub const SIZE: u32 = std::mem::size_of::<ClapEventParamMod>() as u32;
+
     /// Construct a new note event
     ///
     /// - `time`: sample offset within the buffer for this event
@@ -492,10 +529,9 @@ impl EventParamMod {
     ) -> Self {
         Self(ClapEventParamMod {
             header: ClapEventHeader {
-                size: std::mem::size_of::<ClapEventParamMod>() as u32,
+                size: Self::SIZE,
                 time,
                 space_id,
-                // Safe because this enum is represented with u16
                 type_: clap_sys::events::CLAP_EVENT_PARAM_MOD,
                 flags: event_flags.bits(),
             },
@@ -511,7 +547,7 @@ impl EventParamMod {
 
     pub(crate) fn from_raw(mut event: ClapEventParamMod) -> Self {
         // I don't trust the plugin to always set this correctly.
-        event.header.size = std::mem::size_of::<ClapEventParamMod>() as u32;
+        event.header.size = Self::SIZE;
 
         Self(event)
     }
@@ -566,11 +602,23 @@ pub enum ParamGestureType {
     GestureEnd = clap_sys::events::CLAP_EVENT_PARAM_GESTURE_END,
 }
 
+impl From<u16> for ParamGestureType {
+    fn from(p: u16) -> Self {
+        match p {
+            clap_sys::events::CLAP_EVENT_PARAM_GESTURE_BEGIN => ParamGestureType::GestureBegin,
+            clap_sys::events::CLAP_EVENT_PARAM_GESTURE_END => ParamGestureType::GestureEnd,
+            _ => ParamGestureType::GestureEnd,
+        }
+    }
+}
+
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct EventParamGesture(ClapEventParamGesture);
 
 impl EventParamGesture {
+    pub const SIZE: u32 = std::mem::size_of::<ClapEventParamGesture>() as u32;
+
     /// Construct a new note event
     ///
     /// - `time`: sample offset within the buffer for this event
@@ -587,11 +635,10 @@ impl EventParamGesture {
     ) -> Self {
         Self(ClapEventParamGesture {
             header: ClapEventHeader {
-                size: std::mem::size_of::<ClapEventParamGesture>() as u32,
+                size: Self::SIZE,
                 time,
                 space_id,
-                // Safe because this enum is represented with u16
-                type_: unsafe { *(&gesture_type as *const ParamGestureType as *const u16) },
+                type_: gesture_type as u16,
                 flags: event_flags.bits(),
             },
             param_id: param_id.0,
@@ -600,7 +647,7 @@ impl EventParamGesture {
 
     pub(crate) fn from_raw(mut event: ClapEventParamGesture) -> Self {
         // I don't trust the plugin to always set this correctly.
-        event.header.size = std::mem::size_of::<ClapEventParamGesture>() as u32;
+        event.header.size = Self::SIZE;
 
         Self(event)
     }
@@ -620,9 +667,7 @@ impl EventParamGesture {
     }
 
     pub fn gesture_type(&self) -> ParamGestureType {
-        // Safe because this enum is represented with u16, and the constructor
-        // and the event queue ensures that this is a valid value.
-        unsafe { *(&self.0.header.type_ as *const u16 as *const ParamGestureType) }
+        self.0.header.type_.into()
     }
 
     pub fn is_begin(&self) -> bool {
@@ -652,6 +697,8 @@ bitflags! {
 pub struct EventTransport(ClapEventTransport);
 
 impl EventTransport {
+    pub const SIZE: u32 = std::mem::size_of::<ClapEventTransport>() as u32;
+
     /// Construct a new note event
     ///
     /// - `time`: sample offset within the buffer for this event
@@ -690,7 +737,7 @@ impl EventTransport {
     ) -> Self {
         Self(ClapEventTransport {
             header: ClapEventHeader {
-                size: std::mem::size_of::<ClapEventTransport>() as u32,
+                size: Self::SIZE,
                 time,
                 space_id,
                 type_: clap_sys::events::CLAP_EVENT_TRANSPORT,
@@ -714,7 +761,7 @@ impl EventTransport {
 
     pub(crate) fn from_raw(mut event: ClapEventTransport) -> Self {
         // I don't trust the plugin to always set this correctly.
-        event.header.size = std::mem::size_of::<ClapEventTransport>() as u32;
+        event.header.size = Self::SIZE;
 
         Self(event)
     }
@@ -803,6 +850,8 @@ impl EventTransport {
 pub struct EventMidi(ClapEventMidi);
 
 impl EventMidi {
+    pub const SIZE: u32 = std::mem::size_of::<ClapEventMidi>() as u32;
+
     /// Construct a new note event
     ///
     /// - `time`: sample offset within the buffer for this event
@@ -819,7 +868,7 @@ impl EventMidi {
     ) -> Self {
         Self(ClapEventMidi {
             header: ClapEventHeader {
-                size: std::mem::size_of::<ClapEventMidi>() as u32,
+                size: Self::SIZE,
                 time,
                 space_id,
                 // Safe because this enum is represented with u16
@@ -833,7 +882,7 @@ impl EventMidi {
 
     pub(crate) fn from_raw(mut event: ClapEventMidi) -> Self {
         // I don't trust the plugin to always set this correctly.
-        event.header.size = std::mem::size_of::<ClapEventMidi>() as u32;
+        event.header.size = Self::SIZE;
 
         Self(event)
     }
@@ -867,11 +916,24 @@ impl EventMidi {
     }
 }
 
+/*
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct EventMidiSysex(ClapEventMidiSysex);
 
+// This is necessary because this event has a pointer which the CLAP plugin
+// owns (if it is a CLAP plugin). This should be safe since only the plugin
+// itself ever reads/writes to that pointer.
+//
+// This crate currently doesn't support MidiSysex, so we don't have to worry
+// about reading/writing to MIDI buffer pointers ourselves.
 unsafe impl Send for EventMidiSysex {}
+// This is necessary because this event has a pointer which the CLAP plugin
+// owns (if it is a CLAP plugin). This should be safe since only the plugin
+// itself ever reads/writes to that pointer.
+//
+// This crate currently doesn't support MidiSysex, so we don't have to worry
+// about reading/writing to MIDI buffer pointers ourselves.
 unsafe impl Sync for EventMidiSysex {}
 
 impl EventMidiSysex {
@@ -883,7 +945,7 @@ impl EventMidiSysex {
     /// - `port_index`: the index of the MIDI port
     /// - `buffer_pointer`: the pointer to the raw data buffer
     /// - `buffer_size`: the size of the raw data buffer in bytes
-    pub unsafe fn new(
+    pub fn new(
         time: u32,
         space_id: u16,
         event_flags: EventFlags,
@@ -896,7 +958,6 @@ impl EventMidiSysex {
                 size: std::mem::size_of::<ClapEventMidiSysex>() as u32,
                 time,
                 space_id,
-                // Safe because this enum is represented with u16
                 type_: clap_sys::events::CLAP_EVENT_MIDI_SYSEX,
                 flags: event_flags.bits(),
             },
@@ -936,17 +997,22 @@ impl EventMidiSysex {
         self.0.port_index = port_index;
     }
 
+    /*
     /// The raw MIDI data.
     pub fn data(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.0.buffer, self.0.size as usize) }
     }
+    */
 }
+*/
 
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct EventMidi2(ClapEventMidi2);
 
 impl EventMidi2 {
+    pub const SIZE: u32 = std::mem::size_of::<ClapEventMidi2>() as u32;
+
     /// Construct a new note event
     ///
     /// - `time`: sample offset within the buffer for this event
@@ -963,10 +1029,9 @@ impl EventMidi2 {
     ) -> Self {
         Self(ClapEventMidi2 {
             header: ClapEventHeader {
-                size: std::mem::size_of::<ClapEventMidi2>() as u32,
+                size: Self::SIZE,
                 time,
                 space_id,
-                // Safe because this enum is represented with u16
                 type_: clap_sys::events::CLAP_EVENT_MIDI2,
                 flags: event_flags.bits(),
             },
@@ -977,7 +1042,7 @@ impl EventMidi2 {
 
     pub(crate) fn from_raw(mut event: ClapEventMidi2) -> Self {
         // I don't trust the plugin to always set this correctly.
-        event.header.size = std::mem::size_of::<ClapEventMidi2>() as u32;
+        event.header.size = Self::SIZE;
 
         Self(event)
     }

@@ -72,9 +72,9 @@ impl ProcBuffers {
         true
     }
 
-    pub unsafe fn clear_all_outputs_unchecked(&mut self, frames: usize) {
+    pub fn clear_all_outputs(&mut self, frames: usize) {
         for buf in self.audio_out.iter_mut() {
-            buf.clear_all_unchecked(frames);
+            buf.clear_all(frames);
         }
     }
 }

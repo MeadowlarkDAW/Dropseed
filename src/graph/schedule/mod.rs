@@ -1,5 +1,5 @@
+use atomic_refcell::AtomicRefCell;
 use basedrop::{Shared, SharedCell};
-use maybe_atomic_refcell::MaybeAtomicRefCell;
 use smallvec::SmallVec;
 
 use crate::transport::TransportTask;
@@ -22,13 +22,13 @@ pub struct Schedule {
 
     pub(crate) max_block_size: usize,
 
-    pub(crate) shared_transport_task: Shared<MaybeAtomicRefCell<TransportTask>>,
+    pub(crate) shared_transport_task: Shared<AtomicRefCell<TransportTask>>,
 }
 
 impl Schedule {
     pub(crate) fn new(
         max_block_size: usize,
-        shared_transport_task: Shared<MaybeAtomicRefCell<TransportTask>>,
+        shared_transport_task: Shared<AtomicRefCell<TransportTask>>,
     ) -> Self {
         Self {
             tasks: Vec::new(),
@@ -75,16 +75,13 @@ impl Schedule {
         audio_out_channels: usize,
     ) {
         if audio_in_channels != 0 && audio_out_channels != 0 {
-            debug_assert_eq!(
-                audio_in.len() / audio_in_channels,
-                audio_out.len() / audio_out_channels
-            );
+            assert_eq!(audio_in.len() / audio_in_channels, audio_out.len() / audio_out_channels);
         }
 
         let total_frames = if audio_in_channels > 0 {
             let total_frames = audio_in.len() / audio_in_channels;
 
-            debug_assert_eq!(audio_out.len(), audio_out_channels * total_frames);
+            assert_eq!(audio_out.len(), audio_out_channels * total_frames);
 
             total_frames
         } else if audio_out_channels > 0 {
@@ -102,8 +99,7 @@ impl Schedule {
             let frames = (total_frames - processed_frames).min(self.max_block_size);
 
             let transport = {
-                let mut transport_task =
-                    unsafe { MaybeAtomicRefCell::borrow_mut(&*self.shared_transport_task) };
+                let mut transport_task = AtomicRefCell::borrow_mut(&*self.shared_transport_task);
                 transport_task.process(frames)
             };
 
@@ -115,31 +111,12 @@ impl Schedule {
 
             for (ch_i, in_buffer) in self.graph_audio_in.iter().enumerate() {
                 if ch_i < audio_in_channels {
-                    // SAFETY
-                    // - These buffers are only ever borrowed in the audio thread.
-                    // - The schedule verifier has ensured that no data races can occur between parallel
-                    // audio threads due to aliasing buffer pointers.
-                    // - `frames` will always be less than or equal to the allocated size of
-                    // all process audio buffers.
-                    let mut buffer_ref = unsafe { in_buffer.borrow_mut() };
+                    let mut buffer_ref = in_buffer.borrow_mut();
 
-                    #[cfg(debug_assertions)]
                     let buffer = &mut buffer_ref[0..frames];
-                    #[cfg(not(debug_assertions))]
-                    let buffer =
-                        unsafe { std::slice::from_raw_parts_mut(buffer_ref.as_mut_ptr(), frames) };
 
                     for i in 0..proc_info.frames {
-                        #[cfg(debug_assertions)]
-                        {
-                            buffer[i] = audio_in[(i * audio_in_channels) + ch_i];
-                        }
-
-                        #[cfg(not(debug_assertions))]
-                        unsafe {
-                            *buffer.get_unchecked_mut(i) =
-                                *audio_in.get_unchecked((i * audio_in_channels) + ch_i);
-                        }
+                        buffer[i] = audio_in[(i * audio_in_channels) + ch_i];
                     }
 
                     let mut is_constant = true;
@@ -153,9 +130,7 @@ impl Schedule {
 
                     in_buffer.set_constant(is_constant);
                 } else {
-                    unsafe {
-                        in_buffer.clear_f32(frames);
-                    }
+                    in_buffer.clear_f32(frames);
                 }
             }
 
@@ -167,43 +142,16 @@ impl Schedule {
                 ..((processed_frames + frames) * audio_out_channels)];
             for ch_i in 0..audio_out_channels {
                 if let Some(buffer) = self.graph_audio_out.get(ch_i) {
-                    // SAFETY
-                    // - These buffers are only ever borrowed in the audio thread.
-                    // - The schedule verifier has ensured that no data races can occur between parallel
-                    // audio threads due to aliasing buffer pointers.
-                    // - `frames` will always be less than or equal to the allocated size of
-                    // all process audio buffers.
-                    let mut buffer_ref = unsafe { buffer.borrow_mut() };
+                    let mut buffer_ref = buffer.borrow_mut();
 
-                    #[cfg(debug_assertions)]
                     let buffer = &mut buffer_ref[0..frames];
-                    #[cfg(not(debug_assertions))]
-                    let buffer =
-                        unsafe { std::slice::from_raw_parts_mut(buffer_ref.as_mut_ptr(), frames) };
 
                     for i in 0..frames {
-                        #[cfg(debug_assertions)]
-                        {
-                            out_part[(i * audio_out_channels) + ch_i] = buffer[i];
-                        }
-
-                        #[cfg(not(debug_assertions))]
-                        unsafe {
-                            *out_part.get_unchecked_mut((i * audio_out_channels) + ch_i) =
-                                *buffer.get_unchecked(i);
-                        }
+                        out_part[(i * audio_out_channels) + ch_i] = buffer[i];
                     }
                 } else {
                     for i in 0..frames {
-                        #[cfg(debug_assertions)]
-                        {
-                            out_part[(i * audio_out_channels) + ch_i] = 0.0;
-                        }
-
-                        #[cfg(not(debug_assertions))]
-                        unsafe {
-                            *out_part.get_unchecked_mut((i * audio_out_channels) + ch_i) = 0.0;
-                        }
+                        out_part[(i * audio_out_channels) + ch_i] = 0.0;
                     }
                 }
             }
@@ -214,15 +162,16 @@ impl Schedule {
 }
 
 struct ScheduleWrapper {
-    schedule: MaybeAtomicRefCell<Schedule>,
+    schedule: AtomicRefCell<Schedule>,
 }
 
 // Required because of basedrop's `SharedCell` container.
 //
-// The reason why rust flags this as unsafe is because of the `MaybeAtomicRefCell`s in
-// the schedule. But this is safe because those `MaybeAtomicRefCell`s only ever get
-// borrowed in the audio thread.
+// Safe because the schedule is only ever borrowed by the main process thread.
 unsafe impl Send for ScheduleWrapper {}
+// Required because of basedrop's `SharedCell` container.
+//
+// Safe because the schedule is only ever borrowed by the main process thread.
 unsafe impl Sync for ScheduleWrapper {}
 
 pub(crate) struct SharedSchedule {
@@ -248,7 +197,7 @@ impl SharedSchedule {
             coll_handle,
             SharedCell::new(Shared::new(
                 coll_handle,
-                ScheduleWrapper { schedule: MaybeAtomicRefCell::new(schedule) },
+                ScheduleWrapper { schedule: AtomicRefCell::new(schedule) },
             )),
         );
 
@@ -265,7 +214,7 @@ impl SharedSchedule {
     pub(crate) fn set_new_schedule(&mut self, schedule: Schedule, coll_handle: &basedrop::Handle) {
         self.schedule.set(Shared::new(
             coll_handle,
-            ScheduleWrapper { schedule: MaybeAtomicRefCell::new(schedule) },
+            ScheduleWrapper { schedule: AtomicRefCell::new(schedule) },
         ));
     }
 
@@ -278,9 +227,7 @@ impl SharedSchedule {
     ) {
         let latest_schedule = self.schedule.get();
 
-        // This is safe because the schedule is only ever accessed by the
-        // audio thread.
-        let mut schedule = unsafe { latest_schedule.schedule.borrow_mut() };
+        let mut schedule = latest_schedule.schedule.borrow_mut();
 
         // TODO: Set this in the sandbox thread once we implement plugin sandboxing.
         // Make sure the the audio thread ID is correct.

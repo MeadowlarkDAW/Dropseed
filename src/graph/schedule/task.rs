@@ -180,11 +180,7 @@ pub(crate) struct PluginTask {
 
 impl PluginTask {
     fn process(&mut self, proc_info: &ProcInfo) {
-        // SAFETY
-        // - This is only ever borrowed here in this method in the audio thread.
-        // - The schedule verifier has ensured that a single plugin instance does
-        // not appear twice within the same schedule, so no data races can occur.
-        let mut plugin_audio_thread = unsafe { (*self.plugin.plugin).borrow_mut() };
+        let mut plugin_audio_thread = self.plugin.plugin.borrow_mut();
 
         plugin_audio_thread.process(
             proc_info,
@@ -206,11 +202,7 @@ pub(crate) struct DelayCompTask {
 
 impl DelayCompTask {
     fn process(&mut self, proc_info: &ProcInfo) {
-        // SAFETY
-        // - This is only ever borrowed here in this method in the audio thread.
-        // - The schedule verifier has ensured that a single node instance does
-        // not appear twice within the same schedule, so no data races can occur.
-        let mut delay_comp_node = unsafe { (*self.delay_comp_node.node).borrow_mut() };
+        let mut delay_comp_node = self.delay_comp_node.node.borrow_mut();
 
         delay_comp_node.process(proc_info, &self.audio_in, &self.audio_out);
     }
@@ -227,47 +219,31 @@ pub(crate) struct DeactivatedPluginTask {
 
 impl DeactivatedPluginTask {
     fn process(&mut self, proc_info: &ProcInfo) {
-        // SAFETY
-        // - These buffers are only ever borrowed in the audio thread.
-        // - The schedule verifier has ensured that no data races can occur between parallel
-        // audio threads due to aliasing buffer pointers.
-        // - `proc_info.frames` will always be less than or equal to the allocated size of
-        // all process audio buffers.
-        unsafe {
-            // Pass audio through the main ports.
-            for (in_buf, out_buf) in self.audio_through.iter() {
-                out_buf.set_constant(in_buf.is_constant());
+        // Pass audio through the main ports.
+        for (in_buf, out_buf) in self.audio_through.iter() {
+            out_buf.set_constant(in_buf.is_constant());
 
-                let in_buf_ref = in_buf.borrow();
-                let mut out_buf_ref = out_buf.borrow_mut();
+            let in_buf_ref = in_buf.borrow();
+            let mut out_buf_ref = out_buf.borrow_mut();
 
-                #[cfg(debug_assertions)]
-                let in_buf = &in_buf_ref[0..proc_info.frames];
-                #[cfg(debug_assertions)]
-                let out_buf = &mut out_buf_ref[0..proc_info.frames];
+            let in_buf = &in_buf_ref[0..proc_info.frames];
+            let out_buf = &mut out_buf_ref[0..proc_info.frames];
 
-                #[cfg(not(debug_assertions))]
-                let in_buf = std::slice::from_raw_parts(in_buf_ref.as_ptr(), proc_info.frames);
-                #[cfg(not(debug_assertions))]
-                let out_buf =
-                    std::slice::from_raw_parts_mut(out_buf_ref.as_mut_ptr(), proc_info.frames);
+            out_buf.copy_from_slice(in_buf);
+        }
 
-                out_buf.copy_from_slice(in_buf);
-            }
-
-            // Make sure all output buffers are cleared.
-            for out_buf in self.extra_audio_out.iter() {
-                out_buf.clear_f32(proc_info.frames);
-            }
-            if let Some(out_buf) = &self.automation_out_buffer {
+        // Make sure all output buffers are cleared.
+        for out_buf in self.extra_audio_out.iter() {
+            out_buf.clear_f32(proc_info.frames);
+        }
+        if let Some(out_buf) = &self.automation_out_buffer {
+            let mut b = out_buf.borrow_mut();
+            b.clear();
+        }
+        for out_buf in self.note_out_buffers.iter() {
+            if let Some(out_buf) = out_buf {
                 let mut b = out_buf.borrow_mut();
                 b.clear();
-            }
-            for out_buf in self.note_out_buffers.iter() {
-                if let Some(out_buf) = out_buf {
-                    let mut b = out_buf.borrow_mut();
-                    b.clear();
-                }
             }
         }
     }

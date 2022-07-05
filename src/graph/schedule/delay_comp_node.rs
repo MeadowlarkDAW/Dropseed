@@ -17,24 +17,10 @@ impl DelayCompNode {
         output: &SharedBuffer<f32>,
     ) {
         let is_constant = {
-            // SAFETY
-            // - These buffers are only ever borrowed in the audio thread.
-            // - The schedule verifier has ensured that no data races can occur between parallel
-            // audio threads due to aliasing buffer pointers.
-            // - `proc_info.frames` will always be less than or equal to the allocated size of
-            // all process audio buffers.
-            let (input_ref, mut output_ref) = unsafe { (input.borrow(), output.borrow_mut()) };
+            let (input_ref, mut output_ref) = (input.borrow(), output.borrow_mut());
 
-            #[cfg(debug_assertions)]
             let (input, output) =
                 (&input_ref[0..proc_info.frames], &mut output_ref[0..proc_info.frames]);
-            #[cfg(not(debug_assertions))]
-            let (input, output) = unsafe {
-                (
-                    std::slice::from_raw_parts(input_ref.as_ptr(), proc_info.frames),
-                    std::slice::from_raw_parts_mut(output_ref.as_mut_ptr(), proc_info.frames),
-                )
-            };
 
             if proc_info.frames > self.buf.len() {
                 if self.read_pointer == 0 {

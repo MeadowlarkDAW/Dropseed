@@ -184,42 +184,14 @@ impl DSEngineAudioThread {
                                 let s = if i2 < slice_1.len() {
                                     slice_1[i2]
                                 } else {
-                                    #[cfg(debug_assertions)]
-                                    {
-                                        slice_2[i2 - slice_1.len()]
-                                    }
-
-                                    #[cfg(not(debug_assertions))]
-                                    unsafe {
-                                        *slice_2.get_unchecked(i2 - slice_1.len())
-                                    }
+                                    slice_2[i2 - slice_1.len()]
                                 };
 
-                                #[cfg(debug_assertions)]
-                                {
-                                    out[(i * cpal_out_channels) + ch_i] = T::from(&s);
-                                }
-
-                                #[cfg(not(debug_assertions))]
-                                unsafe {
-                                    *out.get_unchecked_mut((i * cpal_out_channels) + ch_i) =
-                                        T::from(&s);
-                                }
+                                out[(i * cpal_out_channels) + ch_i] = T::from(&s);
                             }
                         } else {
-                            #[cfg(debug_assertions)]
-                            {
-                                for i in 0..total_frames {
-                                    out[(i * cpal_out_channels) + ch_i] = T::from(&0.0);
-                                }
-                            }
-
-                            #[cfg(not(debug_assertions))]
-                            unsafe {
-                                for i in 0..total_frames {
-                                    *out.get_unchecked_mut((i * cpal_out_channels) + ch_i) =
-                                        T::from(&0.0);
-                                }
+                            for i in 0..total_frames {
+                                out[(i * cpal_out_channels) + ch_i] = T::from(&0.0);
                             }
                         }
                     }
