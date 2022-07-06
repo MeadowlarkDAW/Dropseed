@@ -326,9 +326,6 @@ impl PluginAudioThread for SampleBrowserPlugAudioThread {
             if self.playhead < pcm.len_frames.0 as usize {
                 let (mut buf_l, mut buf_r) = buffers.audio_out[0].stereo_f32_mut().unwrap();
 
-                assert!(proc_info.frames <= buf_l.len());
-                assert!(proc_info.frames <= buf_r.len());
-
                 let buf_l_part = &mut buf_l[0..proc_info.frames];
                 let buf_r_part = &mut buf_r[0..proc_info.frames];
 
