@@ -37,5 +37,6 @@ pub use graph::{
     ParamModifiedInfo, PluginActivationStatus, PluginEdges, PluginHandle, PluginParamsExt,
     PortType,
 };
+pub use resource_loader::ResourceLoader;
 pub use transport::TransportInfo;
 pub use utils::fixed_point::FixedPoint64;

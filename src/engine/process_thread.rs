@@ -2,7 +2,6 @@ use basedrop::Owned;
 use rtrb::{Consumer, Producer};
 use std::time::Duration;
 use std::{
-    mem::MaybeUninit,
     sync::{
         atomic::{AtomicBool, AtomicU32, Ordering},
         Arc,

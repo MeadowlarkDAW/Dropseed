@@ -34,12 +34,12 @@ pub struct PcmLoader {
 }
 
 impl PcmLoader {
-    pub fn new(coll_handle: Handle, sample_rate: SampleRate) -> Self {
+    pub fn new(coll_handle: Handle, default_sample_rate: SampleRate) -> Self {
         let empty_pcm = Shared::new(
             &coll_handle,
             PcmResource {
                 pcm_type: PcmResourceType::F32(vec![Vec::new()]),
-                sample_rate,
+                sample_rate: default_sample_rate,
                 channels: 1,
                 len_frames: Frames(0),
             },
@@ -788,6 +788,10 @@ impl PcmLoader {
                 PcmResourceType::F64(decoded_channels)
             }
         };
+
+        if let Some(n_frames) = n_frames {
+            total_frames = n_frames;
+        }
 
         let pcm = Shared::new(
             &self.coll_handle,

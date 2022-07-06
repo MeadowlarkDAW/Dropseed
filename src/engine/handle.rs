@@ -19,10 +19,8 @@ pub struct DSEngineHandle {
 
     handle_to_engine_tx: Sender<DSEngineRequest>,
 
-    // TODO: Actually make this a sandboxed thread/process (which is the whole point of using
-    // a message passing model in the first place).
-    sandboxed_thread_handle: Option<JoinHandle<()>>,
-    run_sandboxed_thread: Arc<AtomicBool>,
+    engine_thread_handle: Option<JoinHandle<()>>,
+    run_engine_thread: Arc<AtomicBool>,
 
     _event_tx: Sender<DSEngineEvent>,
 
@@ -45,14 +43,14 @@ impl DSEngineHandle {
 
         let host_info_clone = host_info.clone();
 
-        let run_sandboxed_thread = Arc::new(AtomicBool::new(true));
-        let run_sandboxed_thread_clone = Arc::clone(&run_sandboxed_thread);
+        let run_engine_thread = Arc::new(AtomicBool::new(true));
+        let run_engine_thread_clone = Arc::clone(&run_engine_thread);
 
         let event_tx_clone = event_tx.clone();
 
         // TODO: Use a sandboxed thread/process (which is the whole point of using a message
         // passing model in the first place).
-        let sandboxed_thread_handle = thread::spawn(move || {
+        let engine_thread_handle = thread::spawn(move || {
             let (mut engine, internal_plugin_res) = DSEngineMainThread::new(
                 host_info_clone,
                 internal_plugins,
@@ -63,7 +61,7 @@ impl DSEngineHandle {
             spawn_engine_res_tx.send(SpawnEngineRes { internal_plugin_res }).unwrap();
             let _ = spawn_engine_res_tx;
 
-            engine.run(run_sandboxed_thread);
+            engine.run(run_engine_thread);
         });
 
         let spawn_engine_res = spawn_engine_res_rx.recv_timeout(Duration::from_secs(20)).unwrap();
@@ -73,8 +71,8 @@ impl DSEngineHandle {
             Self {
                 internal_plugins_res: spawn_engine_res.internal_plugin_res,
                 handle_to_engine_tx,
-                sandboxed_thread_handle: Some(sandboxed_thread_handle),
-                run_sandboxed_thread: run_sandboxed_thread_clone,
+                engine_thread_handle: Some(engine_thread_handle),
+                run_engine_thread: run_engine_thread_clone,
                 _event_tx: event_tx,
                 host_info,
             },
@@ -96,9 +94,9 @@ impl DSEngineHandle {
 
 impl Drop for DSEngineHandle {
     fn drop(&mut self) {
-        if let Some(sandboxed_thread_handle) = self.sandboxed_thread_handle.take() {
-            self.run_sandboxed_thread.store(false, Ordering::Relaxed);
-            if let Err(e) = sandboxed_thread_handle.join() {
+        if let Some(engine_thread_handle) = self.engine_thread_handle.take() {
+            self.run_engine_thread.store(false, Ordering::Relaxed);
+            if let Err(e) = engine_thread_handle.join() {
                 log::error!("Failed to join sandboxed thread: {:?}", &e);
             }
         }

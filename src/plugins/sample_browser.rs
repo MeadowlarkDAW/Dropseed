@@ -59,15 +59,18 @@ impl Default for SampleBrowserPlugPreset {
 
 pub struct SampleBrowserPlugHandle {
     to_audio_thread_tx: Producer<ProcessMsg>,
+    host_request: HostRequest,
 }
 
 impl SampleBrowserPlugHandle {
     pub fn play_sample(&mut self, pcm: Shared<PcmResource>) {
         self.send(ProcessMsg::PlayNewSample { pcm });
+        self.host_request.request_process();
     }
 
     pub fn replay_sample(&mut self) {
         self.send(ProcessMsg::ReplaySample);
+        self.host_request.request_process();
     }
 
     pub fn stop(&mut self) {
@@ -175,9 +178,8 @@ impl PluginMainThread for SampleBrowserPlugMainThread {
                 host_request: self.host_request.clone(),
                 is_playing: false,
                 playhead: 0,
-                is_processing: false,
             }),
-            internal_handle: Some(Box::new(SampleBrowserPlugHandle { to_audio_thread_tx })),
+            internal_handle: Some(Box::new(SampleBrowserPlugHandle { to_audio_thread_tx, host_request: self.host_request.clone() })),
         })
     }
 
@@ -253,8 +255,6 @@ pub struct SampleBrowserPlugAudioThread {
 
     is_playing: bool,
     playhead: usize,
-
-    is_processing: bool,
 }
 
 impl SampleBrowserPlugAudioThread {
@@ -272,21 +272,15 @@ impl SampleBrowserPlugAudioThread {
         while let Ok(msg) = self.from_handle_rx.pop() {
             match msg {
                 ProcessMsg::PlayNewSample { pcm } => {
+                    println!("play new sample");
+
                     self.pcm = Some(pcm);
                     self.is_playing = true;
                     self.playhead = 0;
-
-                    if !self.is_processing {
-                        self.host_request.request_process();
-                    }
                 }
                 ProcessMsg::ReplaySample => {
                     self.is_playing = true;
                     self.playhead = 0;
-
-                    if !self.is_processing {
-                        self.host_request.request_process();
-                    }
                 }
                 ProcessMsg::Stop => {
                     self.is_playing = false;
@@ -302,13 +296,10 @@ impl SampleBrowserPlugAudioThread {
 
 impl PluginAudioThread for SampleBrowserPlugAudioThread {
     fn start_processing(&mut self) -> Result<(), ()> {
-        self.is_processing = true;
-
         Ok(())
     }
 
     fn stop_processing(&mut self) {
-        self.is_processing = false;
     }
 
     fn process(
@@ -330,6 +321,8 @@ impl PluginAudioThread for SampleBrowserPlugAudioThread {
                 let buf_r_part = &mut buf_r[0..proc_info.frames];
 
                 pcm.fill_stereo_f32(self.playhead as isize, buf_l_part, buf_r_part);
+
+                self.playhead += buf_l.len();
 
                 return ProcessStatus::Continue;
             } else {

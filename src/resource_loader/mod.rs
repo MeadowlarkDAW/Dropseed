@@ -1,7 +1,4 @@
-use basedrop::Handle;
-use std::error::Error;
-use std::fmt;
-
+use basedrop::Collector;
 use meadowlark_core_types::SampleRate;
 
 pub mod pcm;
@@ -9,36 +6,20 @@ pub use pcm::{PcmLoadError, PcmLoader, PcmResource, PcmResourceType};
 
 pub struct ResourceLoader {
     pub pcm_loader: PcmLoader,
+    collector: Collector,
 }
 
 impl ResourceLoader {
-    pub fn new(coll_handle: Handle, sample_rate: SampleRate) -> Self {
-        Self { pcm_loader: PcmLoader::new(coll_handle, sample_rate) }
+    pub fn new(default_sample_rate: SampleRate) -> Self {
+        let collector = Collector::new();
+
+        let pcm_loader = PcmLoader::new(collector.handle(), default_sample_rate) ;
+
+        Self { pcm_loader, collector }
     }
 
     pub fn collect(&mut self) {
         self.pcm_loader.collect();
-    }
-}
-
-#[non_exhaustive]
-#[derive(Debug)]
-pub enum ResourceLoadError {
-    PCM(PcmLoadError),
-}
-
-impl Error for ResourceLoadError {}
-
-impl fmt::Display for ResourceLoadError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ResourceLoadError::PCM(e) => write!(f, "Load error: {}", e),
-        }
-    }
-}
-
-impl From<PcmLoadError> for ResourceLoadError {
-    fn from(e: PcmLoadError) -> Self {
-        ResourceLoadError::PCM(e)
+        self.collector.collect();
     }
 }
