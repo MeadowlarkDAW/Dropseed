@@ -85,7 +85,7 @@ pub trait PluginFactory: Send {
     /// `[main-thread]`
     fn new(
         &mut self,
-        host: HostRequest,
+        host_request: HostRequest,
         plugin_id: PluginInstanceID,
         coll_handle: &basedrop::Handle,
     ) -> Result<Box<dyn PluginMainThread>, String>;

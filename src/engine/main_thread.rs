@@ -25,8 +25,6 @@ use crate::plugin::{PluginFactory, PluginSaveState};
 use crate::transport::{TempoMap, TransportHandle};
 use crate::utils::thread_id::SharedThreadIDs;
 
-use super::process_thread::PROCESS_THREAD_PRIORITY;
-
 static ENGINE_THREAD_UPDATE_INTERVAL: Duration = Duration::from_millis(10);
 
 pub(crate) struct DSEngineMainThread {

@@ -18,7 +18,7 @@ static AUDIO_THREAD_POLL_INTERVAL: Duration = Duration::from_micros(5);
 
 /// Make sure we have a bit of time to copy the engine's output buffer to the
 /// audio thread's output buffer.
-static COPY_OUT_TIME_WINDOW: Duration = Duration::from_micros(60);
+static COPY_OUT_TIME_WINDOW: f64 = 0.9;
 
 pub struct DSEngineAudioThread {
     to_engine_audio_in_tx: Owned<Producer<f32>>,
@@ -134,8 +134,11 @@ impl DSEngineAudioThread {
             num_frames_wanted.store(total_frames as u32, Ordering::SeqCst);
         } else {
             match self.to_engine_audio_in_tx.write_chunk(total_frames * self.in_channels) {
-                Ok(chunk) => {
-                    // By default this just clears the chunk to all zeros.
+                Ok(mut chunk) => {
+                    let (slice_1, slice_2) = chunk.as_mut_slices();
+                    slice_1.fill(0.0);
+                    slice_2.fill(0.0);
+
                     chunk.commit_all();
                 }
                 Err(_) => {
@@ -151,11 +154,8 @@ impl DSEngineAudioThread {
             return;
         }
 
-        let mut max_proc_time =
-            Duration::from_secs_f64(total_frames as f64 * self.sample_rate_recip);
-        if max_proc_time > COPY_OUT_TIME_WINDOW {
-            max_proc_time -= COPY_OUT_TIME_WINDOW;
-        }
+        let max_proc_time =
+            Duration::from_secs_f64(total_frames as f64 * self.sample_rate_recip * COPY_OUT_TIME_WINDOW);
 
         while proc_start_time.elapsed() < max_proc_time {
             if let Ok(chunk) = self.from_engine_audio_out_rx.read_chunk(num_out_samples) {

@@ -10,9 +10,6 @@ use std::{
 
 use crate::graph::schedule::SharedSchedule;
 
-/// [0; 100]
-pub(crate) static PROCESS_THREAD_PRIORITY: u8 = 90;
-
 static PROCESS_THREAD_POLL_INTERVAL: Duration = Duration::from_micros(5);
 
 pub(crate) struct DSEngineProcessThread {
@@ -97,7 +94,7 @@ impl DSEngineProcessThread {
                 self.out_channels,
             );
 
-            match self.to_audio_thread_audio_out_tx.write_chunk(num_frames * self.in_channels) {
+            match self.to_audio_thread_audio_out_tx.write_chunk(num_frames * self.out_channels) {
                 Ok(mut chunk) => {
                     let (slice_1, slice_2) = chunk.as_mut_slices();
 

@@ -38,11 +38,11 @@ impl PluginFactory for SampleBrowserPlugFactory {
 
     fn new(
         &mut self,
-        host: HostRequest,
+        host_request: HostRequest,
         _plugin_id: PluginInstanceID,
         _coll_handle: &basedrop::Handle,
     ) -> Result<Box<dyn PluginMainThread>, String> {
-        Ok(Box::new(SampleBrowserPlugMainThread::new(host)))
+        Ok(Box::new(SampleBrowserPlugMainThread::new(host_request)))
     }
 }
 
@@ -175,7 +175,6 @@ impl PluginMainThread for SampleBrowserPlugMainThread {
                 params,
                 from_handle_rx,
                 pcm: None,
-                host_request: self.host_request.clone(),
                 is_playing: false,
                 playhead: 0,
             }),
@@ -251,8 +250,6 @@ pub struct SampleBrowserPlugAudioThread {
     from_handle_rx: Owned<Consumer<ProcessMsg>>,
     pcm: Option<Shared<PcmResource>>,
 
-    host_request: HostRequest,
-
     is_playing: bool,
     playhead: usize,
 }
@@ -322,7 +319,12 @@ impl PluginAudioThread for SampleBrowserPlugAudioThread {
 
                 pcm.fill_stereo_f32(self.playhead as isize, buf_l_part, buf_r_part);
 
-                self.playhead += buf_l.len();
+                for i in 0..proc_info.frames {
+                    buf_l_part[i] *= 0.5;
+                    buf_r_part[i] *= 0.5;
+                }
+
+                self.playhead += proc_info.frames;
 
                 return ProcessStatus::Continue;
             } else {
