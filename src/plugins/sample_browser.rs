@@ -178,7 +178,10 @@ impl PluginMainThread for SampleBrowserPlugMainThread {
                 is_playing: false,
                 playhead: 0,
             }),
-            internal_handle: Some(Box::new(SampleBrowserPlugHandle { to_audio_thread_tx, host_request: self.host_request.clone() })),
+            internal_handle: Some(Box::new(SampleBrowserPlugHandle {
+                to_audio_thread_tx,
+                host_request: self.host_request.clone(),
+            })),
         })
     }
 
@@ -296,8 +299,7 @@ impl PluginAudioThread for SampleBrowserPlugAudioThread {
         Ok(())
     }
 
-    fn stop_processing(&mut self) {
-    }
+    fn stop_processing(&mut self) {}
 
     fn process(
         &mut self,

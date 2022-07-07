@@ -3,10 +3,7 @@ use meadowlark_core_types::SampleRate;
 use crate::plugin::{
     ext, PluginActivatedInfo, PluginAudioThread, PluginDescriptor, PluginFactory, PluginMainThread,
 };
-use crate::{
-    EventQueue, HostRequest, PluginInstanceID, ProcBuffers,
-    ProcInfo, ProcessStatus,
-};
+use crate::{EventQueue, HostRequest, PluginInstanceID, ProcBuffers, ProcInfo, ProcessStatus};
 
 pub static TEST_SINE_STEREO_RDN: &'static str = "app.meadowlark.test-sine-stereo";
 

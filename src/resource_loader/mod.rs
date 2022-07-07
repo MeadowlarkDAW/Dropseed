@@ -13,7 +13,7 @@ impl ResourceLoader {
     pub fn new(default_sample_rate: SampleRate) -> Self {
         let collector = Collector::new();
 
-        let pcm_loader = PcmLoader::new(collector.handle(), default_sample_rate) ;
+        let pcm_loader = PcmLoader::new(collector.handle(), default_sample_rate);
 
         Self { pcm_loader, collector }
     }

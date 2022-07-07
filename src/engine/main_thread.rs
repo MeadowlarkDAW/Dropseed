@@ -255,9 +255,8 @@ impl DSEngineMainThread {
             }
             self.run_process_thread = Some(run_process_thread);
 
-            let process_thread_handle = thread_priority::spawn(
-                ThreadPriority::Max,
-                move |priority_res| {
+            let process_thread_handle =
+                thread_priority::spawn(ThreadPriority::Max, move |priority_res| {
                     if let Err(e) = priority_res {
                         log::error!("Failed to set process thread priority to max: {:?}", e);
                     } else {
@@ -265,8 +264,7 @@ impl DSEngineMainThread {
                     }
 
                     process_thread.run(run_process_thread_clone);
-                },
-            );
+                });
 
             self.process_thread_handle = Some(process_thread_handle);
 

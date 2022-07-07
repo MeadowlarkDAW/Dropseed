@@ -154,8 +154,9 @@ impl DSEngineAudioThread {
             return;
         }
 
-        let max_proc_time =
-            Duration::from_secs_f64(total_frames as f64 * self.sample_rate_recip * COPY_OUT_TIME_WINDOW);
+        let max_proc_time = Duration::from_secs_f64(
+            total_frames as f64 * self.sample_rate_recip * COPY_OUT_TIME_WINDOW,
+        );
 
         while proc_start_time.elapsed() < max_proc_time {
             if let Ok(chunk) = self.from_engine_audio_out_rx.read_chunk(num_out_samples) {

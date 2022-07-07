@@ -1,12 +1,10 @@
 use basedrop::Owned;
 use rtrb::{Consumer, Producer};
-use std::time::Duration;
-use std::{
-    sync::{
-        atomic::{AtomicBool, AtomicU32, Ordering},
-        Arc,
-    },
+use std::sync::{
+    atomic::{AtomicBool, AtomicU32, Ordering},
+    Arc,
 };
+use std::time::Duration;
 
 use crate::graph::schedule::SharedSchedule;
 
