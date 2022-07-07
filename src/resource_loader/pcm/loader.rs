@@ -497,6 +497,8 @@ impl PcmLoader {
                     }
                 }
 
+                total_frames = decoded_channels[0].len() as u64;
+
                 PcmResourceType::U8(decoded_channels)
             }
             FirstPacketType::U16(mut decoded_channels) => {
@@ -528,6 +530,8 @@ impl PcmLoader {
                         Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((path.clone(), e))),
                     }
                 }
+
+                total_frames = decoded_channels[0].len() as u64;
 
                 PcmResourceType::U16(decoded_channels)
             }
@@ -561,6 +565,8 @@ impl PcmLoader {
                     }
                 }
 
+                total_frames = decoded_channels[0].len() as u64;
+
                 PcmResourceType::U24(decoded_channels)
             }
             FirstPacketType::U32(mut decoded_channels) => {
@@ -592,6 +598,8 @@ impl PcmLoader {
                         Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((path.clone(), e))),
                     }
                 }
+
+                total_frames = decoded_channels[0].len() as u64;
 
                 PcmResourceType::F32(decoded_channels)
             }
@@ -625,6 +633,8 @@ impl PcmLoader {
                     }
                 }
 
+                total_frames = decoded_channels[0].len() as u64;
+
                 PcmResourceType::S8(decoded_channels)
             }
             FirstPacketType::S16(mut decoded_channels) => {
@@ -656,6 +666,8 @@ impl PcmLoader {
                         Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((path.clone(), e))),
                     }
                 }
+
+                total_frames = decoded_channels[0].len() as u64;
 
                 PcmResourceType::S16(decoded_channels)
             }
@@ -689,6 +701,8 @@ impl PcmLoader {
                     }
                 }
 
+                total_frames = decoded_channels[0].len() as u64;
+
                 PcmResourceType::S24(decoded_channels)
             }
             FirstPacketType::S32(mut decoded_channels) => {
@@ -720,6 +734,8 @@ impl PcmLoader {
                         Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((path.clone(), e))),
                     }
                 }
+
+                total_frames = decoded_channels[0].len() as u64;
 
                 PcmResourceType::F32(decoded_channels)
             }
@@ -753,6 +769,8 @@ impl PcmLoader {
                     }
                 }
 
+                total_frames = decoded_channels[0].len() as u64;
+
                 PcmResourceType::F32(decoded_channels)
             }
             FirstPacketType::F64(mut decoded_channels) => {
@@ -785,13 +803,11 @@ impl PcmLoader {
                     }
                 }
 
+                total_frames = decoded_channels[0].len() as u64;
+
                 PcmResourceType::F64(decoded_channels)
             }
         };
-
-        if let Some(n_frames) = n_frames {
-            total_frames = n_frames;
-        }
 
         let pcm = Shared::new(
             &self.coll_handle,

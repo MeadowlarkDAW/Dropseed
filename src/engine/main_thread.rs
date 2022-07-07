@@ -258,12 +258,12 @@ impl DSEngineMainThread {
             self.run_process_thread = Some(run_process_thread);
 
             let process_thread_handle = thread_priority::spawn(
-                ThreadPriority::Crossplatform(PROCESS_THREAD_PRIORITY.try_into().unwrap()),
+                ThreadPriority::Max,
                 move |priority_res| {
                     if let Err(e) = priority_res {
-                        log::error!("Failed to set process thread priority to 90 (in the range [0, 100]): {:?}", e);
+                        log::error!("Failed to set process thread priority to max: {:?}", e);
                     } else {
-                        log::info!("Successfully set process thread priority to 90 (in the range [0, 100])");
+                        log::info!("Successfully set process thread priority to max");
                     }
 
                     process_thread.run(run_process_thread_clone);
