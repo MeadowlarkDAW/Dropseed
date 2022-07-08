@@ -272,8 +272,6 @@ impl SampleBrowserPlugAudioThread {
         while let Ok(msg) = self.from_handle_rx.pop() {
             match msg {
                 ProcessMsg::PlayNewSample { pcm } => {
-                    println!("play new sample");
-
                     self.pcm = Some(pcm);
                     self.is_playing = true;
                     self.playhead = 0;
