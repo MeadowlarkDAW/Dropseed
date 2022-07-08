@@ -10,8 +10,18 @@ use crate::plugin::{PluginDescriptor, PluginFactory, PluginSaveState};
 use crate::utils::thread_id::SharedThreadIDs;
 use crate::HostInfo;
 
-#[cfg(feature = "clap-host")]
+#[cfg(all(
+    feature = "clap-host",
+    any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd")
+))]
 const DEFAULT_CLAP_SCAN_DIRECTORIES: [&'static str; 2] = ["/usr/lib/clap", "/usr/local/lib/clap"];
+
+#[cfg(all(feature = "clap-host", target_os = "macos"))]
+const DEFAULT_CLAP_SCAN_DIRECTORIES: [&'static str; 1] = ["/Library/Audio/Plug-Ins/CLAP"];
+
+#[cfg(all(feature = "clap-host", target_os = "windows"))]
+// TODO: Find the proper "Common Files" folder at runtime.
+const DEFAULT_CLAP_SCAN_DIRECTORIES: [&'static str; 1] = ["C:/Program Files/Common Files/CLAP"];
 
 const MAX_SCAN_DEPTH: usize = 10;
 
@@ -179,13 +189,7 @@ impl PluginScanner {
         {
             let mut found_binaries: Vec<PathBuf> = Vec::new();
 
-            #[cfg(any(
-                target_os = "linux",
-                target_os = "freebsd",
-                target_os = "openbsd",
-                target_os = "netbsd"
-            ))]
-            const CLAP_SEARCH_EXT: [&'static str; 1] = ["*.{clap,so}"];
+            const CLAP_SEARCH_EXT: [&'static str; 1] = ["*.{clap}"];
 
             let mut scan_directories: Vec<PathBuf> = DEFAULT_CLAP_SCAN_DIRECTORIES
                 .iter()
