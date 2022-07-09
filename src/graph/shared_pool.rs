@@ -192,6 +192,8 @@ impl From<PluginFormat> for PluginInstanceType {
 /// Used to uniquely identify a plugin instance and for debugging purposes.
 pub struct PluginInstanceID {
     pub(crate) node_ref: audio_graph::NodeRef,
+    // To make sure that no two plugin instances ever have the same ID.
+    pub(crate) unique_id: u64,
     pub(crate) format: PluginInstanceType,
     pub(crate) rdn: Shared<String>,
 }
@@ -206,13 +208,13 @@ impl std::fmt::Debug for PluginInstanceID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.format {
             PluginInstanceType::Internal => {
-                write!(f, "INT({})({})", &**self.rdn, self.node_ref.as_usize())
+                write!(f, "INT({})({})", &**self.rdn, self.unique_id)
             }
             PluginInstanceType::Clap => {
-                write!(f, "CLAP({})({})", &**self.rdn, self.node_ref.as_usize())
+                write!(f, "CLAP({})({})", &**self.rdn, self.unique_id)
             }
             PluginInstanceType::Unloaded => {
-                write!(f, "UNLOADED({})", self.node_ref.as_usize())
+                write!(f, "UNLOADED({})", self.unique_id)
             }
             PluginInstanceType::GraphInput => {
                 write!(f, "GRAPH_IN")
@@ -226,7 +228,12 @@ impl std::fmt::Debug for PluginInstanceID {
 
 impl Clone for PluginInstanceID {
     fn clone(&self) -> Self {
-        Self { node_ref: self.node_ref, format: self.format, rdn: Shared::clone(&self.rdn) }
+        Self {
+            node_ref: self.node_ref,
+            unique_id: self.unique_id,
+            format: self.format,
+            rdn: Shared::clone(&self.rdn),
+        }
     }
 }
 
@@ -240,7 +247,8 @@ impl Eq for PluginInstanceID {}
 
 impl Hash for PluginInstanceID {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.node_ref.hash(state)
+        self.node_ref.hash(state);
+        self.unique_id.hash(state);
     }
 }
 

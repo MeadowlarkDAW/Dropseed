@@ -149,11 +149,13 @@ impl AudioGraph {
         // These will get overwritten in the `reset()` method.
         let graph_in_node_id = PluginInstanceID {
             node_ref: audio_graph::NodeRef::new(0),
+            unique_id: 0,
             format: shared_pool::PluginInstanceType::GraphInput,
             rdn: Shared::clone(&graph_in_rdn),
         };
         let graph_out_node_id = PluginInstanceID {
             node_ref: audio_graph::NodeRef::new(1),
+            unique_id: 1,
             format: shared_pool::PluginInstanceType::GraphOutput,
             rdn: Shared::clone(&graph_out_rdn),
         };
@@ -200,6 +202,7 @@ impl AudioGraph {
     ) -> NewPluginRes {
         let temp_id = PluginInstanceID {
             node_ref: audio_graph::NodeRef::new(0),
+            unique_id: 0,
             format: shared_pool::PluginInstanceType::Unloaded,
             rdn: Shared::clone(&self.temp_rdn),
         };
@@ -707,11 +710,13 @@ impl AudioGraph {
 
         let mut graph_in_node_id = PluginInstanceID {
             node_ref: audio_graph::NodeRef::new(0),
+            unique_id: 0,
             format: shared_pool::PluginInstanceType::GraphInput,
             rdn: Shared::clone(&self.graph_in_rdn),
         };
         let mut graph_out_node_id = PluginInstanceID {
             node_ref: audio_graph::NodeRef::new(1),
+            unique_id: 1,
             format: shared_pool::PluginInstanceType::GraphOutput,
             rdn: Shared::clone(&self.graph_out_rdn),
         };

@@ -88,6 +88,8 @@ pub(crate) struct PluginScanner {
 
     thread_ids: SharedThreadIDs,
 
+    next_plug_unique_id: u64,
+
     coll_handle: basedrop::Handle,
 }
 
@@ -109,6 +111,10 @@ impl PluginScanner {
             unkown_rdn: Shared::new(&coll_handle, String::from("org.rustydaw.unkown")),
 
             thread_ids,
+
+            // IDs 0 and 1 are used exclusively by the graph_in_node and graph_out_node
+            // respectively.
+            next_plug_unique_id: 2,
 
             coll_handle,
         }
@@ -389,11 +395,14 @@ impl PluginScanner {
 
         let mut id = PluginInstanceID {
             node_ref,
+            unique_id: self.next_plug_unique_id,
             format: PluginInstanceType::Unloaded,
             rdn: Shared::clone(&self.unkown_rdn),
         };
         let host_request = HostRequest::new(Shared::clone(&self.host_info));
         let mut main_thread = None;
+
+        self.next_plug_unique_id += 1;
 
         if let Some(factory) = factory {
             id.format = factory.format.into();

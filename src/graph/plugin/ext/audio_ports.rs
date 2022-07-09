@@ -72,9 +72,9 @@ impl PluginAudioPortsExt {
         for p in self.inputs.iter() {
             if p.stable_id == port_stable_id {
                 if port_channel < p.channels {
-                    return Err(());
-                } else {
                     return Ok((channel_i + port_channel) as usize);
+                } else {
+                    return Err(());
                 }
             } else {
                 channel_i += p.channels;
@@ -95,7 +95,11 @@ impl PluginAudioPortsExt {
 
         for p in self.outputs.iter() {
             if p.stable_id == port_stable_id {
-                return Ok((channel_i + port_channel) as usize);
+                if port_channel < p.channels {
+                    return Ok((channel_i + port_channel) as usize);
+                } else {
+                    return Err(());
+                }
             } else {
                 channel_i += p.channels;
             }

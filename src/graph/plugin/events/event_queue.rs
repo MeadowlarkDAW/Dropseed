@@ -85,12 +85,12 @@ pub union ProcEvent {
 }
 
 impl ProcEvent {
-    pub fn raw_pointer(&self) -> *const ClapEventHeader {
+    pub fn raw_pointer(&self) -> &ClapEventHeader {
         // This is safe because all union options start with the `ClapEventHeader` struct,
         // and all bit patterns for that struct are valid (except for `ClapEventHeader::size`,
         // but the constructor of each event and its `from_raw()` methods ensures that this is
         // always the correct value).
-        &unsafe { self.note.0.header }
+        unsafe { &self.note.0.header }
     }
 
     pub fn param_value(
