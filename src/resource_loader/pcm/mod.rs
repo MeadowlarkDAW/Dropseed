@@ -1,7 +1,7 @@
 mod decode;
 pub mod loader;
 
-pub use loader::{PcmLoadError, PcmLoader, PcmKey, ResampleQuality};
+pub use loader::{PcmKey, PcmLoadError, PcmLoader};
 use meadowlark_core_types::{Frames, SampleRate};
 
 pub struct PcmResource {

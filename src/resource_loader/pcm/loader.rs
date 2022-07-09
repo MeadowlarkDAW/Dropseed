@@ -7,11 +7,10 @@ use basedrop::{Handle, Shared};
 
 use meadowlark_core_types::{Frames, SampleRate};
 use symphonia::core::codecs::CodecRegistry;
-use symphonia::core::io::MediaSourceStream;
-use symphonia::core::probe::{Hint, Probe};
-use samplerate::ConverterType;
 use symphonia::core::formats::FormatOptions;
+use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
+use symphonia::core::probe::{Hint, Probe};
 
 // TODO: Eventually we should use disk streaming to store large files. Using this as a stop-gap
 // safety check for now.
@@ -23,43 +22,15 @@ use crate::utils::twox_hash_map::TwoXHashMap;
 #[derive(Default, Debug, Clone, PartialEq, Hash, Eq)]
 pub struct PcmKey {
     pub path: PathBuf,
-
-    pub resample_to_project_sr: bool,
-    pub quality: ResampleQuality,
+    //pub resample_to_project_sr: bool,
+    //pub quality: ResampleQuality,
 
     /* TODO
     /// The amount of doppler stretching to apply.
-    /// 
+    ///
     /// By default this is `1.0` (no doppler stretching).
     //pub doppler_stretch_ratio: f64,
-    */
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ResampleQuality {
-    SincBestQuality,
-    SincMediumQuality,
-    SincFastest,
-    Linear,
-    ZeroOrderHold,
-}
-
-impl ResampleQuality {
-    pub(crate) fn as_converter_type(&self) -> ConverterType {
-        match self {
-            ResampleQuality::SincBestQuality => ConverterType::SincBestQuality,
-            ResampleQuality::SincMediumQuality => ConverterType::SincMediumQuality,
-            ResampleQuality::SincFastest => ConverterType::SincFastest,
-            ResampleQuality::Linear => ConverterType::Linear,
-            ResampleQuality::ZeroOrderHold => ConverterType::ZeroOrderHold ,
-        }
-    }
-}
-
-impl Default for ResampleQuality {
-    fn default() -> Self {
-        ResampleQuality::SincMediumQuality
-    }
+     */
 }
 
 pub struct PcmLoader {
@@ -120,7 +91,8 @@ impl PcmLoader {
         }
 
         // Try to open the file.
-        let file = File::open(&key.path).map_err(|e| PcmLoadError::PathNotFound((key.path.clone(), e)))?;
+        let file =
+            File::open(&key.path).map_err(|e| PcmLoadError::PathNotFound((key.path.clone(), e)))?;
 
         // Create a hint to help the format registry guess what format reader is appropriate.
         let mut hint = Hint::new();
@@ -140,7 +112,8 @@ impl PcmLoader {
         let metadata_opts: MetadataOptions = Default::default();
 
         // Probe the media source stream for metadata and get the format reader.
-        let mut probed = self.probe
+        let mut probed = self
+            .probe
             .format(&hint, mss, &format_opts, &metadata_opts)
             .map_err(|e| PcmLoadError::UnkownFormat((key.path.clone(), e)))?;
 
@@ -149,18 +122,23 @@ impl PcmLoader {
             .format
             .default_track()
             .ok_or_else(|| PcmLoadError::NoTrackFound(key.path.clone()))?;
-        
+
         let sample_rate = SampleRate(track.codec_params.sample_rate.unwrap_or_else(|| {
             log::warn!("Could not find sample rate of PCM resource at {:?}. Assuming a sample rate of 44100", &key.path);
             44100
         }) as f64);
 
+        /*
         let pcm = if sample_rate == self.project_sr || !key.resample_to_project_sr {
             decode::decode_native_bitdepth(&mut probed, key, self.codec_registry, sample_rate)?
         } else {
             // Resampling is needed.
             decode::decode_f32_resampled(&mut probed, key, self.codec_registry, sample_rate, self.project_sr)?
         };
+        */
+
+        let pcm =
+            decode::decode_native_bitdepth(&mut probed, key, self.codec_registry, sample_rate)?;
 
         let pcm = Shared::new(&self.coll_handle, pcm);
 
@@ -190,7 +168,7 @@ pub enum PcmLoadError {
     CouldNotCreateDecoder((PathBuf, symphonia::core::errors::Error)),
     ErrorWhileDecoding((PathBuf, symphonia::core::errors::Error)),
     UnexpectedErrorWhileDecoding((PathBuf, Box<dyn Error>)),
-    ErrorWhileResampling((PathBuf, samplerate::Error)),
+    //ErrorWhileResampling((PathBuf, samplerate::Error)),
 }
 
 impl Error for PcmLoadError {}
@@ -239,12 +217,14 @@ impl fmt::Display for PcmLoadError {
                 e,
                 path
             ),
+            /*
             ErrorWhileResampling((path, e)) => write!(
                 f,
                 "Failed to load PCM resource: error while resampling | {} | path: {:?}",
                 e,
                 path
             ),
+            */
         }
     }
 }

@@ -2,15 +2,16 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 
 use meadowlark_core_types::{Frames, SampleRate};
-use symphonia::core::audio::{AudioBuffer, Signal, SampleBuffer};
-use symphonia::core::sample::{i24, u24};
 use symphonia::core::audio::AudioBufferRef;
+use symphonia::core::audio::{AudioBuffer, Signal};
 use symphonia::core::codecs::{CodecRegistry, DecoderOptions};
 use symphonia::core::probe::ProbeResult;
+use symphonia::core::sample::{i24, u24};
 
-use super::{PcmKey, PcmResource, PcmLoadError, PcmResourceType};
 use super::loader::MAX_FILE_BYTES;
+use super::{PcmKey, PcmLoadError, PcmResource, PcmResourceType};
 
+/*
 pub(crate) fn decode_f32_resampled(
     probed: &mut ProbeResult,
     key: &PcmKey,
@@ -137,6 +138,7 @@ pub(crate) fn decode_f32_resampled(
         }
     )
 }
+*/
 
 pub(crate) fn decode_native_bitdepth(
     probed: &mut ProbeResult,
@@ -213,8 +215,7 @@ pub(crate) fn decode_native_bitdepth(
                 AudioBufferRef::U8(d) => {
                     let mut decoded_channels = Vec::<Vec<u8>>::new();
                     for _ in 0..n_channels {
-                        decoded_channels
-                            .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
+                        decoded_channels.push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
                     }
 
                     max_frames = MAX_FILE_BYTES / n_channels as u64;
@@ -239,8 +240,7 @@ pub(crate) fn decode_native_bitdepth(
                 AudioBufferRef::U16(d) => {
                     let mut decoded_channels = Vec::<Vec<u16>>::new();
                     for _ in 0..n_channels {
-                        decoded_channels
-                            .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
+                        decoded_channels.push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
                     }
 
                     max_frames = MAX_FILE_BYTES / (2 * n_channels as u64);
@@ -265,8 +265,7 @@ pub(crate) fn decode_native_bitdepth(
                 AudioBufferRef::U24(d) => {
                     let mut decoded_channels = Vec::<Vec<[u8; 3]>>::new();
                     for _ in 0..n_channels {
-                        decoded_channels
-                            .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
+                        decoded_channels.push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
                     }
 
                     max_frames = MAX_FILE_BYTES / (3 * n_channels as u64);
@@ -291,8 +290,7 @@ pub(crate) fn decode_native_bitdepth(
                 AudioBufferRef::U32(d) => {
                     let mut decoded_channels = Vec::<Vec<f32>>::new();
                     for _ in 0..n_channels {
-                        decoded_channels
-                            .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
+                        decoded_channels.push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
                     }
 
                     max_frames = MAX_FILE_BYTES / (4 * n_channels as u64);
@@ -317,8 +315,7 @@ pub(crate) fn decode_native_bitdepth(
                 AudioBufferRef::S8(d) => {
                     let mut decoded_channels = Vec::<Vec<i8>>::new();
                     for _ in 0..n_channels {
-                        decoded_channels
-                            .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
+                        decoded_channels.push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
                     }
 
                     max_frames = MAX_FILE_BYTES / n_channels as u64;
@@ -343,8 +340,7 @@ pub(crate) fn decode_native_bitdepth(
                 AudioBufferRef::S16(d) => {
                     let mut decoded_channels = Vec::<Vec<i16>>::new();
                     for _ in 0..n_channels {
-                        decoded_channels
-                            .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
+                        decoded_channels.push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
                     }
 
                     max_frames = MAX_FILE_BYTES / (2 * n_channels as u64);
@@ -369,8 +365,7 @@ pub(crate) fn decode_native_bitdepth(
                 AudioBufferRef::S24(d) => {
                     let mut decoded_channels = Vec::<Vec<[u8; 3]>>::new();
                     for _ in 0..n_channels {
-                        decoded_channels
-                            .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
+                        decoded_channels.push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
                     }
 
                     max_frames = MAX_FILE_BYTES / (3 * n_channels as u64);
@@ -395,8 +390,7 @@ pub(crate) fn decode_native_bitdepth(
                 AudioBufferRef::S32(d) => {
                     let mut decoded_channels = Vec::<Vec<f32>>::new();
                     for _ in 0..n_channels {
-                        decoded_channels
-                            .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
+                        decoded_channels.push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
                     }
 
                     max_frames = MAX_FILE_BYTES / (4 * n_channels as u64);
@@ -421,8 +415,7 @@ pub(crate) fn decode_native_bitdepth(
                 AudioBufferRef::F32(d) => {
                     let mut decoded_channels = Vec::<Vec<f32>>::new();
                     for _ in 0..n_channels {
-                        decoded_channels
-                            .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
+                        decoded_channels.push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
                     }
 
                     max_frames = MAX_FILE_BYTES / (4 * n_channels as u64);
@@ -447,8 +440,7 @@ pub(crate) fn decode_native_bitdepth(
                 AudioBufferRef::F64(d) => {
                     let mut decoded_channels = Vec::<Vec<f64>>::new();
                     for _ in 0..n_channels {
-                        decoded_channels
-                            .push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
+                        decoded_channels.push(Vec::with_capacity(n_frames.unwrap_or(0) as usize));
                     }
 
                     max_frames = MAX_FILE_BYTES / (8 * n_channels as u64);
@@ -490,11 +482,8 @@ pub(crate) fn decode_native_bitdepth(
     let unexpected_format = |expected: &str| -> PcmLoadError {
         PcmLoadError::UnexpectedErrorWhileDecoding((
             key.path.clone(),
-            format!(
-                "Symphonia returned a packet that was not the expected format of {}",
-                expected
-            )
-            .into(),
+            format!("Symphonia returned a packet that was not the expected format of {}", expected)
+                .into(),
         ))
     };
 
@@ -528,9 +517,7 @@ pub(crate) fn decode_native_bitdepth(
                         }
                         _ => return Err(unexpected_format("u8")),
                     },
-                    Err(symphonia::core::errors::Error::DecodeError(err)) => {
-                        decode_warning(err)
-                    }
+                    Err(symphonia::core::errors::Error::DecodeError(err)) => decode_warning(err),
                     Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((key.path.clone(), e))),
                 }
             }
@@ -562,9 +549,7 @@ pub(crate) fn decode_native_bitdepth(
                         }
                         _ => return Err(unexpected_format("u16")),
                     },
-                    Err(symphonia::core::errors::Error::DecodeError(err)) => {
-                        decode_warning(err)
-                    }
+                    Err(symphonia::core::errors::Error::DecodeError(err)) => decode_warning(err),
                     Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((key.path.clone(), e))),
                 }
             }
@@ -596,9 +581,7 @@ pub(crate) fn decode_native_bitdepth(
                         }
                         _ => return Err(unexpected_format("u24")),
                     },
-                    Err(symphonia::core::errors::Error::DecodeError(err)) => {
-                        decode_warning(err)
-                    }
+                    Err(symphonia::core::errors::Error::DecodeError(err)) => decode_warning(err),
                     Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((key.path.clone(), e))),
                 }
             }
@@ -630,9 +613,7 @@ pub(crate) fn decode_native_bitdepth(
                         }
                         _ => return Err(unexpected_format("u32")),
                     },
-                    Err(symphonia::core::errors::Error::DecodeError(err)) => {
-                        decode_warning(err)
-                    }
+                    Err(symphonia::core::errors::Error::DecodeError(err)) => decode_warning(err),
                     Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((key.path.clone(), e))),
                 }
             }
@@ -664,9 +645,7 @@ pub(crate) fn decode_native_bitdepth(
                         }
                         _ => return Err(unexpected_format("i8")),
                     },
-                    Err(symphonia::core::errors::Error::DecodeError(err)) => {
-                        decode_warning(err)
-                    }
+                    Err(symphonia::core::errors::Error::DecodeError(err)) => decode_warning(err),
                     Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((key.path.clone(), e))),
                 }
             }
@@ -698,9 +677,7 @@ pub(crate) fn decode_native_bitdepth(
                         }
                         _ => return Err(unexpected_format("i16")),
                     },
-                    Err(symphonia::core::errors::Error::DecodeError(err)) => {
-                        decode_warning(err)
-                    }
+                    Err(symphonia::core::errors::Error::DecodeError(err)) => decode_warning(err),
                     Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((key.path.clone(), e))),
                 }
             }
@@ -732,9 +709,7 @@ pub(crate) fn decode_native_bitdepth(
                         }
                         _ => return Err(unexpected_format("i24")),
                     },
-                    Err(symphonia::core::errors::Error::DecodeError(err)) => {
-                        decode_warning(err)
-                    }
+                    Err(symphonia::core::errors::Error::DecodeError(err)) => decode_warning(err),
                     Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((key.path.clone(), e))),
                 }
             }
@@ -766,9 +741,7 @@ pub(crate) fn decode_native_bitdepth(
                         }
                         _ => return Err(unexpected_format("i32")),
                     },
-                    Err(symphonia::core::errors::Error::DecodeError(err)) => {
-                        decode_warning(err)
-                    }
+                    Err(symphonia::core::errors::Error::DecodeError(err)) => decode_warning(err),
                     Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((key.path.clone(), e))),
                 }
             }
@@ -800,9 +773,7 @@ pub(crate) fn decode_native_bitdepth(
                         }
                         _ => return Err(unexpected_format("f32")),
                     },
-                    Err(symphonia::core::errors::Error::DecodeError(err)) => {
-                        decode_warning(err)
-                    }
+                    Err(symphonia::core::errors::Error::DecodeError(err)) => decode_warning(err),
                     Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((key.path.clone(), e))),
                 }
             }
@@ -834,9 +805,7 @@ pub(crate) fn decode_native_bitdepth(
                         }
                         _ => return Err(unexpected_format("f64")),
                     },
-                    Err(symphonia::core::errors::Error::DecodeError(err)) => {
-                        decode_warning(err)
-                    }
+                    Err(symphonia::core::errors::Error::DecodeError(err)) => decode_warning(err),
                     Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((key.path.clone(), e))),
                 }
             }
@@ -847,14 +816,12 @@ pub(crate) fn decode_native_bitdepth(
         }
     };
 
-    Ok(
-        PcmResource {
-            pcm_type,
-            sample_rate,
-            channels: n_channels,
-            len_frames: Frames(total_frames),
-        }
-    )
+    Ok(PcmResource {
+        pcm_type,
+        sample_rate,
+        channels: n_channels,
+        len_frames: Frames(total_frames),
+    })
 }
 
 #[inline]

@@ -2,7 +2,7 @@ use basedrop::Collector;
 use meadowlark_core_types::SampleRate;
 
 pub mod pcm;
-pub use pcm::{PcmLoadError, PcmLoader, PcmResource, PcmResourceType, PcmKey, ResampleQuality};
+pub use pcm::{PcmKey, PcmLoadError, PcmLoader, PcmResource, PcmResourceType};
 
 pub struct ResourceLoader {
     pub pcm_loader: PcmLoader,
