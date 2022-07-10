@@ -1,9 +1,8 @@
 use smallvec::SmallVec;
 
 use crate::graph::shared_pool::{SharedBuffer, SharedDelayCompNode, SharedPluginHostAudioThread};
-use crate::plugin::events::ProcEvent;
 use crate::plugin::process_info::ProcBuffers;
-use crate::ProcInfo;
+use crate::{ProcEvent, ProcInfo};
 
 use super::sum::SumTask;
 

@@ -8,7 +8,7 @@ pub mod host_request;
 pub(crate) mod process_info;
 mod save_state;
 
-use crate::{transport::TempoMap, EventBuffer, ParamID, PluginInstanceID};
+use crate::{transport::TempoMap, EventQueue, ParamID, PluginInstanceID};
 use host_request::HostRequest;
 use process_info::{ProcBuffers, ProcInfo, ProcessStatus};
 pub use save_state::{PluginPreset, PluginSaveState};
@@ -41,6 +41,7 @@ pub struct PluginDescriptor {
     /// eg: "Create flaming-hot sounds!"
     pub description: String,
 
+    /* TODO
     /// Arbitrary list of keywords, separated by `;'.
     ///
     /// They can be matched by the host search engine and used to classify the plugin.
@@ -57,8 +58,8 @@ pub struct PluginDescriptor {
     /// - "equalizer;analyzer;stereo;mono"
     /// - "compressor;analog;character;mono"
     /// - "reverb;plate;stereo"
-    pub features: String,
-
+    pub features: Option<String>,
+    */
     /// The url to the product page of this plugin.
     pub url: String,
 
@@ -310,8 +311,8 @@ pub trait PluginAudioThread: Send + 'static {
         &mut self,
         proc_info: &ProcInfo,
         buffers: &mut ProcBuffers,
-        in_events: &EventBuffer,
-        out_events: &mut EventBuffer,
+        in_events: &EventQueue,
+        out_events: &mut EventQueue,
     ) -> ProcessStatus;
 
     /// Flushes a set of parameter changes.
@@ -328,5 +329,5 @@ pub trait PluginAudioThread: Send + 'static {
     ///
     /// [active && !processing : audio-thread]
     #[allow(unused)]
-    fn param_flush(&mut self, in_events: &EventBuffer, out_events: &mut EventBuffer) {}
+    fn param_flush(&mut self, in_events: &EventQueue, out_events: &mut EventQueue) {}
 }

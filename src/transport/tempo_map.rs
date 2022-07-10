@@ -1,5 +1,6 @@
-use clack_host::utils::BeatTime;
 use meadowlark_core_types::{Frames, MusicalTime, SampleRate, Seconds};
+
+use crate::plugin::events::EventBeatTime;
 
 // TODO: Make tempo map work like series of automation lines/curves between points in time.
 
@@ -73,14 +74,14 @@ impl TempoMap {
     }
 
     /// `(the bar number of the song, the beat where the bar starts)`
-    pub fn current_bar_at_frame(&self, frame: Frames) -> (i32, BeatTime) {
+    pub fn current_bar_at_frame(&self, frame: Frames) -> (i32, EventBeatTime) {
         // temporary static tempo and time signature
-        let current_beat = self.frame_to_musical(frame).beats() as i64;
+        let current_beat = self.frame_to_musical(frame).beats();
 
-        let bar_number = current_beat / i64::from(self.tsig_num);
-        let bar_start_beat = bar_number * i64::from(self.tsig_denom);
+        let bar_number = current_beat / u32::from(self.tsig_num);
+        let bar_start_beat = bar_number * u32::from(self.tsig_denom);
 
-        (bar_number as i32, BeatTime::from_int(bar_start_beat))
+        (bar_number as i32, EventBeatTime::from_u32(bar_start_beat))
     }
 
     /// Temporary static tempo

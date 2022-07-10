@@ -1,8 +1,4 @@
 use basedrop::Shared;
-use clack_host::events::event_types::{ParamModEvent, ParamValueEvent};
-use clack_host::events::io::EventBuffer;
-use clack_host::events::spaces::CoreEventSpace;
-use clack_host::events::{Event, EventFlags, EventHeader};
 use fnv::FnvHashMap;
 use meadowlark_core_types::SampleRate;
 use smallvec::SmallVec;
@@ -16,7 +12,8 @@ use std::sync::{
 use super::shared_pool::PluginInstanceID;
 use crate::engine::plugin_scanner::PluginFormat;
 use crate::graph::shared_pool::SharedBuffer;
-use crate::plugin::events::ProcEvent;
+use crate::plugin::events::event_queue::{EventQueue, ProcEventRefMut};
+use crate::plugin::events::{EventFlags, EventParamMod, EventParamValue};
 use crate::plugin::ext::audio_ports::PluginAudioPortsExt;
 use crate::plugin::ext::note_ports::PluginNotePortsExt;
 use crate::plugin::ext::params::{ParamInfo, ParamInfoFlags};
@@ -27,7 +24,7 @@ use crate::transport::TempoMap;
 use crate::utils::reducing_queue::{
     ReducFnvConsumer, ReducFnvProducer, ReducFnvValue, ReducingFnvQueue,
 };
-use crate::{HostRequest, ParamID, ProcInfo, ProcessStatus, ScannedPluginKey};
+use crate::{HostRequest, ParamID, ProcEvent, ProcInfo, ProcessStatus, ScannedPluginKey};
 
 #[derive(Clone, Copy)]
 struct MainToAudioParamValue {
@@ -491,8 +488,8 @@ impl PluginInstanceHost {
                         plugin: info.audio_thread,
                         state: Arc::clone(&self.state),
                         param_queues: param_queues_audio_thread,
-                        in_events: EventBuffer::with_capacity(num_params * 3),
-                        out_events: EventBuffer::with_capacity(num_params * 3),
+                        in_events: EventQueue::new(num_params * 3),
+                        out_events: EventQueue::new(num_params * 3),
                         is_adjusting_parameter,
                         host_request: self.host_request.clone(),
                     },
@@ -583,8 +580,10 @@ impl PluginInstanceHost {
         let request_flags = self.host_request.load_requests_and_reset_callback();
         let state = self.state.get();
 
-        if self.remove_requested && !state.is_active() {
-            return (OnIdleResult::PluginReadyToRemove, modified_params);
+        if self.remove_requested {
+            if !state.is_active() {
+                return (OnIdleResult::PluginReadyToRemove, modified_params);
+            }
         }
 
         if request_flags.contains(RequestFlags::CALLBACK) {
@@ -670,8 +669,8 @@ pub(crate) struct PluginInstanceHostAudioThread {
     state: Arc<SharedPluginState>,
 
     param_queues: Option<ParamQueuesAudioThread>,
-    in_events: EventBuffer,
-    out_events: EventBuffer,
+    in_events: EventQueue,
+    out_events: EventQueue,
 
     is_adjusting_parameter: FnvHashMap<ParamID, bool>,
 
@@ -746,45 +745,49 @@ impl PluginInstanceHostAudioThread {
             params_queue.ui_to_audio_param_value_rx.consume(|param_id, value| {
                 has_param_in_event = true;
 
-                let event = ParamValueEvent::new(
-                    // TODO: Finer values for `time` instead of just setting it to the first frame?
-                    EventHeader::new_core(0, EventFlags::empty()),
-                    core::ptr::null_mut(),
-                    // TODO: Note ID
-                    -1,                // note_id
-                    param_id.as_u32(), // param_id
-                    // TODO: Port index
-                    -1, // port_index
-                    // TODO: Channel
-                    -1, // channel
-                    // TODO: Key
-                    -1,          // key
-                    value.value, // value
-                );
-
-                self.in_events.push(event.as_unknown())
+                self.in_events.push(ProcEvent::param_value(
+                    EventParamValue::new(
+                        // TODO: Finer values for `time` instead of just setting it to the first frame?
+                        0,                   // time
+                        0,                   // space_id
+                        EventFlags::empty(), // event_flags
+                        *param_id,           // param_id
+                        // TODO: Note ID
+                        -1, // note_id
+                        // TODO: Port index
+                        -1, // port_index
+                        // TODO: Channel
+                        -1, // channel
+                        // TODO: Key
+                        -1,          // key
+                        value.value, // value
+                    ),
+                    None,
+                ))
             });
 
             params_queue.ui_to_audio_param_mod_rx.consume(|param_id, value| {
                 has_param_in_event = true;
 
-                let event = ParamModEvent::new(
-                    // TODO: Finer values for `time` instead of just setting it to the first frame?
-                    EventHeader::new_core(0, EventFlags::empty()),
-                    core::ptr::null_mut(),
-                    // TODO: Note ID
-                    -1,                // note_id
-                    param_id.as_u32(), // param_id
-                    // TODO: Port index
-                    -1, // port_index
-                    // TODO: Channel
-                    -1, // channel
-                    // TODO: Key
-                    -1,          // key
-                    value.value, // value
-                );
-
-                self.in_events.push(event.as_unknown())
+                self.in_events.push(ProcEvent::param_mod(
+                    EventParamMod::new(
+                        // TODO: Finer values for `time` instead of just setting it to the first frame?
+                        0,                   // time
+                        0,                   // space_id
+                        EventFlags::empty(), // event_flags
+                        *param_id,           // param_id
+                        // TODO: Note ID
+                        -1, // note_id
+                        // TODO: Port index
+                        -1, // port_index
+                        // TODO: Channel
+                        -1, // channel
+                        // TODO: Key
+                        -1,          // key
+                        value.value, // value
+                    ),
+                    None,
+                ))
             });
         }
 
@@ -795,20 +798,24 @@ impl PluginInstanceHostAudioThread {
 
                     for mut event in b.drain(..) {
                         let mut do_add = true;
-                        match &mut event {
-                            ProcEvent::NoteOn(e) => e.0.set_port_index(port_i as i16),
-                            ProcEvent::NoteOff(e) => e.0.set_port_index(port_i as i16),
-                            ProcEvent::NoteChoke(e) => e.0.set_port_index(port_i as i16),
-                            ProcEvent::NoteEnd(e) => e.0.set_port_index(port_i as i16),
-                            ProcEvent::NoteExpression(e) => e.set_port_index(port_i as i16),
-                            ProcEvent::Midi(e) => e.set_port_index(port_i as u16),
-                            ProcEvent::Midi2(e) => e.set_port_index(port_i as u16),
-                            _ => do_add = false,
+                        if let Ok(event) = ProcEvent::get_mut(&mut event) {
+                            // TODO: Convert to a different note dialect if the plugin does not support
+                            // the dialect in the event.
+                            match event {
+                                ProcEventRefMut::Note(e) => e.set_port_index(port_i as i16),
+                                ProcEventRefMut::NoteExpression(e) => {
+                                    e.set_port_index(port_i as i16)
+                                }
+                                ProcEventRefMut::Midi(e) => e.set_port_index(port_i as u16),
+                                //ProcEventRefMut::MidiSysex(e) => e.set_port_index(port_i as u16),
+                                ProcEventRefMut::Midi2(e) => e.set_port_index(port_i as u16),
+                                _ => do_add = false,
+                            }
                         }
 
                         if do_add {
                             has_note_in_event = true;
-                            self.in_events.push(event.as_unknown());
+                            self.in_events.push(event);
                         }
                     }
                 }
@@ -820,44 +827,48 @@ impl PluginInstanceHostAudioThread {
                 let mut b = in_buf.borrow_mut();
 
                 for mut event in b.drain(..) {
-                    let do_add = match &event {
-                        ProcEvent::ParamValue(_, target_plugin) => {
-                            if let Some(target_plugin) = target_plugin {
-                                if *target_plugin == self.id.node_ref {
-                                    has_param_in_event = true;
-                                    true
+                    let do_add = if let Ok(event) = ProcEvent::get_mut(&mut event) {
+                        match event {
+                            ProcEventRefMut::ParamValue(_, target_plugin) => {
+                                if let Some(target_plugin) = target_plugin {
+                                    if *target_plugin == self.id.node_ref {
+                                        has_param_in_event = true;
+                                        true
+                                    } else {
+                                        false
+                                    }
                                 } else {
                                     false
                                 }
-                            } else {
-                                false
                             }
-                        }
-                        ProcEvent::ParamMod(_, target_plugin) => {
-                            if let Some(target_plugin) = target_plugin {
-                                if *target_plugin == self.id.node_ref {
-                                    has_param_in_event = true;
-                                    true
+                            ProcEventRefMut::ParamMod(_, target_plugin) => {
+                                if let Some(target_plugin) = target_plugin {
+                                    if *target_plugin == self.id.node_ref {
+                                        has_param_in_event = true;
+                                        true
+                                    } else {
+                                        false
+                                    }
                                 } else {
                                     false
                                 }
-                            } else {
-                                false
                             }
+                            ProcEventRefMut::Transport(_) => true,
+                            _ => false,
                         }
-                        ProcEvent::Transport(_) => true,
-                        _ => false,
+                    } else {
+                        false
                     };
 
                     if do_add {
-                        self.in_events.push(event.as_unknown());
+                        self.in_events.push(event);
                     }
                 }
             }
         }
 
         if let Some(transport_in_event) = proc_info.transport.event() {
-            self.in_events.push(transport_in_event.as_unknown());
+            self.in_events.push(transport_in_event.clone());
         }
 
         if state == PluginState::ActiveAndWaitingForQuiet && !has_note_in_event {
@@ -932,17 +943,17 @@ impl PluginInstanceHostAudioThread {
             // TODO: Change this to not take a closure so we don't
             // have to duplicate this code.
             params_queue.audio_to_main_param_value_tx.produce(|mut queue| {
-                for out_event in &self.out_events {
-                        let mut push_to_event_out = false;
-                        let mut push_to_note_out_i = None;
-                        match out_event.as_core_event() {
-                            Some(CoreEventSpace::ParamGestureBegin(event)) => {
-                                // TODO: Use event.time for more accurate recording of automation.
+                while let Some(mut out_event) = self.out_events.pop() {
+                    let mut push_to_event_out = false;
+                    let mut push_to_note_out_i = None;
+                    match ProcEvent::get_mut(&mut out_event) {
+                        Ok(ProcEventRefMut::ParamGesture(event)) => {
+                            // TODO: Use event.time for more accurate recording of automation.
 
-                                let param_id = ParamID::new(event.param_id());
-                                let is_adjusting =
-                                    self.is_adjusting_parameter.entry(param_id).or_insert(false);
+                            let is_adjusting =
+                                self.is_adjusting_parameter.entry(event.param_id()).or_insert(false);
 
+                            if event.is_begin() {
                                 if *is_adjusting {
                                     log::warn!(
                                         "The plugin sent BEGIN_ADJUST twice. The event was ignored."
@@ -957,13 +968,8 @@ impl PluginInstanceHostAudioThread {
                                     gesture: Some(ParamGestureInfo { is_begin: true }),
                                 };
 
-                                queue.set_or_update(param_id, value);
-                            }
-                            Some(CoreEventSpace::ParamGestureEnd(event)) => {
-                                let param_id = ParamID::new(event.param_id());
-                                let is_adjusting =
-                                    self.is_adjusting_parameter.entry(param_id).or_insert(false);
-
+                                queue.set_or_update(event.param_id(), value);
+                            } else {
                                 if !*is_adjusting {
                                     log::warn!(
                                         "The plugin sent END_ADJUST without a preceding BEGIN_ADJUST. The event was ignored."
@@ -978,144 +984,139 @@ impl PluginInstanceHostAudioThread {
                                     gesture: Some(ParamGestureInfo { is_begin: false }),
                                 };
 
-                                queue.set_or_update(param_id, value);
+                                queue.set_or_update(event.param_id(), value);
                             }
-                            Some(CoreEventSpace::ParamValue(event)) => {
-                                // TODO: Use event.time for more accurate recording of automation.
-                                let param_id = ParamID::new(event.param_id());
-
-                                queue.set_or_update(param_id, AudioToMainParamValue {
-                                    value: Some(event.value()),
-                                    gesture: None,
-                                });
-                            }
-                            Some(CoreEventSpace::ParamMod(_)) => {
-                                // This will only be `Some` if the plugin returned `true` in `has_event_out_port()`.
-                                if event_out_buffer.is_some() {
-                                    push_to_event_out = true;
-                                }
-                            }
-                            Some(CoreEventSpace::Transport(_)) => {
-                                // This will only be `Some` if the plugin returned `true` in `has_event_out_port()`.
-                                if event_out_buffer.is_some() {
-                                    push_to_event_out = true;
-                                }
-                            }
-                            Some(CoreEventSpace::NoteOn(event)) => {
-                                if let Some(Some(_)) = note_out_buffers.get(event.0.port_index() as usize) {
-                                    push_to_note_out_i = Some(event.0.port_index() as usize);
-                                }
-                            }
-                            Some(CoreEventSpace::NoteOff(event)) => {
-                                if let Some(Some(_)) = note_out_buffers.get(event.0.port_index() as usize) {
-                                    push_to_note_out_i = Some(event.0.port_index() as usize);
-                                }
-                            }
-                            Some(CoreEventSpace::NoteEnd(event)) => {
-                                if let Some(Some(_)) = note_out_buffers.get(event.0.port_index() as usize) {
-                                    push_to_note_out_i = Some(event.0.port_index() as usize);
-                                }
-                            }
-                            Some(CoreEventSpace::NoteChoke(event)) => {
-                                if let Some(Some(_)) = note_out_buffers.get(event.0.port_index() as usize) {
-                                    push_to_note_out_i = Some(event.0.port_index() as usize);
-                                }
-                            }
-                            Some(CoreEventSpace::NoteExpression(event)) => {
-                                if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
-                                    push_to_note_out_i = Some(event.port_index() as usize);
-                                }
-                            }
-                            Some(CoreEventSpace::Midi(event)) => {
-                                if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
-                                    push_to_note_out_i = Some(event.port_index() as usize);
-                                }
-                            }
-                            /*
-                            Some(CoreEventSpace::MidiSysex(event)) => {
-                                if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
-                                    push_to_note_out_i = Some(event.port_index() as usize);
-                                }
-                            }
-                            */
-                            Some(CoreEventSpace::Midi2(event)) => {
-                                if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
-                                    push_to_note_out_i = Some(event.port_index() as usize);
-                                }
-                            }
-                            _ => {}
                         }
+                        Ok(ProcEventRefMut::ParamValue(event, target_plugin)) => {
+                            // TODO: Use event.time for more accurate recording of automation.
 
-                        if push_to_event_out {
-                            let out_buf = event_out_buffer.as_ref().unwrap();
+                            let value = AudioToMainParamValue {
+                                value: Some(event.value()),
+                                gesture: None,
+                            };
 
-                            let mut b = out_buf.borrow_mut();
-
-                            b.push(ProcEvent::from_unknown(out_event).unwrap());
-                        } else if let Some(buf_i) = push_to_note_out_i {
-                            let out_buf = note_out_buffers[buf_i].as_ref().unwrap();
-
-                            let mut b = out_buf.borrow_mut();
-
-                            b.push(ProcEvent::from_unknown(out_event).unwrap());
+                            // This will only be `Some` if the plugin returned `true` in `has_event_out_port()`.
+                            if event_out_buffer.is_some() {
+                                if target_plugin.is_some() {
+                                    push_to_event_out = true;
+                                } else {
+                                    // If `target_plugin` is `None`, then it means that this is a parameter
+                                    // event for one of this plugin's internal parameters, and is meant to
+                                    // be sent to the UI, not another plugin.
+                                    queue.set_or_update(event.param_id(), value);
+                                }
+                            } else {
+                                queue.set_or_update(event.param_id(), value);
+                            }
                         }
+                        Ok(ProcEventRefMut::ParamMod(_, _)) => {
+                            // This will only be `Some` if the plugin returned `true` in `has_event_out_port()`.
+                            if event_out_buffer.is_some() {
+                                push_to_event_out = true;
+                            }
+                        }
+                        Ok(ProcEventRefMut::Transport(_)) => {
+                            // This will only be `Some` if the plugin returned `true` in `has_event_out_port()`.
+                            if event_out_buffer.is_some() {
+                                push_to_event_out = true;
+                            }
+                        }
+                        Ok(ProcEventRefMut::Note(event)) => {
+                            if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
+                                push_to_note_out_i = Some(event.port_index() as usize);
+                            }
+                        }
+                        Ok(ProcEventRefMut::NoteExpression(event)) => {
+                            if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
+                                push_to_note_out_i = Some(event.port_index() as usize);
+                            }
+                        }
+                        Ok(ProcEventRefMut::Midi(event)) => {
+                            if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
+                                push_to_note_out_i = Some(event.port_index() as usize);
+                            }
+                        }
+                        /*
+                        Ok(ProcEventRefMut::MidiSysex(event)) => {
+                            if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
+                                push_to_note_out_i = Some(event.port_index() as usize);
+                            }
+                        }
+                        */
+                        Ok(ProcEventRefMut::Midi2(event)) => {
+                            if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
+                                push_to_note_out_i = Some(event.port_index() as usize);
+                            }
+                        }
+                        _ => {}
+                    }
+
+                    if push_to_event_out {
+                        let out_buf = event_out_buffer.as_ref().unwrap();
+
+                        let mut b = out_buf.borrow_mut();
+
+                        b.push(out_event);
+                    } else if let Some(buf_i) = push_to_note_out_i {
+                        let out_buf = note_out_buffers[buf_i].as_ref().unwrap();
+
+                        let mut b = out_buf.borrow_mut();
+
+                        b.push(out_event);
+                    }
                 }
             });
         } else {
-            for out_event in &self.out_events {
+            while let Some(mut out_event) = self.out_events.pop() {
                 let mut push_to_event_out = false;
                 let mut push_to_note_out_i = None;
-                match out_event.as_core_event() {
-                    Some(CoreEventSpace::ParamMod(_)) => {
+                match ProcEvent::get_mut(&mut out_event) {
+                    Ok(ProcEventRefMut::ParamValue(_, target_plugin)) => {
+                        // This will only be `Some` if the plugin returned `true` in `has_event_out_port()`.
+                        if event_out_buffer.is_some() {
+                            // If `target_plugin` is `None`, then it means that this is a parameter
+                            // event for one of this plugin's internal parameters, and is meant to
+                            // be sent to the UI, not another plugin.
+                            if target_plugin.is_some() {
+                                push_to_event_out = true;
+                            }
+                        }
+                    }
+                    Ok(ProcEventRefMut::ParamMod(_, _)) => {
                         // This will only be `Some` if the plugin returned `true` in `has_event_out_port()`.
                         if event_out_buffer.is_some() {
                             push_to_event_out = true;
                         }
                     }
-                    Some(CoreEventSpace::Transport(_)) => {
+                    Ok(ProcEventRefMut::Transport(_)) => {
                         // This will only be `Some` if the plugin returned `true` in `has_event_out_port()`.
                         if event_out_buffer.is_some() {
                             push_to_event_out = true;
                         }
                     }
-                    Some(CoreEventSpace::NoteOn(event)) => {
-                        if let Some(Some(_)) = note_out_buffers.get(event.0.port_index() as usize) {
-                            push_to_note_out_i = Some(event.0.port_index() as usize);
-                        }
-                    }
-                    Some(CoreEventSpace::NoteOff(event)) => {
-                        if let Some(Some(_)) = note_out_buffers.get(event.0.port_index() as usize) {
-                            push_to_note_out_i = Some(event.0.port_index() as usize);
-                        }
-                    }
-                    Some(CoreEventSpace::NoteEnd(event)) => {
-                        if let Some(Some(_)) = note_out_buffers.get(event.0.port_index() as usize) {
-                            push_to_note_out_i = Some(event.0.port_index() as usize);
-                        }
-                    }
-                    Some(CoreEventSpace::NoteChoke(event)) => {
-                        if let Some(Some(_)) = note_out_buffers.get(event.0.port_index() as usize) {
-                            push_to_note_out_i = Some(event.0.port_index() as usize);
-                        }
-                    }
-                    Some(CoreEventSpace::NoteExpression(event)) => {
+                    Ok(ProcEventRefMut::Note(event)) => {
                         if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
                             push_to_note_out_i = Some(event.port_index() as usize);
                         }
                     }
-                    Some(CoreEventSpace::Midi(event)) => {
+                    Ok(ProcEventRefMut::NoteExpression(event)) => {
+                        if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
+                            push_to_note_out_i = Some(event.port_index() as usize);
+                        }
+                    }
+                    Ok(ProcEventRefMut::Midi(event)) => {
                         if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
                             push_to_note_out_i = Some(event.port_index() as usize);
                         }
                     }
                     /*
-                    Some(CoreEventSpace::MidiSysex(event)) => {
+                    Ok(ProcEventRefMut::MidiSysex(event)) => {
                         if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
                             push_to_note_out_i = Some(event.port_index() as usize);
                         }
                     }
                     */
-                    Some(CoreEventSpace::Midi2(event)) => {
+                    Ok(ProcEventRefMut::Midi2(event)) => {
                         if let Some(Some(_)) = note_out_buffers.get(event.port_index() as usize) {
                             push_to_note_out_i = Some(event.port_index() as usize);
                         }
@@ -1128,18 +1129,16 @@ impl PluginInstanceHostAudioThread {
 
                     let mut b = out_buf.borrow_mut();
 
-                    b.push(ProcEvent::from_unknown(out_event).unwrap());
+                    b.push(out_event);
                 } else if let Some(buf_i) = push_to_note_out_i {
                     let out_buf = note_out_buffers[buf_i].as_ref().unwrap();
 
                     let mut b = out_buf.borrow_mut();
 
-                    b.push(ProcEvent::from_unknown(out_event).unwrap());
+                    b.push(out_event);
                 }
             }
         }
-
-        self.out_events.clear();
 
         match status {
             ProcessStatus::Continue => {

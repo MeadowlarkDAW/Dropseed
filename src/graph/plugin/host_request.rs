@@ -7,8 +7,6 @@ use std::sync::{
     Arc,
 };
 
-use clack_host::host::HostInfo as ClackHostInfo;
-
 use crate::plugin::ext::params::HostParamsExtMainThread;
 
 use super::ext::audio_ports::AudioPortRescanFlags;
@@ -36,7 +34,10 @@ pub struct HostInfo {
     /// eg: "https://meadowlark.app"
     pub url: Option<String>,
 
-    pub(crate) clack_host_info: ClackHostInfo,
+    pub(crate) _c_name: Pin<Box<CStr>>,
+    pub(crate) _c_vendor: Pin<Box<CStr>>,
+    pub(crate) _c_url: Pin<Box<CStr>>,
+    pub(crate) _c_version: Pin<Box<CStr>>,
 }
 
 fn to_pin_cstr(str: &str) -> Pin<Box<CStr>> {
@@ -54,15 +55,13 @@ impl HostInfo {
     /// - `vendor` - The vendor of this host. eg: "RustyDAW Org"
     /// - `url` - The url to the product page of this host. eg: "https://meadowlark.app"
     pub fn new(name: String, version: String, vendor: Option<String>, url: Option<String>) -> Self {
-        let clack_host_info = ClackHostInfo::new(
-            &name,
-            vendor.as_deref().unwrap_or(""),
-            url.as_deref().unwrap_or(""),
-            &version,
-        )
-        .unwrap();
+        let _c_name: Pin<Box<CStr>> = to_pin_cstr(name.as_str());
+        let _c_vendor: Pin<Box<CStr>> =
+            to_pin_cstr(vendor.as_ref().map(|s| s.as_str()).unwrap_or(""));
+        let _c_url: Pin<Box<CStr>> = to_pin_cstr(vendor.as_ref().map(|s| s.as_str()).unwrap_or(""));
+        let _c_version: Pin<Box<CStr>> = to_pin_cstr(&version);
 
-        Self { name, version, vendor, url, clack_host_info }
+        Self { name, version, vendor, url, _c_name, _c_vendor, _c_url, _c_version }
     }
 
     /// The version of the `RustyDAW Engine` used by this host.

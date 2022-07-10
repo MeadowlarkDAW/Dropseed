@@ -3,9 +3,9 @@ use meadowlark_core_types::SampleRate;
 use crate::plugin::{
     ext, PluginActivatedInfo, PluginAudioThread, PluginDescriptor, PluginFactory, PluginMainThread,
 };
-use crate::{EventBuffer, HostRequest, PluginInstanceID, ProcBuffers, ProcInfo, ProcessStatus};
+use crate::{EventQueue, HostRequest, PluginInstanceID, ProcBuffers, ProcInfo, ProcessStatus};
 
-pub static TEST_SINE_STEREO_RDN: &str = "app.meadowlark.test-sine-stereo";
+pub static TEST_SINE_STEREO_RDN: &'static str = "app.meadowlark.test-sine-stereo";
 
 pub struct TestSineStereoFactory;
 
@@ -20,7 +20,6 @@ impl PluginFactory for TestSineStereoFactory {
             url: String::new(),
             manual_url: String::new(),
             support_url: String::new(),
-            features: String::new()
         }
     }
 
@@ -80,8 +79,8 @@ impl PluginAudioThread for TestSineStereoAudioThread {
         &mut self,
         proc_info: &ProcInfo,
         buffers: &mut ProcBuffers,
-        _in_events: &EventBuffer,
-        _out_events: &mut EventBuffer,
+        _in_events: &EventQueue,
+        _out_events: &mut EventQueue,
     ) -> ProcessStatus {
         let (mut buf_l, mut buf_r) = buffers.audio_out[0].stereo_f32_mut().unwrap();
 
