@@ -3,21 +3,21 @@ use std::path::PathBuf;
 
 use meadowlark_core_types::{Frames, SampleRate};
 use symphonia::core::audio::AudioBufferRef;
-use symphonia::core::audio::{AudioBuffer, Signal};
+use symphonia::core::audio::{AudioBuffer, SampleBuffer, Signal};
 use symphonia::core::codecs::{CodecRegistry, DecoderOptions};
 use symphonia::core::probe::ProbeResult;
 use symphonia::core::sample::{i24, u24};
 
 use super::loader::MAX_FILE_BYTES;
-use super::{PcmKey, PcmLoadError, PcmResource, PcmResourceType};
+use super::{convert, PcmKey, PcmLoadError, PcmResource, PcmResourceType};
 
-/*
 pub(crate) fn decode_f32_resampled(
     probed: &mut ProbeResult,
     key: &PcmKey,
     codec_registry: &CodecRegistry,
-    pcm_sample_rate: SampleRate,
-    target_sample_rate: SampleRate,
+    pcm_sample_rate: usize,
+    target_sample_rate: usize,
+    resampler: &mut samplerate::Samplerate,
 ) -> Result<PcmResource, PcmLoadError> {
     // Get the default track in the audio stream.
     let track = probed
@@ -49,14 +49,15 @@ pub(crate) fn decode_f32_resampled(
     let mut total_frames = 0;
     let max_frames = MAX_FILE_BYTES / (4 * n_channels as u64);
 
-    if let Some(n_frames) = n_frames {
-        if n_frames > max_frames {
-            return Err(PcmLoadError::FileTooLarge(key.path.clone()));
-        }
-    }
-
-    let mut interleaved_buffer: Vec<f32> = Vec::with_capacity(n_frames.unwrap_or(44100) as usize * n_channels);
     let mut sample_buf = None;
+    let mut resampled_sample_buf: Vec<f32> = Vec::new();
+
+    let resampled_frames = (n_frames.unwrap_or(44100) as f64 * target_sample_rate as f64
+        / pcm_sample_rate as f64)
+        .ceil() as usize;
+
+    let mut resampled_channels: Vec<Vec<f32>> =
+        (0..n_channels).map(|_| Vec::with_capacity(resampled_frames)).collect();
 
     let decode_warning = |err: &str| {
         // Decode errors are not fatal. Print the error message and try to decode the next
@@ -77,12 +78,16 @@ pub(crate) fn decode_f32_resampled(
                 if sample_buf.is_none() {
                     // Get the audio buffer specification.
                     let spec = *decoded.spec();
-
                     // Get the capacity of the decoded buffer. Note: This is capacity, not length!
                     let duration = decoded.capacity() as u64;
-
                     // Create the f32 sample buffer.
                     sample_buf = Some(SampleBuffer::<f32>::new(duration, spec));
+
+                    let resampled_duration = (duration as f64 * target_sample_rate as f64
+                        / pcm_sample_rate as f64)
+                        .ceil() as usize;
+
+                    resampled_sample_buf.resize(resampled_duration * n_channels, 0.0);
                 }
 
                 if n_frames.is_none() {
@@ -93,52 +98,38 @@ pub(crate) fn decode_f32_resampled(
                 }
 
                 let s = sample_buf.as_mut().unwrap();
-
                 // Copy the decoded audio buffer into the sample buffer in an interleaved format.
                 s.copy_interleaved_ref(decoded);
 
-                interleaved_buffer.extend_from_slice(s.samples());
-            },
-            Err(symphonia::core::errors::Error::DecodeError(err)) => {
-                decode_warning(err)
+                resampled_sample_buf = match resampler.process(s.samples()) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        return Err(PcmLoadError::ErrorWhileResampling((key.path.clone(), e)));
+                    }
+                };
+
+                let resampled_frames = resampled_sample_buf.len() / n_channels;
+                for ch_i in 0..n_channels {
+                    for i in 0..resampled_frames {
+                        resampled_channels[ch_i]
+                            .push(resampled_sample_buf[(i * n_channels) + ch_i]);
+                    }
+                }
             }
+            Err(symphonia::core::errors::Error::DecodeError(err)) => decode_warning(err),
             Err(e) => return Err(PcmLoadError::ErrorWhileDecoding((key.path.clone(), e))),
         }
     }
 
-    let converter_type = key.quality.as_converter_type();
+    let total_frames = resampled_channels[0].len();
 
-    let resampled = match samplerate::convert(pcm_sample_rate.as_u32(), target_sample_rate.as_u32(), n_channels, converter_type, &interleaved_buffer) {
-        Ok(r) => r,
-        Err(e) => {
-            return Err(PcmLoadError::ErrorWhileResampling((key.path.clone(), e)));
-        }
-    };
-
-    let total_frames = resampled.len() / n_channels;
-
-    // TODO: Optimize this deinterleaving loop?
-    let mut channels: Vec<Vec<f32>> = Vec::with_capacity(n_channels);
-    for ch_i in 0..n_channels {
-        let mut ch_buf: Vec<f32> = Vec::with_capacity(total_frames);
-
-        for i in 0..total_frames {
-            ch_buf.push(resampled[(i * n_channels) + ch_i]);
-        }
-
-        channels.push(ch_buf);
-    }
-
-    Ok(
-        PcmResource {
-            pcm_type: PcmResourceType::F32(channels),
-            sample_rate: target_sample_rate,
-            channels: n_channels,
-            len_frames: Frames(total_frames as u64),
-        }
-    )
+    Ok(PcmResource {
+        pcm_type: PcmResourceType::F32(resampled_channels),
+        sample_rate: SampleRate(target_sample_rate as f64),
+        channels: n_channels,
+        len_frames: Frames(total_frames as u64),
+    })
 }
-*/
 
 pub(crate) fn decode_native_bitdepth(
     probed: &mut ProbeResult,
@@ -867,7 +858,7 @@ fn decode_u32_packet(
 ) {
     for i in 0..num_channels {
         for s in packet.chan(i).iter() {
-            let s_f32 = ((f64::from(*s) * (2.0 / std::u32::MAX as f64)) - 1.0) as f32;
+            let s_f32 = convert::pcm_u32_to_f32(*s);
 
             decoded_channels[i].push(s_f32);
         }
@@ -917,7 +908,7 @@ fn decode_i32_packet(
 ) {
     for i in 0..num_channels {
         for s in packet.chan(i).iter() {
-            let s_f32 = (f64::from(*s) / std::i32::MAX as f64) as f32;
+            let s_f32 = convert::pcm_s32_to_f32(*s);
 
             decoded_channels[i].push(s_f32);
         }

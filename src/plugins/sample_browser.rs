@@ -18,7 +18,7 @@ use crate::{
 
 pub static SAMPLE_BROWSER_PLUG_RDN: &'static str = "app.meadowlark.sample-browser";
 
-const MSG_BUFFER_SIZE: usize = 16;
+const MSG_BUFFER_SIZE: usize = 64;
 
 pub struct SampleBrowserPlugFactory;
 

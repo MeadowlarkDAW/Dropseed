@@ -5,7 +5,9 @@ use std::path::PathBuf;
 
 use basedrop::{Handle, Shared};
 
+use fnv::FnvHashMap;
 use meadowlark_core_types::{Frames, SampleRate};
+use samplerate::ConverterType;
 use symphonia::core::codecs::CodecRegistry;
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
@@ -19,18 +21,64 @@ pub static MAX_FILE_BYTES: u64 = 1_000_000_000;
 use super::{decode, PcmResource, PcmResourceType};
 use crate::utils::twox_hash_map::TwoXHashMap;
 
+#[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]
+pub enum ResampleQuality {
+    SincBestQuality,
+    SincMediumQuality,
+    SincFastest,
+    ZeroOrderHold,
+    Linear,
+}
+
+impl Default for ResampleQuality {
+    fn default() -> Self {
+        ResampleQuality::SincFastest
+    }
+}
+
+impl From<ConverterType> for ResampleQuality {
+    fn from(c: ConverterType) -> Self {
+        match c {
+            ConverterType::SincBestQuality => ResampleQuality::SincBestQuality,
+            ConverterType::SincMediumQuality => ResampleQuality::SincMediumQuality,
+            ConverterType::SincFastest => ResampleQuality::SincFastest,
+            ConverterType::ZeroOrderHold => ResampleQuality::ZeroOrderHold,
+            ConverterType::Linear => ResampleQuality::Linear,
+        }
+    }
+}
+
+impl From<ResampleQuality> for ConverterType {
+    fn from(r: ResampleQuality) -> Self {
+        match r {
+            ResampleQuality::SincBestQuality => ConverterType::SincBestQuality,
+            ResampleQuality::SincMediumQuality => ConverterType::SincMediumQuality,
+            ResampleQuality::SincFastest => ConverterType::SincFastest,
+            ResampleQuality::ZeroOrderHold => ConverterType::ZeroOrderHold,
+            ResampleQuality::Linear => ConverterType::Linear,
+        }
+    }
+}
+
 #[derive(Default, Debug, Clone, PartialEq, Hash, Eq)]
 pub struct PcmKey {
     pub path: PathBuf,
-    //pub resample_to_project_sr: bool,
-    //pub quality: ResampleQuality,
 
+    pub resample_to_project_sr: bool,
+    pub quality: ResampleQuality,
     /* TODO
     /// The amount of doppler stretching to apply.
     ///
     /// By default this is `1.0` (no doppler stretching).
     //pub doppler_stretch_ratio: f64,
      */
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct ResamplerKey {
+    pcm_sr: u32,
+    channels: u32,
+    quality: ResampleQuality,
 }
 
 pub struct PcmLoader {
@@ -43,6 +91,9 @@ pub struct PcmLoader {
 
     codec_registry: &'static CodecRegistry,
     probe: &'static Probe,
+
+    // Re-use resamplers to improve performance.
+    resamplers: FnvHashMap<ResamplerKey, samplerate::Samplerate>,
 
     coll_handle: Handle,
 }
@@ -65,6 +116,7 @@ impl PcmLoader {
             project_sr,
             codec_registry: symphonia::default::get_codecs(),
             probe: symphonia::default::get_probe(),
+            resamplers: FnvHashMap::default(),
             coll_handle,
         }
     }
@@ -128,17 +180,59 @@ impl PcmLoader {
             44100
         }) as f64);
 
-        /*
+        let n_channels = track
+            .codec_params
+            .channels
+            .ok_or_else(|| PcmLoadError::NoChannelsFound(key.path.clone()))?
+            .count();
+
         let pcm = if sample_rate == self.project_sr || !key.resample_to_project_sr {
             decode::decode_native_bitdepth(&mut probed, key, self.codec_registry, sample_rate)?
         } else {
             // Resampling is needed.
-            decode::decode_f32_resampled(&mut probed, key, self.codec_registry, sample_rate, self.project_sr)?
-        };
-        */
 
-        let pcm =
-            decode::decode_native_bitdepth(&mut probed, key, self.codec_registry, sample_rate)?;
+            let project_sr = self.project_sr.as_usize();
+            let pcm_sr = sample_rate.as_usize();
+
+            let resampler_key = ResamplerKey {
+                pcm_sr: pcm_sr as u32,
+                channels: n_channels as u32,
+                quality: key.quality,
+            };
+
+            let mut resampler = self.resamplers.get_mut(&resampler_key);
+
+            if resampler.is_none() {
+                let new_rs = match samplerate::Samplerate::new(
+                    key.quality.into(),
+                    pcm_sr as u32,
+                    project_sr as u32,
+                    n_channels,
+                ) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        return Err(PcmLoadError::ErrorWhileResampling((key.path.clone(), e)))
+                    }
+                };
+
+                let _ = self.resamplers.insert(resampler_key, new_rs);
+
+                resampler = self.resamplers.get_mut(&resampler_key);
+            }
+
+            let resampler = resampler.as_mut().unwrap();
+
+            resampler.reset().unwrap();
+
+            decode::decode_f32_resampled(
+                &mut probed,
+                key,
+                self.codec_registry,
+                pcm_sr,
+                project_sr,
+                resampler,
+            )?
+        };
 
         let pcm = Shared::new(&self.coll_handle, pcm);
 
@@ -168,7 +262,7 @@ pub enum PcmLoadError {
     CouldNotCreateDecoder((PathBuf, symphonia::core::errors::Error)),
     ErrorWhileDecoding((PathBuf, symphonia::core::errors::Error)),
     UnexpectedErrorWhileDecoding((PathBuf, Box<dyn Error>)),
-    //ErrorWhileResampling((PathBuf, samplerate::Error)),
+    ErrorWhileResampling((PathBuf, samplerate::Error)),
 }
 
 impl Error for PcmLoadError {}
@@ -217,14 +311,12 @@ impl fmt::Display for PcmLoadError {
                 e,
                 path
             ),
-            /*
             ErrorWhileResampling((path, e)) => write!(
                 f,
                 "Failed to load PCM resource: error while resampling | {} | path: {:?}",
                 e,
                 path
             ),
-            */
         }
     }
 }
