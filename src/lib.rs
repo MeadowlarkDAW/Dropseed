@@ -11,6 +11,9 @@ pub mod resource_loader;
 pub mod transport;
 pub mod utils;
 
+pub use clack_host::events::io::EventBuffer;
+pub use clack_host::utils::FixedPoint;
+
 pub use engine::audio_thread::DSEngineAudioThread;
 pub use engine::events::from_engine::{
     DSEngineEvent, EngineDeactivatedInfo, PluginEvent, PluginScannerEvent,
@@ -24,9 +27,7 @@ pub use engine::main_thread::{
 pub use engine::plugin_scanner::{RescanPluginDirectoriesRes, ScannedPlugin, ScannedPluginKey};
 pub use graph::plugin;
 pub use graph::plugin::audio_buffer::{AudioPortBuffer, AudioPortBufferMut};
-pub use graph::plugin::events::event_queue::{
-    EventQueue, ProcEvent, ProcEventRef, ProcEventRefMut,
-};
+pub use graph::plugin::events::ProcEvent;
 pub use graph::plugin::ext::audio_ports::{AudioPortInfo, MainPortsLayout, PluginAudioPortsExt};
 pub use graph::plugin::ext::params::{ParamID, ParamInfo, ParamInfoFlags};
 pub use graph::plugin::host_request::{HostInfo, HostRequest};
@@ -39,4 +40,3 @@ pub use graph::{
 };
 pub use resource_loader::ResourceLoader;
 pub use transport::TransportInfo;
-pub use utils::fixed_point::FixedPoint64;
