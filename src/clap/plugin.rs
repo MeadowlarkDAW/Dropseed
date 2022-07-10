@@ -117,7 +117,7 @@ impl ClapPluginMainThread {
         }).collect();
 
         let outputs: Vec<AudioPortInfo> = (0..num_out_ports).filter_map(|i| {
-            let raw_info = match audio_ports.get(&plugin, i, true, &mut buffer) {
+            let raw_info = match audio_ports.get(&plugin, i, false, &mut buffer) {
                 None => {
                     log::warn!("Error when getting CLAP Port Info from plugin instance {}: plugin returned no info for index {}", id, i);
                     return None;
@@ -151,7 +151,7 @@ impl ClapPluginMainThread {
             })
         }).collect();
 
-        let main_ports_layout = match (has_main_in_port, has_main_in_port) {
+        let main_ports_layout = match (has_main_in_port, has_main_out_port) {
             (true, true) => MainPortsLayout::InOut,
             (true, false) => MainPortsLayout::InOnly,
             (false, true) => MainPortsLayout::OutOnly,
