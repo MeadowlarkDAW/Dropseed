@@ -319,11 +319,6 @@ impl PluginAudioThread for SampleBrowserPlugAudioThread {
 
                 pcm.fill_stereo_f32(self.playhead as isize, buf_l_part, buf_r_part);
 
-                for i in 0..proc_info.frames {
-                    buf_l_part[i] *= 0.5;
-                    buf_r_part[i] *= 0.5;
-                }
-
                 self.playhead += proc_info.frames;
 
                 return ProcessStatus::Continue;

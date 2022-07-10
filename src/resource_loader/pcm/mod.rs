@@ -250,7 +250,7 @@ impl PcmResource {
                 let buf_l_part = &mut buf_l[buf_range.clone()];
                 let buf_r_part = &mut buf_r[buf_range];
                 let pcm_l_part = &pcm[0][pcm_range.clone()];
-                let pcm_r_part = &pcm[0][pcm_range];
+                let pcm_r_part = &pcm[1][pcm_range];
 
                 assert_eq!(buf_l_part.len(), pcm_l_part.len());
                 assert_eq!(buf_r_part.len(), pcm_r_part.len());
@@ -267,7 +267,7 @@ impl PcmResource {
                 let buf_l_part = &mut buf_l[buf_range.clone()];
                 let buf_r_part = &mut buf_r[buf_range];
                 let pcm_l_part = &pcm[0][pcm_range.clone()];
-                let pcm_r_part = &pcm[0][pcm_range];
+                let pcm_r_part = &pcm[1][pcm_range];
 
                 assert_eq!(buf_l_part.len(), pcm_l_part.len());
                 assert_eq!(buf_r_part.len(), pcm_r_part.len());
@@ -284,7 +284,7 @@ impl PcmResource {
                 let buf_l_part = &mut buf_l[buf_range.clone()];
                 let buf_r_part = &mut buf_r[buf_range];
                 let pcm_l_part = &pcm[0][pcm_range.clone()];
-                let pcm_r_part = &pcm[0][pcm_range];
+                let pcm_r_part = &pcm[1][pcm_range];
 
                 assert_eq!(buf_l_part.len(), pcm_l_part.len());
                 assert_eq!(buf_r_part.len(), pcm_r_part.len());
@@ -320,7 +320,7 @@ impl PcmResource {
                 let buf_l_part = &mut buf_l[buf_range.clone()];
                 let buf_r_part = &mut buf_r[buf_range];
                 let pcm_l_part = &pcm[0][pcm_range.clone()];
-                let pcm_r_part = &pcm[0][pcm_range];
+                let pcm_r_part = &pcm[1][pcm_range];
 
                 assert_eq!(buf_l_part.len(), pcm_l_part.len());
                 assert_eq!(buf_r_part.len(), pcm_r_part.len());
@@ -335,7 +335,7 @@ impl PcmResource {
                 let buf_l_part = &mut buf_l[buf_range.clone()];
                 let buf_r_part = &mut buf_r[buf_range];
                 let pcm_l_part = &pcm[0][pcm_range.clone()];
-                let pcm_r_part = &pcm[0][pcm_range];
+                let pcm_r_part = &pcm[1][pcm_range];
 
                 assert_eq!(buf_l_part.len(), pcm_l_part.len());
                 assert_eq!(buf_r_part.len(), pcm_r_part.len());
@@ -350,7 +350,7 @@ impl PcmResource {
                 let buf_l_part = &mut buf_l[buf_range.clone()];
                 let buf_r_part = &mut buf_r[buf_range];
                 let pcm_l_part = &pcm[0][pcm_range.clone()];
-                let pcm_r_part = &pcm[0][pcm_range];
+                let pcm_r_part = &pcm[1][pcm_range];
 
                 assert_eq!(buf_l_part.len(), pcm_l_part.len());
                 assert_eq!(buf_r_part.len(), pcm_r_part.len());
@@ -386,7 +386,7 @@ impl PcmResource {
                 let buf_l_part = &mut buf_l[buf_range.clone()];
                 let buf_r_part = &mut buf_r[buf_range];
                 let pcm_l_part = &pcm[0][pcm_range.clone()];
-                let pcm_r_part = &pcm[0][pcm_range];
+                let pcm_r_part = &pcm[1][pcm_range];
 
                 assert_eq!(buf_l_part.len(), pcm_l_part.len());
                 assert_eq!(buf_r_part.len(), pcm_r_part.len());
@@ -399,7 +399,7 @@ impl PcmResource {
                 let buf_l_part = &mut buf_l[buf_range.clone()];
                 let buf_r_part = &mut buf_r[buf_range];
                 let pcm_l_part = &pcm[0][pcm_range.clone()];
-                let pcm_r_part = &pcm[0][pcm_range];
+                let pcm_r_part = &pcm[1][pcm_range];
 
                 assert_eq!(buf_l_part.len(), pcm_l_part.len());
                 assert_eq!(buf_r_part.len(), pcm_r_part.len());
