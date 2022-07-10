@@ -4,11 +4,10 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU32, Ordering},
     Arc,
 };
-use std::time::Duration;
 
 use crate::graph::schedule::SharedSchedule;
 
-static PROCESS_THREAD_POLL_INTERVAL: Duration = Duration::from_micros(5);
+//static PROCESS_THREAD_POLL_INTERVAL: Duration = Duration::from_micros(5);
 
 pub(crate) struct DSEngineProcessThread {
     to_audio_thread_audio_out_tx: Owned<Producer<f32>>,
@@ -51,12 +50,20 @@ impl DSEngineProcessThread {
     }
 
     pub fn run(&mut self, run: Arc<AtomicBool>) {
+        // TODO: Use some kind of interrupt to activate the thread as apposed
+        // to potentially pinning a whole CPU core just waiting for frames to
+        // process?
+        //
+        // Note that I already tried the method of calling `thread::sleep()`
+        // for a short amount of time while there is no work to be done, but
+        // apparently Windows does not like it when you call `thread::sleep()`
+        // on a high-priority thread (underruns galore).
+
         while run.load(Ordering::Relaxed) {
             let num_frames = if let Some(num_frames_wanted) = &self.num_frames_wanted {
                 let num_frames = num_frames_wanted.load(Ordering::SeqCst);
 
                 if num_frames == 0 {
-                    std::thread::sleep(PROCESS_THREAD_POLL_INTERVAL);
                     continue;
                 }
 
@@ -65,7 +72,6 @@ impl DSEngineProcessThread {
                 let num_samples = self.from_audio_thread_audio_in_rx.slots();
 
                 if num_samples == 0 {
-                    std::thread::sleep(PROCESS_THREAD_POLL_INTERVAL);
                     continue;
                 }
 
