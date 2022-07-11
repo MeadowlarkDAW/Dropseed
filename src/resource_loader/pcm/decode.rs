@@ -17,7 +17,7 @@ pub(crate) fn decode_f32_resampled(
     codec_registry: &CodecRegistry,
     pcm_sample_rate: usize,
     target_sample_rate: usize,
-    resampler: &mut samplerate::Samplerate,
+    resampler: &mut samplerate_rs::Samplerate,
 ) -> Result<PcmResource, PcmLoadError> {
     // Get the default track in the audio stream.
     let track = probed

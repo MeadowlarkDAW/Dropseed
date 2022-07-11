@@ -7,7 +7,7 @@ use basedrop::{Handle, Shared};
 
 use fnv::FnvHashMap;
 use meadowlark_core_types::{Frames, SampleRate};
-use samplerate::ConverterType;
+use samplerate_rs::ConverterType;
 use symphonia::core::codecs::CodecRegistry;
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
@@ -93,7 +93,7 @@ pub struct PcmLoader {
     probe: &'static Probe,
 
     // Re-use resamplers to improve performance.
-    resamplers: FnvHashMap<ResamplerKey, samplerate::Samplerate>,
+    resamplers: FnvHashMap<ResamplerKey, samplerate_rs::Samplerate>,
 
     coll_handle: Handle,
 }
@@ -203,7 +203,7 @@ impl PcmLoader {
             let mut resampler = self.resamplers.get_mut(&resampler_key);
 
             if resampler.is_none() {
-                let new_rs = match samplerate::Samplerate::new(
+                let new_rs = match samplerate_rs::Samplerate::new(
                     key.quality.into(),
                     pcm_sr as u32,
                     project_sr as u32,
@@ -262,7 +262,7 @@ pub enum PcmLoadError {
     CouldNotCreateDecoder((PathBuf, symphonia::core::errors::Error)),
     ErrorWhileDecoding((PathBuf, symphonia::core::errors::Error)),
     UnexpectedErrorWhileDecoding((PathBuf, Box<dyn Error>)),
-    ErrorWhileResampling((PathBuf, samplerate::Error)),
+    ErrorWhileResampling((PathBuf, samplerate_rs::Error)),
 }
 
 impl Error for PcmLoadError {}
