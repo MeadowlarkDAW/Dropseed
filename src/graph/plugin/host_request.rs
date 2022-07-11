@@ -1,18 +1,15 @@
 use basedrop::Shared;
 use bitflags::bitflags;
-use std::ffi::{CStr, CString};
-use std::pin::Pin;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
     Arc,
 };
 
+use clack_extensions::audio_ports::RescanType;
+use clack_extensions::note_ports::{NoteDialects, NotePortRescanFlags};
 use clack_host::host::HostInfo as ClackHostInfo;
 
 use crate::plugin::ext::params::HostParamsExtMainThread;
-
-use super::ext::audio_ports::AudioPortRescanFlags;
-use super::ext::note_ports::{NoteDialect, NotePortRescanFlags};
 
 #[derive(Debug, Clone)]
 pub struct HostInfo {
@@ -37,10 +34,6 @@ pub struct HostInfo {
     pub url: Option<String>,
 
     pub(crate) clack_host_info: ClackHostInfo,
-}
-
-fn to_pin_cstr(str: &str) -> Pin<Box<CStr>> {
-    Pin::new(CString::new(str).unwrap_or(CString::new("Error").unwrap()).into_boxed_c_str())
 }
 
 impl HostInfo {
@@ -144,7 +137,7 @@ impl HostRequest {
     /// Checks if the host allows a plugin to change a given aspect of the audio ports definition.
     ///
     /// [main-thread]
-    pub fn is_rescan_audio_ports_flag_supported(&self, flag: AudioPortRescanFlags) -> bool {
+    pub fn is_rescan_audio_ports_flag_supported(&self, _flag: RescanType) -> bool {
         // todo
         false
     }
@@ -152,9 +145,9 @@ impl HostRequest {
     /// Checks if the host allows a plugin to change a given aspect of the audio ports definition.
     ///
     /// [main-thread]
-    pub fn supported_note_dialects(&self) -> NoteDialect {
+    pub fn supported_note_dialects(&self) -> NoteDialects {
         // todo: more
-        NoteDialect::CLAP | NoteDialect::MIDI | NoteDialect::MIDI2
+        NoteDialects::CLAP | NoteDialects::MIDI | NoteDialects::MIDI2
     }
 
     /// Rescan the full list of audio ports according to the flags.
@@ -164,11 +157,11 @@ impl HostRequest {
     /// Certain flags require the plugin to be de-activated.
     ///
     /// [main-thread]
-    pub fn rescan_audio_ports(&self, flags: AudioPortRescanFlags) {
+    pub fn rescan_audio_ports(&self, _flags: RescanType) {
         // todo
     }
 
-    pub fn rescan_note_ports(&self, flags: NotePortRescanFlags) {
+    pub fn rescan_note_ports(&self, _flags: NotePortRescanFlags) {
         // todo
     }
 

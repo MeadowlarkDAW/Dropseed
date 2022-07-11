@@ -25,9 +25,8 @@ cpal-asio = ["cpal/asio"]
 [dependencies]
 meadowlark-core-types = { git = "https://github.com/MeadowlarkDAW/meadowlark-core-types", branch = "main" }
 audio-graph = { git = "https://github.com/MeadowlarkDAW/audio-graph", branch = "main" }
-clap-sys = "0.3.0"
 clack-host = { git = "https://github.com/prokopyl/clack" }
-clack-extensions = { git = "https://github.com/prokopyl/clack", features = ["clack-host", "audio-ports", "log", "params", "state", "thread-check"] }
+clack-extensions = { git = "https://github.com/prokopyl/clack", features = ["clack-host", "audio-ports", "log", "note-ports", "params", "state", "thread-check"] }
 dirs = { version = "4.0", optional = true }
 raw-window-handle = "0.4"
 basedrop = "0.1"
