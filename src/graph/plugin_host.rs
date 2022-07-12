@@ -3,6 +3,7 @@ use clack_host::events::event_types::{ParamModEvent, ParamValueEvent};
 use clack_host::events::io::EventBuffer;
 use clack_host::events::spaces::CoreEventSpace;
 use clack_host::events::{Event, EventFlags, EventHeader};
+use clack_host::utils::Cookie;
 use fnv::FnvHashMap;
 use meadowlark_core_types::SampleRate;
 use smallvec::SmallVec;
@@ -32,17 +33,8 @@ use crate::{HostRequest, ParamID, ProcInfo, ProcessStatus, ScannedPluginKey};
 #[derive(Clone, Copy)]
 struct MainToAudioParamValue {
     value: f64,
-    _cookie: *const std::ffi::c_void,
+    _cookie: Cookie,
 }
-
-// This is necessary because this event has a pointer which the CLAP plugin
-// owns (if it is a CLAP plugin). This should be safe since only the plugin
-// itself ever reads/writes to that pointer.
-unsafe impl Sync for MainToAudioParamValue {}
-// This is necessary because this event has a pointer which the CLAP plugin
-// owns (if it is a CLAP plugin). This should be safe since only the plugin
-// itself ever reads/writes to that pointer.
-unsafe impl Send for MainToAudioParamValue {}
 
 impl ReducFnvValue for MainToAudioParamValue {}
 
@@ -748,7 +740,7 @@ impl PluginInstanceHostAudioThread {
                 let event = ParamValueEvent::new(
                     // TODO: Finer values for `time` instead of just setting it to the first frame?
                     EventHeader::new_core(0, EventFlags::empty()),
-                    core::ptr::null_mut(),
+                    Cookie::empty(),
                     // TODO: Note ID
                     -1,                // note_id
                     param_id.as_u32(), // param_id
@@ -770,7 +762,7 @@ impl PluginInstanceHostAudioThread {
                 let event = ParamModEvent::new(
                     // TODO: Finer values for `time` instead of just setting it to the first frame?
                     EventHeader::new_core(0, EventFlags::empty()),
-                    core::ptr::null_mut(),
+                    Cookie::empty(),
                     // TODO: Note ID
                     -1,                // note_id
                     param_id.as_u32(), // param_id
