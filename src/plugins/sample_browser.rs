@@ -450,6 +450,25 @@ impl PluginAudioThread for SampleBrowserPlugAudioThread {
             }
         }
 
+        if apply_gain {
+            let gain = self.params.gain.smoothed(proc_info.frames);
+            if gain.is_smoothing() {
+                debug_assert!(gain.values.len() >= proc_info.frames);
+
+                for i in 0..proc_info.frames {
+                    buf_l_part[i] *= gain.values[i];
+                    buf_r_part[i] *= gain.values[i];
+                }
+            } else if gain[0].abs() <= std::f32::EPSILON {
+                let g = gain[0];
+
+                for i in 0..proc_info.frames {
+                    buf_l_part[i] *= g;
+                    buf_r_part[i] *= g;
+                }
+            }
+        }
+
         if let PlayState::Stopped = &self.play_state {
             if let DeclickState::Stopped = &self.declick_state {
                 return ProcessStatus::Sleep;
