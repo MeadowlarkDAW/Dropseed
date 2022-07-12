@@ -95,9 +95,6 @@ enum ProcessMsg {
     Stop,
 }
 
-//unsafe impl Send for ProcessMsg {}
-//unsafe impl Sync for ProcessMsg {}
-
 struct ParamsHandle {
     pub gain: ParamF32Handle,
 }
