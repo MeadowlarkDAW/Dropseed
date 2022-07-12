@@ -22,6 +22,9 @@ static DECLICK_TIME: Seconds = Seconds(30.0 / 1000.0);
 
 const MSG_BUFFER_SIZE: usize = 64;
 
+// TODO: Use disk streaming with `clack` for sample playback instead of loading
+// the whole file upfront in the UI.
+
 pub struct SampleBrowserPlugFactory;
 
 impl PluginFactory for SampleBrowserPlugFactory {
