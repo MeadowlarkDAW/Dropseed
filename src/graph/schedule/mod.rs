@@ -121,8 +121,8 @@ impl Schedule {
 
                     let mut is_constant = true;
                     let first_val = buffer[0];
-                    for i in 0..frames {
-                        if buffer[i] != first_val {
+                    for frame in &buffer[0..frames] {
+                        if *frame != first_val {
                             is_constant = false;
                             break;
                         }

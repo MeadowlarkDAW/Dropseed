@@ -3,12 +3,11 @@ use cpal::Stream;
 use crossbeam::channel::Receiver;
 use dropseed::{
     ActivateEngineSettings, DSEngineAudioThread, DSEngineEvent, DSEngineHandle, DSEngineRequest,
-    EdgeReq, EngineDeactivatedInfo, HostInfo, ModifyGraphRequest, PluginActivationStatus,
-    PluginEvent, PluginIDReq, PluginInstanceID, PluginScannerEvent, PortType, ScannedPlugin,
+    EngineDeactivatedInfo, HostInfo, PluginActivationStatus, PluginEvent, PluginInstanceID,
+    PluginScannerEvent, ScannedPlugin,
 };
 use eframe::egui;
 use meadowlark_core_types::SampleRate;
-//use noise_generator_dropseed::NoiseGenPluginFactory;
 
 mod effect_rack_page;
 mod scanned_plugins_page;
@@ -62,7 +61,7 @@ fn main() {
                 }
             },
             |e| {
-                panic!("{}", e);
+                panic!("{:?}", e);
             },
         )
         .unwrap();
@@ -183,14 +182,11 @@ impl DSExampleGUI {
                     match res {
                         // The engine was deactivated gracefully after recieving a
                         // `DSEngineRequest::DeactivateEngine` request.
-                        EngineDeactivatedInfo::DeactivatedGracefully { recovered_save_state } => {
+                        EngineDeactivatedInfo::DeactivatedGracefully { .. } => {
                             println!("Engine deactivated gracefully");
                         }
                         // The engine has crashed.
-                        EngineDeactivatedInfo::EngineCrashed {
-                            error_msg,
-                            recovered_save_state,
-                        } => {
+                        EngineDeactivatedInfo::EngineCrashed { error_msg, .. } => {
                             println!("Engine crashed: {}", error_msg);
                         }
                     }
@@ -272,11 +268,11 @@ impl DSExampleGUI {
                             engine_state.effect_rack_state.plugins.push(effect_rack_plugin);
                         }
 
-                        for (plugin_id, plugin_edges) in res.updated_plugin_edges.drain(..) {
+                        for (plugin_id, _) in res.updated_plugin_edges.drain(..) {
                             let effect_rack_plugin =
                                 engine_state.effect_rack_state.plugin_mut(&plugin_id).unwrap();
 
-                            if let Some(active_state) = &mut effect_rack_plugin.active_state {
+                            if effect_rack_plugin.active_state.is_some() {
                                 // TODO
                             }
                         }
@@ -362,9 +358,7 @@ impl DSExampleGUI {
                         self.failed_plugins_text = info
                             .failed_plugins
                             .drain(..)
-                            .map(|(path, error)| {
-                                (format!("{}", path.to_string_lossy()), format!("{}", error))
-                            })
+                            .map(|(path, error)| (path.to_string_lossy().to_string(), error))
                             .collect();
                     }
                     unkown_event => {
@@ -380,7 +374,7 @@ impl DSExampleGUI {
 }
 
 impl eframe::App for DSExampleGUI {
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_updates();
 
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
@@ -389,7 +383,7 @@ impl eframe::App for DSExampleGUI {
                 ui.selectable_value(&mut self.current_tab, Tab::ScannedPlugins, "Scanned Plugins");
 
                 ui.with_layout(egui::Layout::right_to_left(), |ui| {
-                    if let Some(state) = &self.engine_state {
+                    if self.engine_state.is_some() {
                         ui.label(format!("sample rate: {}", self.sample_rate.as_u16()));
                         ui.colored_label(egui::Color32::GREEN, "active");
                         ui.label("engine status:");

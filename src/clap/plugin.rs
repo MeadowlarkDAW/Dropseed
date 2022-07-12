@@ -230,7 +230,7 @@ impl PluginMainThread for ClapPluginMainThread {
         if let Some(state_ext) = self.instance.shared_host_data().state_ext {
             let mut buffer = Vec::new();
 
-            state_ext.save(self.instance.main_thread_plugin_data(), &mut buffer).map_err(|e| {
+            state_ext.save(self.instance.main_thread_plugin_data(), &mut buffer).map_err(|_| {
                 format!(
                     "Plugin with ID {} returned error on call to clap_plugin_state.save()",
                     &*self.id()
@@ -239,7 +239,7 @@ impl PluginMainThread for ClapPluginMainThread {
 
             Ok(Some(buffer))
         } else {
-            return Ok(None);
+            Ok(None)
         }
     }
 
@@ -252,7 +252,7 @@ impl PluginMainThread for ClapPluginMainThread {
         if let Some(state_ext) = self.instance.shared_host_data().state_ext {
             let mut reader = Cursor::new(&preset.bytes);
 
-            state_ext.load(self.instance.main_thread_plugin_data(), &mut reader).map_err(|e| {
+            state_ext.load(self.instance.main_thread_plugin_data(), &mut reader).map_err(|_| {
                 format!(
                     "Plugin with ID {} returned error on call to clap_plugin_state.load()",
                     &*self.id()

@@ -415,11 +415,9 @@ pub(crate) fn compile_graph(
 
         let plugin_audio_thread = plugin_audio_thread.clone();
 
-        let task_version = plugin_audio_thread.task_version;
-
         tasks.push(Task::Plugin(PluginTask {
             plugin: plugin_audio_thread,
-            buffers: ProcBuffers { audio_in, audio_out, task_version },
+            buffers: ProcBuffers { audio_in, audio_out },
             automation_in_buffers,
             automation_out_buffer,
             note_in_buffers,

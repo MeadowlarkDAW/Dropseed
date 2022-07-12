@@ -324,7 +324,7 @@ impl AudioGraph {
             }
 
             if removed_plugins.insert(id.clone()) {
-                if let Ok(edges) = self.get_plugin_edges(&id) {
+                if let Ok(edges) = self.get_plugin_edges(id) {
                     for e in edges.incoming {
                         let _ = affected_plugins.insert(e.src_plugin_id.clone());
                     }
@@ -332,7 +332,7 @@ impl AudioGraph {
                         let _ = affected_plugins.insert(e.dst_plugin_id.clone());
                     }
 
-                    if let Some(plugin) = self.shared_plugin_pool.plugins.get_mut(&id) {
+                    if let Some(plugin) = self.shared_plugin_pool.plugins.get_mut(id) {
                         plugin.plugin_host.schedule_remove();
                     }
 
@@ -340,7 +340,7 @@ impl AudioGraph {
                         log::error!("Abstract node failed to delete node: {}", e);
                     }
                 } else {
-                    let _ = removed_plugins.remove(&id);
+                    let _ = removed_plugins.remove(id);
                     log::warn!("Ignored request to remove plugin instance {:?}: Plugin is already removed.", id);
                 }
             }
@@ -627,7 +627,7 @@ impl AudioGraph {
         for (index, (plugin_id, plugin_entry)) in
             self.shared_plugin_pool.plugins.iter_mut().enumerate()
         {
-            if let Some(_) = node_ref_to_index.insert(plugin_id.node_ref, index) {
+            if node_ref_to_index.insert(plugin_id.node_ref, index).is_some() {
                 // In theory this should never happen.
                 panic!("More than one plugin with node ref: {:?}", plugin_id.node_ref);
             }
@@ -792,10 +792,10 @@ impl AudioGraph {
             },
         );
         let _ = self.shared_plugin_pool.plugins.insert(
-            graph_out_node_id.clone(),
+            graph_out_node_id,
             PluginInstanceHostEntry {
                 plugin_host: PluginInstanceHost::new_graph_out(
-                    graph_in_node_id.clone(),
+                    graph_in_node_id,
                     HostRequest::new(Shared::clone(&self.host_info)),
                     self.graph_out_channels as usize,
                 ),
@@ -1006,7 +1006,7 @@ impl AudioGraph {
                 }
             }
 
-            if modified_params.len() > 0 {
+            if !modified_params.is_empty() {
                 if let Some(event_tx) = event_tx.as_ref() {
                     event_tx
                         .send(DSEngineEvent::Plugin(PluginEvent::ParamsModified {

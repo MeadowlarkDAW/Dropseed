@@ -90,12 +90,12 @@ pub(crate) struct SharedBuffer<T: Clone + Copy + Send + 'static> {
 
 impl<T: Clone + Copy + Send + 'static> SharedBuffer<T> {
     #[inline]
-    pub fn borrow<'a>(&'a self) -> AtomicRef<'a, Vec<T>> {
+    pub fn borrow(&self) -> AtomicRef<Vec<T>> {
         self.buffer.data.borrow()
     }
 
     #[inline]
-    pub fn borrow_mut<'a>(&'a self) -> AtomicRefMut<'a, Vec<T>> {
+    pub fn borrow_mut(&self) -> AtomicRefMut<Vec<T>> {
         self.buffer.data.borrow_mut()
     }
 
@@ -254,12 +254,11 @@ impl Hash for PluginInstanceID {
 
 pub(crate) struct SharedPluginHostAudioThread {
     pub plugin: Shared<AtomicRefCell<PluginInstanceHostAudioThread>>,
-    pub task_version: u64,
 }
 
 impl SharedPluginHostAudioThread {
     pub fn new(plugin: PluginInstanceHostAudioThread, coll_handle: &basedrop::Handle) -> Self {
-        Self { plugin: Shared::new(coll_handle, AtomicRefCell::new(plugin)), task_version: 0 }
+        Self { plugin: Shared::new(coll_handle, AtomicRefCell::new(plugin)) }
     }
 }
 
@@ -271,7 +270,7 @@ impl SharedPluginHostAudioThread {
 
 impl Clone for SharedPluginHostAudioThread {
     fn clone(&self) -> Self {
-        Self { plugin: Shared::clone(&self.plugin), task_version: self.task_version + 1 }
+        Self { plugin: Shared::clone(&self.plugin) }
     }
 }
 

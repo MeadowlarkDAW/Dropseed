@@ -143,7 +143,7 @@ impl TransportTask {
 
         let playhead_frame = tempo_map.musical_to_nearest_frame_round(save_state.seek_to);
         let playhead_frame_shared = Arc::new(AtomicU64::new(playhead_frame.0));
-        let loop_state = save_state.loop_state.to_proc(&tempo_map);
+        let loop_state = save_state.loop_state.as_proc_info(&tempo_map);
 
         let (loop_start_beats, loop_end_beats, loop_start_seconds, loop_end_seconds) =
             if let LoopState::Active { loop_start, loop_end } = &save_state.loop_state {
@@ -559,7 +559,7 @@ pub enum LoopState {
 }
 
 impl LoopState {
-    fn to_proc(&self, tempo_map: &TempoMap) -> LoopStateProcInfo {
+    fn as_proc_info(&self, tempo_map: &TempoMap) -> LoopStateProcInfo {
         match self {
             LoopState::Inactive => LoopStateProcInfo::Inactive,
             &LoopState::Active { loop_start, loop_end } => LoopStateProcInfo::Active {

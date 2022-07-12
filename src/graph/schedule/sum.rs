@@ -40,7 +40,7 @@ impl SumTask {
 
                 let in_0 = &in_0_ref[0..proc_info.frames];
 
-                out.copy_from_slice(&in_0);
+                out.copy_from_slice(in_0);
             }
             2 => {
                 let in_0_ref = self.audio_in[0].borrow();

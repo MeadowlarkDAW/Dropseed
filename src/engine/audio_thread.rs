@@ -74,7 +74,7 @@ impl DSEngineAudioThread {
         let num_frames_wanted =
             if in_channels == 0 { Some(Arc::new(AtomicU32::new(0))) } else { None };
 
-        let num_frames_wanted_clone = num_frames_wanted.as_ref().map(|n| Arc::clone(n));
+        let num_frames_wanted_clone = num_frames_wanted.as_ref().map(Arc::clone);
 
         let sample_rate_recip = 1.0 / sample_rate.as_f64();
 

@@ -334,19 +334,17 @@ pub(crate) fn show_effect_rack_plugin(
                                         values_to_set.push((param.id, value as f64));
                                         param.value = value as f64;
                                     }
-                                } else {
-                                    if ui
-                                        .add(
-                                            egui::Slider::new(
-                                                &mut param.value,
-                                                param.min_value..=param.max_value,
-                                            )
-                                            .text(&param.display_name),
+                                } else if ui
+                                    .add(
+                                        egui::Slider::new(
+                                            &mut param.value,
+                                            param.min_value..=param.max_value,
                                         )
-                                        .changed()
-                                    {
-                                        values_to_set.push((param.id, param.value))
-                                    }
+                                        .text(&param.display_name),
+                                    )
+                                    .changed()
+                                {
+                                    values_to_set.push((param.id, param.value))
                                 }
 
                                 if param.is_gesturing {
