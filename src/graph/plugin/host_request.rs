@@ -143,7 +143,7 @@ impl HostRequest {
     /// Checks if the host allows a plugin to change a given aspect of the audio ports definition.
     ///
     /// [main-thread]
-    pub fn is_rescan_audio_ports_flag_supported(&self, flag: AudioPortRescanFlags) -> bool {
+    pub fn is_rescan_audio_ports_flag_supported(&self, _flag: AudioPortRescanFlags) -> bool {
         // todo
         false
     }
@@ -163,11 +163,11 @@ impl HostRequest {
     /// Certain flags require the plugin to be de-activated.
     ///
     /// [main-thread]
-    pub fn rescan_audio_ports(&self, flags: AudioPortRescanFlags) {
+    pub fn rescan_audio_ports(&self, _flags: AudioPortRescanFlags) {
         // todo
     }
 
-    pub fn rescan_note_ports(&self, flags: NotePortRescanFlags) {
+    pub fn rescan_note_ports(&self, _flags: NotePortRescanFlags) {
         // todo
     }
 
@@ -229,6 +229,8 @@ impl HostRequest {
         let _ = self.request_flags.fetch_and(!RequestFlags::DEACTIVATE.bits(), Ordering::SeqCst);
     }
 
+    #[allow(unused)]
+    // TODO: Use this.
     pub(crate) fn reset_rescan_audio_ports(&self) {
         // TODO: Are we able to use relaxed ordering here?
         let _ = self
@@ -236,6 +238,8 @@ impl HostRequest {
             .fetch_and(!RequestFlags::RESCAN_AUDIO_PORTS.bits(), Ordering::SeqCst);
     }
 
+    #[allow(unused)]
+    // TODO: Use this.
     pub(crate) fn reset_rescan_note_ports(&self) {
         // TODO: Are we able to use relaxed ordering here?
         let _ =

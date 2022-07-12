@@ -50,25 +50,25 @@ impl TempoMap {
         }
     }
 
-    pub fn bpm_at_musical_time(&self, musical_time: MusicalTime) -> f64 {
+    pub fn bpm_at_musical_time(&self, _musical_time: MusicalTime) -> f64 {
         // temporary static tempo
         self.beats_per_second * 60.0
     }
 
     /// `(tempo in bpm, tempo increment for each sample until the next time info event)
-    pub fn bpm_at_frame(&self, frame: Frames) -> (f64, f64) {
+    pub fn bpm_at_frame(&self, _frame: Frames) -> (f64, f64) {
         // temporary static tempo
         (self.beats_per_second * 60.0, 0.0)
     }
 
     /// `(numerator, denomitator)`
-    pub fn tsig_at_musical_time(&self, musical_time: MusicalTime) -> (u16, u16) {
+    pub fn tsig_at_musical_time(&self, _musical_time: MusicalTime) -> (u16, u16) {
         // temporary static time signature
         (self.tsig_num, self.tsig_denom)
     }
 
     /// `(numerator, denomitator)`
-    pub fn tsig_at_frame(&self, frame: Frames) -> (u16, u16) {
+    pub fn tsig_at_frame(&self, _frame: Frames) -> (u16, u16) {
         // temporary static time signature
         (self.tsig_num, self.tsig_denom)
     }
