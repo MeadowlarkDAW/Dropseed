@@ -250,7 +250,7 @@ impl PluginScanner {
                             let v = f.clap_version;
                             let format_version = format!("{}.{}.{}", v.major, v.minor, v.revision);
 
-                            log::info!(
+                            log::debug!(
                                 "Successfully scanned CLAP plugin with ID: {}, version {}, and CLAP version {}",
                                 &id,
                                 &f.description().version,
