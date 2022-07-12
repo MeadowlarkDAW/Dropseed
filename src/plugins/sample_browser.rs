@@ -18,7 +18,7 @@ use crate::{
 
 pub static SAMPLE_BROWSER_PLUG_RDN: &'static str = "app.meadowlark.sample-browser";
 
-static DECLICK_TIME: Seconds = Seconds(5.0 / 1000.0);
+static DECLICK_TIME: Seconds = Seconds(30.0 / 1000.0);
 
 const MSG_BUFFER_SIZE: usize = 64;
 
@@ -373,6 +373,8 @@ impl PluginAudioThread for SampleBrowserPlugAudioThread {
         let buf_l_part = &mut buf_l[0..proc_info.frames];
         let buf_r_part = &mut buf_r[0..proc_info.frames];
 
+        let mut apply_gain = false;
+
         if let PlayState::Playing { mut playhead } = self.play_state {
             let pcm = self.pcm.as_ref().unwrap();
 
@@ -380,6 +382,8 @@ impl PluginAudioThread for SampleBrowserPlugAudioThread {
                 pcm.fill_stereo_f32(playhead as isize, buf_l_part, buf_r_part);
 
                 playhead += proc_info.frames;
+
+                apply_gain = true;
 
                 self.play_state = PlayState::Playing { playhead }
             } else {
@@ -414,6 +418,8 @@ impl PluginAudioThread for SampleBrowserPlugAudioThread {
                 );
 
                 old_playhead += proc_info.frames;
+
+                apply_gain = true;
             } else {
                 running = false;
             }
