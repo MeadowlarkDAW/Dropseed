@@ -161,21 +161,26 @@ impl Schedule {
     }
 }
 
-struct ScheduleWrapper {
-    schedule: AtomicRefCell<Schedule>,
-}
-
-// Required because of basedrop's `SharedCell` container.
+// Required so we can send the schedule from the main thread to the process
+// thread.
 //
-// Safe because the schedule is only ever borrowed by the main process thread.
-unsafe impl Send for ScheduleWrapper {}
-// Required because of basedrop's `SharedCell` container.
+// This is safe because the schedule is only ever dereferenced in the process
+// thread. The only reason why the main thread holds onto these shared
+// pointers of buffers and `PluginAudioThread`s is so it can construct new
+// schedules with them. The main thread never dereferences these pointers.
+unsafe impl Send for Schedule {}
+// Required so we can send the schedule from the main thread to the process
+// thread. The fact that the main thread holds onto shared pointers of
+// buffers and `PluginAudioThread`s requires this to be `Sync` as well.
 //
-// Safe because the schedule is only ever borrowed by the main process thread.
-unsafe impl Sync for ScheduleWrapper {}
+// This is safe because the schedule is only ever dereferenced in the process
+// thread. The only reason why the main thread holds onto these shared
+// pointers of buffers and `PluginAudioThread`s is so it can construct new
+// schedules with them. The main thread never dereferences these pointers.
+unsafe impl Sync for Schedule {}
 
 pub(crate) struct SharedSchedule {
-    schedule: Shared<SharedCell<ScheduleWrapper>>,
+    schedule: Shared<SharedCell<AtomicRefCell<Schedule>>>,
     thread_ids: SharedThreadIDs,
     coll_handle: basedrop::Handle,
 }
@@ -195,10 +200,7 @@ impl SharedSchedule {
     ) -> (Self, Self) {
         let schedule = Shared::new(
             coll_handle,
-            SharedCell::new(Shared::new(
-                coll_handle,
-                ScheduleWrapper { schedule: AtomicRefCell::new(schedule) },
-            )),
+            SharedCell::new(Shared::new(coll_handle, AtomicRefCell::new(schedule))),
         );
 
         (
@@ -212,10 +214,7 @@ impl SharedSchedule {
     }
 
     pub(crate) fn set_new_schedule(&mut self, schedule: Schedule, coll_handle: &basedrop::Handle) {
-        self.schedule.set(Shared::new(
-            coll_handle,
-            ScheduleWrapper { schedule: AtomicRefCell::new(schedule) },
-        ));
+        self.schedule.set(Shared::new(coll_handle, AtomicRefCell::new(schedule)));
     }
 
     pub(crate) fn process_interleaved(
@@ -227,7 +226,7 @@ impl SharedSchedule {
     ) {
         let latest_schedule = self.schedule.get();
 
-        let mut schedule = latest_schedule.schedule.borrow_mut();
+        let mut schedule = latest_schedule.borrow_mut();
 
         // TODO: Set this in the sandbox thread once we implement plugin sandboxing.
         // Make sure the the audio thread ID is correct.

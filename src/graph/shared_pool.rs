@@ -48,13 +48,13 @@ impl std::fmt::Debug for DebugBufferID {
     }
 }
 
-pub(crate) struct Buffer<T: Clone + Copy + Send + 'static> {
+pub(crate) struct Buffer<T: Clone + Copy + Send + Sync + 'static> {
     pub data: AtomicRefCell<Vec<T>>,
     pub is_constant: AtomicBool,
     pub debug_id: DebugBufferID,
 }
 
-impl<T: Clone + Copy + Send + 'static> Buffer<T> {
+impl<T: Clone + Copy + Send + Sync + 'static> Buffer<T> {
     pub fn new(max_frames: usize, debug_id: DebugBufferID) -> Self {
         Self {
             data: AtomicRefCell::new(Vec::with_capacity(max_frames)),
@@ -86,11 +86,11 @@ impl Buffer<f64> {
     }
 }
 
-pub(crate) struct SharedBuffer<T: Clone + Copy + Send + 'static> {
+pub(crate) struct SharedBuffer<T: Clone + Copy + Send + Sync + 'static> {
     pub buffer: Shared<Buffer<T>>,
 }
 
-impl<T: Clone + Copy + Send + 'static> SharedBuffer<T> {
+impl<T: Clone + Copy + Send + Sync + 'static> SharedBuffer<T> {
     #[inline]
     pub fn borrow(&self) -> AtomicRef<Vec<T>> {
         self.buffer.data.borrow()
@@ -144,7 +144,7 @@ impl SharedBuffer<f64> {
     }
 }
 
-impl<T: Clone + Copy + Send + 'static> Clone for SharedBuffer<T> {
+impl<T: Clone + Copy + Send + Sync + 'static> Clone for SharedBuffer<T> {
     fn clone(&self) -> Self {
         Self { buffer: Shared::clone(&self.buffer) }
     }

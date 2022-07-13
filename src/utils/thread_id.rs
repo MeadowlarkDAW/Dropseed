@@ -50,6 +50,7 @@ impl SharedThreadIDs {
         }
     }
 
+    /*
     pub fn is_external_audio_thread(&self) -> bool {
         if let Some(external_audio_thread_id) = *self.external_audio_thread_id.get() {
             std::thread::current().id() == external_audio_thread_id
@@ -57,6 +58,7 @@ impl SharedThreadIDs {
             false
         }
     }
+    */
 
     pub fn set_external_main_thread_id(&self, id: ThreadId, coll_handle: &basedrop::Handle) {
         self.external_main_thread_id.set(Shared::new(coll_handle, Some(id)));

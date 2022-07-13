@@ -582,6 +582,7 @@ pub(crate) struct ClapHostMainThread<'plugin> {
 }
 
 impl<'plugin> ClapHostMainThread<'plugin> {
+    #[allow(unused)]
     fn param_flush(&mut self, in_events: &EventBuffer, out_events: &mut EventBuffer) {
         let params_ext = match self.shared.params_ext {
             None => return,
