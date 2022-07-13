@@ -1,7 +1,8 @@
+pub mod convert;
 mod decode;
 pub mod loader;
 
-pub use loader::{PcmKey, PcmLoadError, PcmLoader};
+pub use loader::{PcmKey, PcmLoadError, PcmLoader, ResampleQuality};
 use meadowlark_core_types::{Frames, SampleRate};
 
 pub struct PcmResource {
@@ -18,9 +19,13 @@ pub struct PcmResource {
 pub enum PcmResourceType {
     U8(Vec<Vec<u8>>),
     U16(Vec<Vec<u16>>),
+    /// The endianness of the samples must be the native endianness of the
+    /// target platform.
     U24(Vec<Vec<[u8; 3]>>),
     S8(Vec<Vec<i8>>),
     S16(Vec<Vec<i16>>),
+    /// The endianness of the samples must be the native endianness of the
+    /// target platform.
     S24(Vec<Vec<[u8; 3]>>),
     F32(Vec<Vec<f32>>),
     F64(Vec<Vec<f64>>),
@@ -84,8 +89,8 @@ impl PcmResource {
 
                 assert_eq!(buf_part.len(), pcm_part.len());
 
-                for (b, p) in buf_part.iter_mut().zip(pcm_part.iter()) {
-                    *b = ((f32::from(*p)) * (2.0 / std::u8::MAX as f32)) - 1.0;
+                for (b, s) in buf_part.iter_mut().zip(pcm_part.iter()) {
+                    *b = convert::pcm_u8_to_f32(*s);
                 }
             }
             PcmResourceType::U16(pcm) => {
@@ -95,7 +100,7 @@ impl PcmResource {
                 assert_eq!(buf_part.len(), pcm_part.len());
 
                 for (b, p) in buf_part.iter_mut().zip(pcm_part.iter()) {
-                    *b = ((f32::from(*p)) * (2.0 / std::u16::MAX as f32)) - 1.0;
+                    *b = convert::pcm_u16_to_f32(*p);
                 }
             }
             PcmResourceType::U24(pcm) => {
@@ -104,24 +109,8 @@ impl PcmResource {
 
                 assert_eq!(buf_part.len(), pcm_part.len());
 
-                if cfg!(target_endian = "little") {
-                    for (b, p) in buf_part.iter_mut().zip(pcm_part.iter()) {
-                        // In little-endian the MSB is the last byte.
-                        let bytes = [p[0], p[1], p[2], 0];
-
-                        let val = u32::from_ne_bytes(bytes);
-
-                        *b = ((f64::from(val) * (2.0 / 16_777_215.0)) - 1.0) as f32;
-                    }
-                } else {
-                    for (b, p) in buf_part.iter_mut().zip(pcm_part.iter()) {
-                        // In big-endian the MSB is the first byte.
-                        let bytes = [0, p[0], p[1], p[2]];
-
-                        let val = u32::from_ne_bytes(bytes);
-
-                        *b = ((f64::from(val) * (2.0 / 16_777_215.0)) - 1.0) as f32;
-                    }
+                for (b, p) in buf_part.iter_mut().zip(pcm_part.iter()) {
+                    *b = convert::pcm_u24_to_f32_ne(*p);
                 }
             }
             PcmResourceType::S8(pcm) => {
@@ -131,7 +120,7 @@ impl PcmResource {
                 assert_eq!(buf_part.len(), pcm_part.len());
 
                 for (b, p) in buf_part.iter_mut().zip(pcm_part.iter()) {
-                    *b = f32::from(*p) / std::i8::MAX as f32;
+                    *b = convert::pcm_s8_to_f32(*p);
                 }
             }
             PcmResourceType::S16(pcm) => {
@@ -141,7 +130,7 @@ impl PcmResource {
                 assert_eq!(buf_part.len(), pcm_part.len());
 
                 for (b, p) in buf_part.iter_mut().zip(pcm_part.iter()) {
-                    *b = f32::from(*p) / std::i16::MAX as f32;
+                    *b = convert::pcm_s16_to_f32(*p);
                 }
             }
             PcmResourceType::S24(pcm) => {
@@ -150,24 +139,8 @@ impl PcmResource {
 
                 assert_eq!(buf_part.len(), pcm_part.len());
 
-                if cfg!(target_endian = "little") {
-                    for (b, p) in buf_part.iter_mut().zip(pcm_part.iter()) {
-                        // In little-endian the MSB is the last byte.
-                        let bytes = [p[0], p[1], p[2], 0];
-
-                        let val = i32::from_ne_bytes(bytes);
-
-                        *b = (f64::from(val) / 8_388_607.0) as f32;
-                    }
-                } else {
-                    for (b, p) in buf_part.iter_mut().zip(pcm_part.iter()) {
-                        // In big-endian the MSB is the first byte.
-                        let bytes = [0, p[0], p[1], p[2]];
-
-                        let val = i32::from_ne_bytes(bytes);
-
-                        *b = (f64::from(val) / 8_388_607.0) as f32;
-                    }
+                for (b, p) in buf_part.iter_mut().zip(pcm_part.iter()) {
+                    *b = convert::pcm_s24_to_f32_ne(*p);
                 }
             }
             PcmResourceType::F32(pcm) => {
@@ -250,143 +223,97 @@ impl PcmResource {
                 let buf_l_part = &mut buf_l[buf_range.clone()];
                 let buf_r_part = &mut buf_r[buf_range];
                 let pcm_l_part = &pcm[0][pcm_range.clone()];
-                let pcm_r_part = &pcm[0][pcm_range];
+                let pcm_r_part = &pcm[1][pcm_range];
 
                 assert_eq!(buf_l_part.len(), pcm_l_part.len());
                 assert_eq!(buf_r_part.len(), pcm_r_part.len());
                 assert_eq!(buf_l_part.len(), buf_r_part.len());
 
                 for i in 0..buf_l_part.len() {
-                    buf_l_part[i] =
-                        ((f32::from(pcm_l_part[i])) * (2.0 / std::u8::MAX as f32)) - 1.0;
-                    buf_r_part[i] =
-                        ((f32::from(pcm_r_part[i])) * (2.0 / std::u8::MAX as f32)) - 1.0;
+                    buf_l_part[i] = convert::pcm_u8_to_f32(pcm_l_part[i]);
+                    buf_r_part[i] = convert::pcm_u8_to_f32(pcm_r_part[i]);
                 }
             }
             PcmResourceType::U16(pcm) => {
                 let buf_l_part = &mut buf_l[buf_range.clone()];
                 let buf_r_part = &mut buf_r[buf_range];
                 let pcm_l_part = &pcm[0][pcm_range.clone()];
-                let pcm_r_part = &pcm[0][pcm_range];
+                let pcm_r_part = &pcm[1][pcm_range];
 
                 assert_eq!(buf_l_part.len(), pcm_l_part.len());
                 assert_eq!(buf_r_part.len(), pcm_r_part.len());
                 assert_eq!(buf_l_part.len(), buf_r_part.len());
 
                 for i in 0..buf_l_part.len() {
-                    buf_l_part[i] =
-                        ((f32::from(pcm_l_part[i])) * (2.0 / std::u16::MAX as f32)) - 1.0;
-                    buf_r_part[i] =
-                        ((f32::from(pcm_r_part[i])) * (2.0 / std::u16::MAX as f32)) - 1.0;
+                    buf_l_part[i] = convert::pcm_u16_to_f32(pcm_l_part[i]);
+                    buf_r_part[i] = convert::pcm_u16_to_f32(pcm_r_part[i]);
                 }
             }
             PcmResourceType::U24(pcm) => {
                 let buf_l_part = &mut buf_l[buf_range.clone()];
                 let buf_r_part = &mut buf_r[buf_range];
                 let pcm_l_part = &pcm[0][pcm_range.clone()];
-                let pcm_r_part = &pcm[0][pcm_range];
+                let pcm_r_part = &pcm[1][pcm_range];
 
                 assert_eq!(buf_l_part.len(), pcm_l_part.len());
                 assert_eq!(buf_r_part.len(), pcm_r_part.len());
                 assert_eq!(buf_l_part.len(), buf_r_part.len());
 
-                if cfg!(target_endian = "little") {
-                    for i in 0..buf_l_part.len() {
-                        // In little-endian the MSB is the last byte.
-                        let bytes_l = [pcm_l_part[i][0], pcm_l_part[i][1], pcm_l_part[i][2], 0];
-                        let bytes_r = [pcm_r_part[i][0], pcm_r_part[i][1], pcm_r_part[i][2], 0];
-
-                        let val_l = u32::from_ne_bytes(bytes_l);
-                        let val_r = u32::from_ne_bytes(bytes_r);
-
-                        buf_l_part[i] = ((f64::from(val_l) * (2.0 / 16_777_215.0)) - 1.0) as f32;
-                        buf_r_part[i] = ((f64::from(val_r) * (2.0 / 16_777_215.0)) - 1.0) as f32;
-                    }
-                } else {
-                    for i in 0..buf_l_part.len() {
-                        // In big-endian the MSB is the first byte.
-                        let bytes_l = [0, pcm_l_part[i][0], pcm_l_part[i][1], pcm_l_part[i][2]];
-                        let bytes_r = [0, pcm_r_part[i][0], pcm_r_part[i][1], pcm_r_part[i][2]];
-
-                        let val_l = u32::from_ne_bytes(bytes_l);
-                        let val_r = u32::from_ne_bytes(bytes_r);
-
-                        buf_l_part[i] = ((f64::from(val_l) * (2.0 / 16_777_215.0)) - 1.0) as f32;
-                        buf_r_part[i] = ((f64::from(val_r) * (2.0 / 16_777_215.0)) - 1.0) as f32;
-                    }
+                for i in 0..buf_l_part.len() {
+                    buf_l_part[i] = convert::pcm_u24_to_f32_ne(pcm_l_part[i]);
+                    buf_r_part[i] = convert::pcm_u24_to_f32_ne(pcm_r_part[i]);
                 }
             }
             PcmResourceType::S8(pcm) => {
                 let buf_l_part = &mut buf_l[buf_range.clone()];
                 let buf_r_part = &mut buf_r[buf_range];
                 let pcm_l_part = &pcm[0][pcm_range.clone()];
-                let pcm_r_part = &pcm[0][pcm_range];
+                let pcm_r_part = &pcm[1][pcm_range];
 
                 assert_eq!(buf_l_part.len(), pcm_l_part.len());
                 assert_eq!(buf_r_part.len(), pcm_r_part.len());
                 assert_eq!(buf_l_part.len(), buf_r_part.len());
 
                 for i in 0..buf_l_part.len() {
-                    buf_l_part[i] = f32::from(pcm_l_part[i]) / std::i8::MAX as f32;
-                    buf_r_part[i] = f32::from(pcm_r_part[i]) / std::i8::MAX as f32;
+                    buf_l_part[i] = convert::pcm_s8_to_f32(pcm_l_part[i]);
+                    buf_r_part[i] = convert::pcm_s8_to_f32(pcm_r_part[i]);
                 }
             }
             PcmResourceType::S16(pcm) => {
                 let buf_l_part = &mut buf_l[buf_range.clone()];
                 let buf_r_part = &mut buf_r[buf_range];
                 let pcm_l_part = &pcm[0][pcm_range.clone()];
-                let pcm_r_part = &pcm[0][pcm_range];
+                let pcm_r_part = &pcm[1][pcm_range];
 
                 assert_eq!(buf_l_part.len(), pcm_l_part.len());
                 assert_eq!(buf_r_part.len(), pcm_r_part.len());
                 assert_eq!(buf_l_part.len(), buf_r_part.len());
 
                 for i in 0..buf_l_part.len() {
-                    buf_l_part[i] = f32::from(pcm_l_part[i]) / std::i16::MAX as f32;
-                    buf_r_part[i] = f32::from(pcm_r_part[i]) / std::i16::MAX as f32;
+                    buf_l_part[i] = convert::pcm_s16_to_f32(pcm_l_part[i]);
+                    buf_r_part[i] = convert::pcm_s16_to_f32(pcm_r_part[i]);
                 }
             }
             PcmResourceType::S24(pcm) => {
                 let buf_l_part = &mut buf_l[buf_range.clone()];
                 let buf_r_part = &mut buf_r[buf_range];
                 let pcm_l_part = &pcm[0][pcm_range.clone()];
-                let pcm_r_part = &pcm[0][pcm_range];
+                let pcm_r_part = &pcm[1][pcm_range];
 
                 assert_eq!(buf_l_part.len(), pcm_l_part.len());
                 assert_eq!(buf_r_part.len(), pcm_r_part.len());
                 assert_eq!(buf_l_part.len(), buf_r_part.len());
 
-                if cfg!(target_endian = "little") {
-                    for i in 0..buf_l_part.len() {
-                        // In little-endian the MSB is the last byte.
-                        let bytes_l = [pcm_l_part[i][0], pcm_l_part[i][1], pcm_l_part[i][2], 0];
-                        let bytes_r = [pcm_r_part[i][0], pcm_r_part[i][1], pcm_r_part[i][2], 0];
-
-                        let val_l = i32::from_ne_bytes(bytes_l);
-                        let val_r = i32::from_ne_bytes(bytes_r);
-
-                        buf_l_part[i] = (f64::from(val_l) / 8_388_607.0) as f32;
-                        buf_r_part[i] = (f64::from(val_r) / 8_388_607.0) as f32;
-                    }
-                } else {
-                    for i in 0..buf_l_part.len() {
-                        // In big-endian the MSB is the first byte.
-                        let bytes_l = [0, pcm_l_part[i][0], pcm_l_part[i][1], pcm_l_part[i][2]];
-                        let bytes_r = [0, pcm_r_part[i][0], pcm_r_part[i][1], pcm_r_part[i][2]];
-
-                        let val_l = i32::from_ne_bytes(bytes_l);
-                        let val_r = i32::from_ne_bytes(bytes_r);
-
-                        buf_l_part[i] = (f64::from(val_l) / 8_388_607.0) as f32;
-                        buf_r_part[i] = (f64::from(val_r) / 8_388_607.0) as f32;
-                    }
+                for i in 0..buf_l_part.len() {
+                    buf_l_part[i] = convert::pcm_s24_to_f32_ne(pcm_l_part[i]);
+                    buf_r_part[i] = convert::pcm_s24_to_f32_ne(pcm_r_part[i]);
                 }
             }
             PcmResourceType::F32(pcm) => {
                 let buf_l_part = &mut buf_l[buf_range.clone()];
                 let buf_r_part = &mut buf_r[buf_range];
                 let pcm_l_part = &pcm[0][pcm_range.clone()];
-                let pcm_r_part = &pcm[0][pcm_range];
+                let pcm_r_part = &pcm[1][pcm_range];
 
                 assert_eq!(buf_l_part.len(), pcm_l_part.len());
                 assert_eq!(buf_r_part.len(), pcm_r_part.len());
@@ -399,7 +326,7 @@ impl PcmResource {
                 let buf_l_part = &mut buf_l[buf_range.clone()];
                 let buf_r_part = &mut buf_r[buf_range];
                 let pcm_l_part = &pcm[0][pcm_range.clone()];
-                let pcm_r_part = &pcm[0][pcm_range];
+                let pcm_r_part = &pcm[1][pcm_range];
 
                 assert_eq!(buf_l_part.len(), pcm_l_part.len());
                 assert_eq!(buf_r_part.len(), pcm_r_part.len());

@@ -1,7 +1,7 @@
 use basedrop::{Owned, Shared};
 use clack_host::events::event_types::ParamValueEvent;
 use meadowlark_core_types::{
-    ParamF32, ParamF32Handle, SampleRate, Unit, DEFAULT_DB_GRADIENT, DEFAULT_SMOOTH_SECS,
+    ParamF32, ParamF32Handle, SampleRate, Seconds, Unit, DEFAULT_DB_GRADIENT, DEFAULT_SMOOTH_SECS,
 };
 use rtrb::{Consumer, Producer, RingBuffer};
 use serde::{Deserialize, Serialize};
@@ -19,7 +19,12 @@ use crate::{
 
 pub static SAMPLE_BROWSER_PLUG_RDN: &str = "app.meadowlark.sample-browser";
 
-const MSG_BUFFER_SIZE: usize = 16;
+static DECLICK_TIME: Seconds = Seconds(30.0 / 1000.0);
+
+const MSG_BUFFER_SIZE: usize = 64;
+
+// TODO: Use disk streaming with `clack` for sample playback instead of loading
+// the whole file upfront in the UI.
 
 pub struct SampleBrowserPlugFactory;
 
@@ -79,10 +84,6 @@ impl SampleBrowserPlugHandle {
         self.send(ProcessMsg::Stop);
     }
 
-    pub fn discard_sample(&mut self) {
-        self.send(ProcessMsg::DiscardSample);
-    }
-
     fn send(&mut self, msg: ProcessMsg) {
         if let Err(e) = self.to_audio_thread_tx.push(msg) {
             log::error!("Sample browser plugin failed to send message: {}", e);
@@ -94,7 +95,6 @@ enum ProcessMsg {
     PlayNewSample { pcm: Shared<PcmResource> },
     ReplaySample,
     Stop,
-    DiscardSample,
 }
 
 struct ParamsHandle {
@@ -169,13 +169,24 @@ impl PluginMainThread for SampleBrowserPlugMainThread {
         let (to_audio_thread_tx, from_handle_rx) = RingBuffer::<ProcessMsg>::new(MSG_BUFFER_SIZE);
         let from_handle_rx = Owned::new(coll_handle, from_handle_rx);
 
+        let declick_frames = DECLICK_TIME.to_nearest_frame_round(sample_rate).0 as usize;
+        let declick_dec = 1.0 / declick_frames as f32;
+
+        let declick_buf_l = Owned::new(coll_handle, vec![0.0; max_frames as usize]);
+        let declick_buf_r = Owned::new(coll_handle, vec![0.0; max_frames as usize]);
+
         Ok(PluginActivatedInfo {
             audio_thread: Box::new(SampleBrowserPlugAudioThread {
                 params,
                 from_handle_rx,
+                play_state: PlayState::Stopped,
+                declick_state: DeclickState::Stopped,
                 pcm: None,
-                is_playing: false,
-                playhead: 0,
+                old_pcm: None,
+                declick_dec,
+                declick_frames,
+                declick_buf_l,
+                declick_buf_r,
             }),
             internal_handle: Some(Box::new(SampleBrowserPlugHandle {
                 to_audio_thread_tx,
@@ -246,14 +257,34 @@ impl PluginMainThread for SampleBrowserPlugMainThread {
     }
 }
 
+#[derive(Clone, Copy)]
+enum PlayState {
+    Stopped,
+    Playing { playhead: usize },
+}
+
+#[derive(Clone, Copy)]
+enum DeclickState {
+    Stopped,
+    Running { old_playhead: usize, declick_gain: f32, declick_frames_left: usize },
+}
+
 pub struct SampleBrowserPlugAudioThread {
     params: Params,
 
     from_handle_rx: Owned<Consumer<ProcessMsg>>,
-    pcm: Option<Shared<PcmResource>>,
 
-    is_playing: bool,
-    playhead: usize,
+    play_state: PlayState,
+    declick_state: DeclickState,
+
+    pcm: Option<Shared<PcmResource>>,
+    old_pcm: Option<Shared<PcmResource>>,
+
+    declick_dec: f32,
+    declick_frames: usize,
+
+    declick_buf_l: Owned<Vec<f32>>,
+    declick_buf_r: Owned<Vec<f32>>,
 }
 
 impl SampleBrowserPlugAudioThread {
@@ -269,20 +300,52 @@ impl SampleBrowserPlugAudioThread {
         while let Ok(msg) = self.from_handle_rx.pop() {
             match msg {
                 ProcessMsg::PlayNewSample { pcm } => {
-                    self.pcm = Some(pcm);
-                    self.is_playing = true;
-                    self.playhead = 0;
+                    if let PlayState::Playing { playhead: old_playhead } = self.play_state {
+                        self.old_pcm = Some(self.pcm.take().unwrap());
+                        self.pcm = Some(pcm);
+
+                        self.declick_state = DeclickState::Running {
+                            old_playhead,
+                            declick_gain: 1.0,
+                            declick_frames_left: self.declick_frames,
+                        };
+
+                        self.play_state = PlayState::Playing { playhead: 0 };
+                    } else {
+                        self.pcm = Some(pcm);
+
+                        self.play_state = PlayState::Playing { playhead: 0 };
+                    }
                 }
                 ProcessMsg::ReplaySample => {
-                    self.is_playing = true;
-                    self.playhead = 0;
+                    if let PlayState::Playing { playhead: old_playhead } = self.play_state {
+                        self.old_pcm = Some(Shared::clone(self.pcm.as_ref().unwrap()));
+
+                        self.declick_state = DeclickState::Running {
+                            old_playhead,
+                            declick_gain: 1.0,
+                            declick_frames_left: self.declick_frames,
+                        };
+
+                        self.play_state = PlayState::Playing { playhead: 0 };
+                    } else if self.pcm.is_some() {
+                        self.play_state = PlayState::Playing { playhead: 0 };
+                    } else {
+                        self.play_state = PlayState::Stopped;
+                    }
                 }
                 ProcessMsg::Stop => {
-                    self.is_playing = false;
-                }
-                ProcessMsg::DiscardSample => {
-                    self.is_playing = false;
-                    self.pcm = None;
+                    if let PlayState::Playing { playhead: old_playhead } = self.play_state {
+                        self.old_pcm = Some(self.pcm.take().unwrap());
+
+                        self.declick_state = DeclickState::Running {
+                            old_playhead,
+                            declick_gain: 1.0,
+                            declick_frames_left: self.declick_frames,
+                        };
+
+                        self.play_state = PlayState::Stopped;
+                    }
                 }
             }
         }
@@ -305,33 +368,114 @@ impl PluginAudioThread for SampleBrowserPlugAudioThread {
     ) -> ProcessStatus {
         self.poll(in_events);
 
-        if self.is_playing && self.pcm.is_some() {
+        let (mut buf_l, mut buf_r) = buffers.audio_out[0].stereo_f32_mut().unwrap();
+
+        let buf_l_part = &mut buf_l[0..proc_info.frames];
+        let buf_r_part = &mut buf_r[0..proc_info.frames];
+
+        let mut apply_gain = false;
+
+        if let PlayState::Playing { mut playhead } = self.play_state {
             let pcm = self.pcm.as_ref().unwrap();
 
-            if self.playhead < pcm.len_frames.0 as usize {
-                let (mut buf_l, mut buf_r) = buffers.audio_out[0].stereo_f32_mut().unwrap();
+            if playhead < pcm.len_frames.0 as usize {
+                pcm.fill_stereo_f32(playhead as isize, buf_l_part, buf_r_part);
 
-                let buf_l_part = &mut buf_l[0..proc_info.frames];
-                let buf_r_part = &mut buf_r[0..proc_info.frames];
+                playhead += proc_info.frames;
 
-                pcm.fill_stereo_f32(self.playhead as isize, buf_l_part, buf_r_part);
+                apply_gain = true;
 
-                for i in 0..proc_info.frames {
-                    buf_l_part[i] *= 0.5;
-                    buf_r_part[i] *= 0.5;
+                self.play_state = PlayState::Playing { playhead }
+            } else {
+                buf_l_part.fill(0.0);
+                buf_r_part.fill(0.0);
+
+                self.play_state = PlayState::Stopped;
+            }
+        } else {
+            buf_l_part.fill(0.0);
+            buf_r_part.fill(0.0);
+        }
+
+        if let DeclickState::Running {
+            mut old_playhead,
+            mut declick_gain,
+            mut declick_frames_left,
+        } = self.declick_state
+        {
+            let old_pcm = self.old_pcm.as_ref().unwrap();
+
+            let mut running = true;
+
+            let declick_buf_l_part = &mut self.declick_buf_l[0..proc_info.frames];
+            let declick_buf_r_part = &mut self.declick_buf_r[0..proc_info.frames];
+
+            if old_playhead < old_pcm.len_frames.0 as usize {
+                old_pcm.fill_stereo_f32(
+                    old_playhead as isize,
+                    declick_buf_l_part,
+                    declick_buf_r_part,
+                );
+
+                old_playhead += proc_info.frames;
+
+                apply_gain = true;
+            } else {
+                running = false;
+            }
+
+            if running {
+                let declick_frames = proc_info.frames.min(declick_frames_left);
+
+                for i in 0..declick_frames {
+                    declick_gain -= self.declick_dec;
+
+                    buf_l_part[i] += declick_buf_l_part[i] * declick_gain;
+                    buf_r_part[i] += declick_buf_r_part[i] * declick_gain;
                 }
 
-                self.playhead += proc_info.frames;
+                declick_frames_left -= declick_frames;
 
-                return ProcessStatus::Continue;
+                if declick_frames_left == 0 {
+                    running = false;
+                }
+            }
+
+            if running {
+                self.declick_state =
+                    DeclickState::Running { old_playhead, declick_gain, declick_frames_left }
             } else {
-                self.is_playing = false;
+                self.declick_state = DeclickState::Stopped;
+                self.old_pcm = None;
             }
         }
 
-        buffers.audio_out[0].clear_all(proc_info.frames);
+        if apply_gain {
+            let gain = self.params.gain.smoothed(proc_info.frames);
+            if gain.is_smoothing() {
+                debug_assert!(gain.values.len() >= proc_info.frames);
 
-        ProcessStatus::Sleep
+                for i in 0..proc_info.frames {
+                    buf_l_part[i] *= gain.values[i];
+                    buf_r_part[i] *= gain.values[i];
+                }
+            } else if gain[0].abs() <= std::f32::EPSILON {
+                let g = gain[0];
+
+                for i in 0..proc_info.frames {
+                    buf_l_part[i] *= g;
+                    buf_r_part[i] *= g;
+                }
+            }
+        }
+
+        if let PlayState::Stopped = &self.play_state {
+            if let DeclickState::Stopped = &self.declick_state {
+                return ProcessStatus::Sleep;
+            }
+        }
+
+        ProcessStatus::Continue
     }
 
     fn param_flush(&mut self, in_events: &EventBuffer, _out_events: &mut EventBuffer) {

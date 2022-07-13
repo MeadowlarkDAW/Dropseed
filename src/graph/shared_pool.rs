@@ -75,6 +75,8 @@ impl Buffer<f32> {
 }
 
 impl Buffer<f64> {
+    #[allow(unused)]
+    // TODO: Support 64bit buffers in the audio graph.
     pub fn new_f64(max_frames: usize, debug_id: DebugBufferID) -> Self {
         Self {
             data: AtomicRefCell::new(vec![0.0; max_frames]),
@@ -109,11 +111,6 @@ impl<T: Clone + Copy + Send + 'static> SharedBuffer<T> {
     pub fn is_constant(&self) -> bool {
         // TODO: Can we use relaxed ordering?
         self.buffer.is_constant.load(Ordering::SeqCst)
-    }
-
-    #[inline]
-    pub fn max_frames(&self) -> usize {
-        self.borrow().len()
     }
 
     pub fn id(&self) -> &DebugBufferID {

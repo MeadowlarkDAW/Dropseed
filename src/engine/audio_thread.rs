@@ -14,8 +14,6 @@ use crate::graph::schedule::SharedSchedule;
 // Allocate enough for at-least 3 seconds of buffer time.
 static ALLOCATED_FRAMES_PER_CHANNEL: usize = 192_000 * 3;
 
-static AUDIO_THREAD_POLL_INTERVAL: Duration = Duration::from_micros(5);
-
 /// Make sure we have a bit of time to copy the engine's output buffer to the
 /// audio thread's output buffer.
 static COPY_OUT_TIME_WINDOW: f64 = 0.9;
@@ -107,6 +105,15 @@ impl DSEngineAudioThread {
         cpal_out_channels: usize,
         out: &mut [T],
     ) {
+        // TODO: Use some kind of interrupt to activate the thread as apposed
+        // to potentially pinning a whole CPU core just waiting for the process
+        // thread to finish?
+        //
+        // Note that I already tried the method of calling `thread::sleep()` for
+        // a short amount of time while the process thread is still running, but
+        // apparently Windows does not like it when you call `thread::sleep()` on
+        // a high-priority thread (underruns galore).
+
         let clear_output = |out: &mut [T]| {
             for s in out.iter_mut() {
                 *s = T::from(&0.0);
@@ -201,8 +208,6 @@ impl DSEngineAudioThread {
                 chunk.commit_all();
                 return;
             }
-
-            std::thread::sleep(AUDIO_THREAD_POLL_INTERVAL);
         }
 
         log::trace!("underrun");

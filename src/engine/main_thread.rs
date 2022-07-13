@@ -353,6 +353,9 @@ impl DSEngineMainThread {
                 if let Err(e) = audio_graph.connect_edge(edge, src_plugin_id, dst_plugin_id) {
                     if edge.log_error_on_fail {
                         log::error!("Could not connect edge: {}", e);
+                    } else {
+                        #[cfg(debug_assertions)]
+                        log::debug!("Could not connect edge: {}", e);
                     }
                 } else {
                     // These will always be true.

@@ -223,6 +223,8 @@ impl HostRequest {
         let _ = self.request_flags.fetch_and(!RequestFlags::DEACTIVATE.bits(), Ordering::SeqCst);
     }
 
+    #[allow(unused)]
+    // TODO: Use this.
     pub(crate) fn reset_rescan_audio_ports(&self) {
         // TODO: Are we able to use relaxed ordering here?
         let _ = self
@@ -230,6 +232,8 @@ impl HostRequest {
             .fetch_and(!RequestFlags::RESCAN_AUDIO_PORTS.bits(), Ordering::SeqCst);
     }
 
+    #[allow(unused)]
+    // TODO: Use this.
     pub(crate) fn reset_rescan_note_ports(&self) {
         // TODO: Are we able to use relaxed ordering here?
         let _ =
