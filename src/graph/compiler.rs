@@ -56,7 +56,7 @@ pub(crate) fn compile_graph(
             (
                 entry.plugin_host.num_audio_in_channels,
                 entry.plugin_host.num_audio_out_channels,
-                entry.audio_thread.as_ref(),
+                entry.plugin_host.audio_thread.as_ref(),
                 entry.plugin_host.audio_ports_ext(),
                 entry.plugin_host.note_ports_ext(),
             )

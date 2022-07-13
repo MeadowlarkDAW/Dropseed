@@ -27,7 +27,6 @@ use crate::engine::events::from_engine::{DSEngineEvent, PluginEvent};
 use crate::engine::main_thread::{EdgeReq, EdgeReqPortID, PluginIDReq};
 use crate::engine::plugin_scanner::{NewPluginInstanceError, PluginScanner};
 use crate::graph::plugin_host::PluginInstanceHost;
-use crate::graph::shared_pool::SharedPluginHostAudioThread;
 use crate::transport::TempoMap;
 use crate::transport::TransportHandle;
 use crate::transport::TransportTask;
@@ -232,7 +231,6 @@ impl AudioGraph {
 
         let entry = PluginInstanceHostEntry {
             plugin_host: res.plugin_host,
-            audio_thread: None,
             port_channels_refs: FnvHashMap::default(),
             main_audio_in_port_refs: Vec::new(),
             main_audio_out_port_refs: Vec::new(),
@@ -269,20 +267,17 @@ impl AudioGraph {
             return Ok(PluginActivationStatus::ActivationError(e));
         }
 
-        let (plugin_audio_thread, activation_status) = match entry.plugin_host.activate(
+        let activation_status = match entry.plugin_host.activate(
             self.sample_rate,
             self.min_frames as u32,
             self.max_frames as u32,
             &self.coll_handle,
         ) {
-            Ok((plugin_audio_thread, new_handle, new_param_values)) => (
-                Some(SharedPluginHostAudioThread::new(plugin_audio_thread, &self.coll_handle)),
-                PluginActivationStatus::Activated { new_handle, new_param_values },
-            ),
-            Err(e) => (None, PluginActivationStatus::ActivationError(e)),
+            Ok((new_handle, new_param_values)) => {
+                PluginActivationStatus::Activated { new_handle, new_param_values }
+            }
+            Err(e) => PluginActivationStatus::ActivationError(e),
         };
-
-        entry.audio_thread = plugin_audio_thread;
 
         if let PluginActivationStatus::Activated { new_handle, .. } = &activation_status {
             // Update the number of channels (ports) in our abstract graph.
@@ -324,7 +319,7 @@ impl AudioGraph {
             }
 
             if removed_plugins.insert(id.clone()) {
-                if let Ok(edges) = self.get_plugin_edges(id) {
+                if let Ok(edges) = self.get_plugin_edges(&id) {
                     for e in edges.incoming {
                         let _ = affected_plugins.insert(e.src_plugin_id.clone());
                     }
@@ -332,7 +327,7 @@ impl AudioGraph {
                         let _ = affected_plugins.insert(e.dst_plugin_id.clone());
                     }
 
-                    if let Some(plugin) = self.shared_plugin_pool.plugins.get_mut(id) {
+                    if let Some(plugin) = self.shared_plugin_pool.plugins.get_mut(&id) {
                         plugin.plugin_host.schedule_remove();
                     }
 
@@ -340,7 +335,7 @@ impl AudioGraph {
                         log::error!("Abstract node failed to delete node: {}", e);
                     }
                 } else {
-                    let _ = removed_plugins.remove(id);
+                    let _ = removed_plugins.remove(&id);
                     log::warn!("Ignored request to remove plugin instance {:?}: Plugin is already removed.", id);
                 }
             }
@@ -781,7 +776,6 @@ impl AudioGraph {
                     HostRequest::new(Shared::clone(&self.host_info)),
                     self.graph_in_channels as usize,
                 ),
-                audio_thread: None,
                 port_channels_refs: graph_in_port_refs,
                 main_audio_in_port_refs: Vec::new(),
                 main_audio_out_port_refs: graph_in_main_audio_out_port_refs,
@@ -799,7 +793,6 @@ impl AudioGraph {
                     HostRequest::new(Shared::clone(&self.host_info)),
                     self.graph_out_channels as usize,
                 ),
-                audio_thread: None,
                 port_channels_refs: graph_out_port_refs,
                 main_audio_in_port_refs: graph_out_main_audio_in_port_refs,
                 main_audio_out_port_refs: Vec::new(),
@@ -947,6 +940,8 @@ impl AudioGraph {
                 OnIdleResult::PluginDeactivated => {
                     recompile_graph = true;
 
+                    println!("plugin deactivated");
+
                     if let Some(event_tx) = event_tx.as_ref() {
                         event_tx
                             .send(DSEngineEvent::Plugin(PluginEvent::Deactivated {
@@ -956,16 +951,7 @@ impl AudioGraph {
                             .unwrap();
                     }
                 }
-                OnIdleResult::PluginActivated(
-                    plugin_audio_thread,
-                    new_handle,
-                    new_param_values,
-                ) => {
-                    plugin.audio_thread = Some(SharedPluginHostAudioThread::new(
-                        plugin_audio_thread,
-                        &self.coll_handle,
-                    ));
-
+                OnIdleResult::PluginActivated(new_handle, new_param_values) => {
                     update_plugin_ports(
                         &mut self.abstract_graph,
                         plugin,

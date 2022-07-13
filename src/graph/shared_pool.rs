@@ -273,8 +273,7 @@ impl Clone for SharedPluginHostAudioThread {
 
 pub(crate) struct PluginInstanceHostEntry {
     pub plugin_host: PluginInstanceHost,
-    pub audio_thread: Option<SharedPluginHostAudioThread>,
-
+    //pub audio_thread: Option<SharedPluginHostAudioThread>,
     pub port_channels_refs: FnvHashMap<PortChannelID, audio_graph::PortRef>,
     pub main_audio_in_port_refs: Vec<audio_graph::PortRef>,
     pub main_audio_out_port_refs: Vec<audio_graph::PortRef>,

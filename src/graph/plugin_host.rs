@@ -16,7 +16,7 @@ use std::sync::{
 
 use super::shared_pool::PluginInstanceID;
 use crate::engine::plugin_scanner::PluginFormat;
-use crate::graph::shared_pool::SharedBuffer;
+use crate::graph::shared_pool::{SharedBuffer, SharedPluginHostAudioThread};
 use crate::plugin::events::ProcEvent;
 use crate::plugin::ext::audio_ports::PluginAudioPortsExt;
 use crate::plugin::ext::note_ports::PluginNotePortsExt;
@@ -174,6 +174,7 @@ pub(crate) struct PluginInstanceHost {
     pub num_audio_out_channels: usize,
 
     main_thread: Option<Box<dyn PluginMainThread>>,
+    pub audio_thread: Option<SharedPluginHostAudioThread>,
 
     state: Arc<SharedPluginState>,
 
@@ -224,6 +225,7 @@ impl PluginInstanceHost {
         Self {
             id,
             main_thread,
+            audio_thread: None,
             audio_ports: None,
             note_ports: None,
             num_audio_in_channels,
@@ -263,6 +265,7 @@ impl PluginInstanceHost {
         Self {
             id,
             main_thread: None,
+            audio_thread: None,
             audio_ports: None,
             note_ports: None,
             num_audio_in_channels: 0,
@@ -302,6 +305,7 @@ impl PluginInstanceHost {
         Self {
             id,
             main_thread: None,
+            audio_thread: None,
             audio_ports: None,
             note_ports: None,
             num_audio_in_channels,
@@ -361,10 +365,7 @@ impl PluginInstanceHost {
         min_frames: u32,
         max_frames: u32,
         coll_handle: &basedrop::Handle,
-    ) -> Result<
-        (PluginInstanceHostAudioThread, PluginHandle, FnvHashMap<ParamID, f64>),
-        ActivatePluginError,
-    > {
+    ) -> Result<(PluginHandle, FnvHashMap<ParamID, f64>), ActivatePluginError> {
         self.can_activate()?;
 
         let plugin_main_thread = self.main_thread.as_mut().unwrap();
@@ -477,7 +478,7 @@ impl PluginInstanceHost {
 
                 let has_automation_out_port = plugin_main_thread.has_automation_out_port();
 
-                Ok((
+                self.audio_thread = Some(SharedPluginHostAudioThread::new(
                     PluginInstanceHostAudioThread {
                         id: self.id.clone(),
                         plugin: info.audio_thread,
@@ -488,6 +489,10 @@ impl PluginInstanceHost {
                         is_adjusting_parameter,
                         host_request: self.host_request.clone(),
                     },
+                    coll_handle,
+                ));
+
+                Ok((
                     PluginHandle {
                         audio_ports,
                         internal: info.internal_handle,
@@ -512,6 +517,10 @@ impl PluginInstanceHost {
         if !self.state.get().is_active() {
             return;
         }
+
+        // Allow the plugin's audio thread to be dropped when the new
+        // schedule is sent.
+        self.audio_thread = None;
 
         // Wait for the audio thread part to go to sleep before
         // deactivating.
@@ -575,16 +584,18 @@ impl PluginInstanceHost {
         let request_flags = self.host_request.load_requests_and_reset_callback();
         let state = self.state.get();
 
+        /*
         if self.remove_requested && !state.is_active() {
             return (OnIdleResult::PluginReadyToRemove, modified_params);
         }
+        */
 
         if request_flags.contains(RequestFlags::CALLBACK) {
             plugin_main_thread.on_main_thread();
         }
 
         if request_flags.contains(RequestFlags::DEACTIVATE) {
-            if state == PluginState::ActiveAndReadyToDeactivate {
+            if state == PluginState::DroppedAndReadyToDeactivate {
                 // Safe to deactive now.
 
                 plugin_main_thread.deactivate();
@@ -599,18 +610,16 @@ impl PluginInstanceHost {
 
                     if self.host_request.reset_restart() {
                         match self.activate(sample_rate, min_frames, max_frames, coll_handle) {
-                            Ok((audio_thread, ui_handle, param_values)) => {
-                                res = OnIdleResult::PluginActivated(
-                                    audio_thread,
-                                    ui_handle,
-                                    param_values,
-                                )
+                            Ok((ui_handle, param_values)) => {
+                                res = OnIdleResult::PluginActivated(ui_handle, param_values)
                             }
                             Err(e) => res = OnIdleResult::PluginFailedToActivate(e),
                         }
                     }
 
                     return (res, modified_params);
+                } else {
+                    return (OnIdleResult::PluginReadyToRemove, modified_params);
                 }
             }
         } else if request_flags.contains(RequestFlags::RESTART) && !self.remove_requested {
@@ -649,7 +658,7 @@ impl PluginInstanceHost {
 pub(crate) enum OnIdleResult {
     Ok,
     PluginDeactivated,
-    PluginActivated(PluginInstanceHostAudioThread, PluginHandle, FnvHashMap<ParamID, f64>),
+    PluginActivated(PluginHandle, FnvHashMap<ParamID, f64>),
     PluginReadyToRemove,
     PluginFailedToActivate(ActivatePluginError),
 }
@@ -715,7 +724,7 @@ impl PluginInstanceHostAudioThread {
                 self.plugin.stop_processing();
             }
 
-            self.state.set(PluginState::ActiveAndReadyToDeactivate);
+            self.state.set(PluginState::WaitingToDrop);
             clear_outputs(proc_info, buffers);
             self.in_events.clear();
             return;
@@ -1143,6 +1152,16 @@ impl PluginInstanceHostAudioThread {
     }
 }
 
+impl Drop for PluginInstanceHostAudioThread {
+    fn drop(&mut self) {
+        if self.state.get().is_processing() {
+            self.plugin.stop_processing();
+        }
+
+        self.state.set(PluginState::DroppedAndReadyToDeactivate);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub(crate) enum PluginState {
@@ -1165,14 +1184,23 @@ pub(crate) enum PluginState {
     /// The plugin did process but is in error
     ActiveWithError = 5,
 
+    /// The plugin audio thread is waiting to be dropped.
+    WaitingToDrop = 6,
+
     /// The plugin is not used anymore by the audio engine and can be deactivated on the main
     /// thread
-    ActiveAndReadyToDeactivate = 6,
+    DroppedAndReadyToDeactivate = 7,
 }
 
 impl PluginState {
     pub fn is_active(&self) -> bool {
-        !matches!(self, PluginState::Inactive | PluginState::InactiveWithError)
+        !matches!(
+            self,
+            PluginState::Inactive
+                | PluginState::InactiveWithError
+                | PluginState::WaitingToDrop
+                | PluginState::DroppedAndReadyToDeactivate
+        )
     }
 
     pub fn is_processing(&self) -> bool {
@@ -1193,7 +1221,8 @@ impl From<u32> for PluginState {
             3 => PluginState::ActiveAndProcessing,
             4 => PluginState::ActiveAndWaitingForQuiet,
             5 => PluginState::ActiveWithError,
-            6 => PluginState::ActiveAndReadyToDeactivate,
+            6 => PluginState::WaitingToDrop,
+            7 => PluginState::DroppedAndReadyToDeactivate,
             _ => PluginState::InactiveWithError,
         }
     }
