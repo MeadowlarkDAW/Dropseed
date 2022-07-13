@@ -49,7 +49,7 @@ impl Verifier {
                 Task::Plugin(t) => {
                     if !self.plugin_instances.insert(t.plugin.id().node_ref) {
                         return Err(VerifyScheduleError::PluginInstanceAppearsTwiceInSchedule {
-                            plugin_id: t.plugin.id().clone(),
+                            plugin_id: t.plugin.id(),
                         });
                     }
 
@@ -60,7 +60,7 @@ impl Verifier {
                                     if !self.buffer_instances.insert(b.buffer.debug_id) {
                                         return Err(
                                             VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                                                buffer_id: b.buffer.debug_id.clone(),
+                                                buffer_id: b.buffer.debug_id,
                                                 task_info: format!("{:?}", &task),
                                             },
                                         );
@@ -72,7 +72,7 @@ impl Verifier {
                                     if !self.buffer_instances.insert(b.buffer.debug_id) {
                                         return Err(
                                             VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                                                buffer_id: b.buffer.debug_id.clone(),
+                                                buffer_id: b.buffer.debug_id,
                                                 task_info: format!("{:?}", &task),
                                             },
                                         );
@@ -89,7 +89,7 @@ impl Verifier {
                                     if !self.buffer_instances.insert(b.buffer.debug_id) {
                                         return Err(
                                             VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                                                buffer_id: b.buffer.debug_id.clone(),
+                                                buffer_id: b.buffer.debug_id,
                                                 task_info: format!("{:?}", &task),
                                             },
                                         );
@@ -101,7 +101,7 @@ impl Verifier {
                                     if !self.buffer_instances.insert(b.buffer.debug_id) {
                                         return Err(
                                             VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                                                buffer_id: b.buffer.debug_id.clone(),
+                                                buffer_id: b.buffer.debug_id,
                                                 task_info: format!("{:?}", &task),
                                             },
                                         );
@@ -114,7 +114,7 @@ impl Verifier {
                 Task::DelayComp(t) => {
                     if t.audio_in.buffer.debug_id == t.audio_out.buffer.debug_id {
                         return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                            buffer_id: t.audio_in.buffer.debug_id.clone(),
+                            buffer_id: t.audio_in.buffer.debug_id,
                             task_info: format!("{:?}", &task),
                         });
                     }
@@ -136,14 +136,14 @@ impl Verifier {
                     for b in t.audio_in.iter() {
                         if !self.buffer_instances.insert(b.buffer.debug_id) {
                             return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                                buffer_id: b.buffer.debug_id.clone(),
+                                buffer_id: b.buffer.debug_id,
                                 task_info: format!("{:?}", &task),
                             });
                         }
                     }
                     if !self.buffer_instances.insert(t.audio_out.buffer.debug_id) {
                         return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                            buffer_id: t.audio_out.buffer.debug_id.clone(),
+                            buffer_id: t.audio_out.buffer.debug_id,
                             task_info: format!("{:?}", &task),
                         });
                     }
@@ -152,13 +152,13 @@ impl Verifier {
                     for (b_in, b_out) in t.audio_through.iter() {
                         if !self.buffer_instances.insert(b_in.buffer.debug_id) {
                             return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                                buffer_id: b_in.buffer.debug_id.clone(),
+                                buffer_id: b_in.buffer.debug_id,
                                 task_info: format!("{:?}", &task),
                             });
                         }
                         if !self.buffer_instances.insert(b_out.buffer.debug_id) {
                             return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                                buffer_id: b_out.buffer.debug_id.clone(),
+                                buffer_id: b_out.buffer.debug_id,
                                 task_info: format!("{:?}", &task),
                             });
                         }
@@ -167,7 +167,7 @@ impl Verifier {
                     for b in t.extra_audio_out.iter() {
                         if !self.buffer_instances.insert(b.buffer.debug_id) {
                             return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                                buffer_id: b.buffer.debug_id.clone(),
+                                buffer_id: b.buffer.debug_id,
                                 task_info: format!("{:?}", &task),
                             });
                         }

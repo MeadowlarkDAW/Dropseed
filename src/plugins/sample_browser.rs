@@ -1,4 +1,5 @@
 use basedrop::{Owned, Shared};
+use clack_host::events::event_types::ParamValueEvent;
 use meadowlark_core_types::{
     ParamF32, ParamF32Handle, SampleRate, Seconds, Unit, DEFAULT_DB_GRADIENT, DEFAULT_SMOOTH_SECS,
 };
@@ -12,11 +13,11 @@ use crate::plugin::{
 };
 use crate::resource_loader::PcmResource;
 use crate::{
-    EventQueue, HostRequest, ParamID, ParamInfoFlags, PluginInstanceID, ProcBuffers, ProcEventRef,
-    ProcInfo, ProcessStatus,
+    EventBuffer, HostRequest, ParamID, ParamInfoFlags, PluginInstanceID, ProcBuffers, ProcInfo,
+    ProcessStatus,
 };
 
-pub static SAMPLE_BROWSER_PLUG_RDN: &'static str = "app.meadowlark.sample-browser";
+pub static SAMPLE_BROWSER_PLUG_RDN: &str = "app.meadowlark.sample-browser";
 
 static DECLICK_TIME: Seconds = Seconds(30.0 / 1000.0);
 
@@ -38,6 +39,7 @@ impl PluginFactory for SampleBrowserPlugFactory {
             url: String::new(),
             manual_url: String::new(),
             support_url: String::new(),
+            features: String::new(),
         }
     }
 
@@ -286,14 +288,12 @@ pub struct SampleBrowserPlugAudioThread {
 }
 
 impl SampleBrowserPlugAudioThread {
-    fn poll(&mut self, in_events: &EventQueue) {
+    fn poll(&mut self, in_events: &EventBuffer) {
         for e in in_events.iter() {
-            match e.get() {
-                Ok(ProcEventRef::ParamValue(e, _)) => match e.param_id() {
-                    ParamID(0) => self.params.gain.set_value(e.value() as f32),
-                    _ => {}
-                },
-                _ => {}
+            if let Some(param_value) = e.as_event::<ParamValueEvent>() {
+                if param_value.param_id() == 0 {
+                    self.params.gain.set_value(param_value.value() as f32)
+                }
             }
         }
 
@@ -363,8 +363,8 @@ impl PluginAudioThread for SampleBrowserPlugAudioThread {
         &mut self,
         proc_info: &ProcInfo,
         buffers: &mut ProcBuffers,
-        in_events: &EventQueue,
-        _out_events: &mut EventQueue,
+        in_events: &EventBuffer,
+        _out_events: &mut EventBuffer,
     ) -> ProcessStatus {
         self.poll(in_events);
 
@@ -478,7 +478,7 @@ impl PluginAudioThread for SampleBrowserPlugAudioThread {
         ProcessStatus::Continue
     }
 
-    fn param_flush(&mut self, in_events: &EventQueue, _out_events: &mut EventQueue) {
+    fn param_flush(&mut self, in_events: &EventBuffer, _out_events: &mut EventBuffer) {
         self.poll(in_events);
     }
 }

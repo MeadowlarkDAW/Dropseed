@@ -1,5 +1,5 @@
 use bitflags::bitflags;
-use std::ffi::c_void;
+use clack_host::utils::Cookie;
 use std::hash::Hash;
 use std::sync::{
     atomic::{AtomicBool, AtomicU32, Ordering},
@@ -131,17 +131,8 @@ pub struct ParamInfo {
 
     /// Reserved for CLAP plugins.
     #[allow(unused)]
-    pub(crate) cookie: *const c_void,
+    pub(crate) cookie: Cookie,
 }
-
-// This is necessary because this struct has a pointer which the CLAP plugin
-// owns (if it is a CLAP plugin). This should be safe since only the plugin
-// itself ever reads/writes to that pointer.
-unsafe impl Send for ParamInfo {}
-// This is necessary because this struct has a pointer which the CLAP plugin
-// owns (if it is a CLAP plugin). This should be safe since only the plugin
-// itself ever reads/writes to that pointer.
-unsafe impl Sync for ParamInfo {}
 
 impl ParamInfo {
     /// Create info for a parameter.
@@ -172,7 +163,7 @@ impl ParamInfo {
             min_value,
             max_value,
             default_value,
-            cookie: std::ptr::null(),
+            cookie: Cookie::empty(),
         }
     }
 }

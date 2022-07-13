@@ -13,14 +13,8 @@ pub struct EdgeSaveState {
     pub dst_port_channel: u16,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AudioGraphSaveState {
     pub plugins: Vec<PluginSaveState>,
     pub edges: Vec<EdgeSaveState>,
-}
-
-impl Default for AudioGraphSaveState {
-    fn default() -> Self {
-        AudioGraphSaveState { plugins: Vec::new(), edges: Vec::new() }
-    }
 }

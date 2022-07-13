@@ -103,15 +103,11 @@ impl DSEngineProcessThread {
                     let (slice_1, slice_2) = chunk.as_mut_slices();
 
                     let out_part = &self.out_temp_buffer[0..slice_1.len()];
-                    for i in 0..slice_1.len() {
-                        slice_1[i] = out_part[i];
-                    }
+                    slice_1.copy_from_slice(&out_part[..slice_1.len()]);
 
                     let out_part =
                         &self.out_temp_buffer[slice_1.len()..slice_1.len() + slice_2.len()];
-                    for i in 0..slice_2.len() {
-                        slice_2[i] = out_part[i];
-                    }
+                    slice_2.copy_from_slice(&out_part[..slice_2.len()]);
 
                     chunk.commit_all();
                 }

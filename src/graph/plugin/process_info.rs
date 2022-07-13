@@ -48,9 +48,6 @@ pub struct ProcInfo {
 pub struct ProcBuffers {
     pub audio_in: SmallVec<[AudioPortBuffer; 2]>,
     pub audio_out: SmallVec<[AudioPortBufferMut; 2]>,
-
-    /// Used to let external plugins know when it should update its list of buffers.
-    pub(crate) task_version: u64,
 }
 
 impl ProcBuffers {

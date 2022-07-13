@@ -1,0 +1,67 @@
+name: Test
+
+on: [push, pull_request]
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        toolchain: [stable, beta, nightly]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - if: matrix.os == 'ubuntu-latest'
+      run: sudo apt-get install libgl-dev libxcursor-dev libxcb-dri2-0-dev libxcb-icccm4-dev libx11-xcb-dev libasound2-dev
+    - if: matrix.os == 'macos-latest'
+      run: brew install mesa
+    - uses: actions/checkout@v2
+    - uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: ${{ matrix.toolchain }}
+        override: true
+    - name: Build
+      run: cargo build --all --verbose
+    - name: Run tests
+      run: cargo test --all --verbose
+
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+    - run: sudo apt-get install libgl-dev libxcursor-dev libxcb-dri2-0-dev libxcb-icccm4-dev libx11-xcb-dev libasound2-dev
+    - uses: actions/checkout@v2
+    - uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: stable
+        override: true
+        components: rustfmt, clippy
+    - name: Format
+      run: cargo fmt --all -- --check
+    - uses: actions-rs/clippy-check@v1
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        args: --all --all-features # -- -D warnings TODO: enable this when all warnings are fixed
+  miri:
+    runs-on: ubuntu-latest
+    steps:
+      - run: sudo apt-get install libgl-dev libxcursor-dev libxcb-dri2-0-dev libxcb-icccm4-dev libx11-xcb-dev libasound2-dev
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: nightly
+          override: true
+          components: miri
+      - uses: actions-rs/cargo@v1
+        with:
+          command: miri
+          args: setup
+      - uses: actions-rs/cargo@v1
+        with:
+          command: miri
+          args: test --all --all-features --verbose

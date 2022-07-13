@@ -1,16 +1,15 @@
 use basedrop::Shared;
 use bitflags::bitflags;
-use std::ffi::{CStr, CString};
-use std::pin::Pin;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
     Arc,
 };
 
-use crate::plugin::ext::params::HostParamsExtMainThread;
+use clack_extensions::audio_ports::RescanType;
+use clack_extensions::note_ports::{NoteDialects, NotePortRescanFlags};
+use clack_host::host::HostInfo as ClackHostInfo;
 
-use super::ext::audio_ports::AudioPortRescanFlags;
-use super::ext::note_ports::{NoteDialect, NotePortRescanFlags};
+use crate::plugin::ext::params::HostParamsExtMainThread;
 
 #[derive(Debug, Clone)]
 pub struct HostInfo {
@@ -34,14 +33,7 @@ pub struct HostInfo {
     /// eg: "https://meadowlark.app"
     pub url: Option<String>,
 
-    pub(crate) _c_name: Pin<Box<CStr>>,
-    pub(crate) _c_vendor: Pin<Box<CStr>>,
-    pub(crate) _c_url: Pin<Box<CStr>>,
-    pub(crate) _c_version: Pin<Box<CStr>>,
-}
-
-fn to_pin_cstr(str: &str) -> Pin<Box<CStr>> {
-    Pin::new(CString::new(str).unwrap_or(CString::new("Error").unwrap()).into_boxed_c_str())
+    pub(crate) clack_host_info: ClackHostInfo,
 }
 
 impl HostInfo {
@@ -55,13 +47,15 @@ impl HostInfo {
     /// - `vendor` - The vendor of this host. eg: "RustyDAW Org"
     /// - `url` - The url to the product page of this host. eg: "https://meadowlark.app"
     pub fn new(name: String, version: String, vendor: Option<String>, url: Option<String>) -> Self {
-        let _c_name: Pin<Box<CStr>> = to_pin_cstr(name.as_str());
-        let _c_vendor: Pin<Box<CStr>> =
-            to_pin_cstr(vendor.as_ref().map(|s| s.as_str()).unwrap_or(""));
-        let _c_url: Pin<Box<CStr>> = to_pin_cstr(vendor.as_ref().map(|s| s.as_str()).unwrap_or(""));
-        let _c_version: Pin<Box<CStr>> = to_pin_cstr(&version);
+        let clack_host_info = ClackHostInfo::new(
+            &name,
+            vendor.as_deref().unwrap_or(""),
+            url.as_deref().unwrap_or(""),
+            &version,
+        )
+        .unwrap();
 
-        Self { name, version, vendor, url, _c_name, _c_vendor, _c_url, _c_version }
+        Self { name, version, vendor, url, clack_host_info }
     }
 
     /// The version of the `RustyDAW Engine` used by this host.
@@ -143,7 +137,7 @@ impl HostRequest {
     /// Checks if the host allows a plugin to change a given aspect of the audio ports definition.
     ///
     /// [main-thread]
-    pub fn is_rescan_audio_ports_flag_supported(&self, _flag: AudioPortRescanFlags) -> bool {
+    pub fn is_rescan_audio_ports_flag_supported(&self, _flag: RescanType) -> bool {
         // todo
         false
     }
@@ -151,9 +145,9 @@ impl HostRequest {
     /// Checks if the host allows a plugin to change a given aspect of the audio ports definition.
     ///
     /// [main-thread]
-    pub fn supported_note_dialects(&self) -> NoteDialect {
+    pub fn supported_note_dialects(&self) -> NoteDialects {
         // todo: more
-        NoteDialect::CLAP | NoteDialect::MIDI | NoteDialect::MIDI2
+        NoteDialects::CLAP | NoteDialects::MIDI | NoteDialects::MIDI2
     }
 
     /// Rescan the full list of audio ports according to the flags.
@@ -163,7 +157,7 @@ impl HostRequest {
     /// Certain flags require the plugin to be de-activated.
     ///
     /// [main-thread]
-    pub fn rescan_audio_ports(&self, _flags: AudioPortRescanFlags) {
+    pub fn rescan_audio_ports(&self, _flags: RescanType) {
         // todo
     }
 
