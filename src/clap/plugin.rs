@@ -268,13 +268,11 @@ impl PluginMainThread for ClapPluginMainThread {
         }
     }
 
-    /// Deactivate the plugin. When this is called it also means that the `PluginAudioThread`
-    /// counterpart has/will be dropped.
-    ///
-    /// `[main-thread & active_state]`
     fn deactivate(&mut self) {
         log::trace!("clap plugin instance deactivate {}", self.id());
-        // TODO: the Plugin's Audio Processor needs to be deactivated on the main thread
+        self.instance
+            .try_deactivate()
+            .expect("Called deactivate() before the plugin's AudioProcessor was dropped");
     }
 
     // --- Parameters ---------------------------------------------------------------------------------

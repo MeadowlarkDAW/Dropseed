@@ -156,7 +156,7 @@ pub trait PluginMainThread {
     }
 
     /// Deactivate the plugin. When this is called it also means that the `PluginAudioThread`
-    /// counterpart has/will be dropped.
+    /// counterpart will already have been dropped.
     ///
     /// `[main-thread & active_state]`
     fn deactivate(&mut self) {}
