@@ -56,18 +56,16 @@ impl std::fmt::Debug for Task {
                 if !t.note_in_buffers.is_empty() {
                     let mut has_buffer = false;
                     let mut s = String::new();
-                    for buffers in t.note_in_buffers.iter() {
-                        if let Some(buffers) = buffers {
-                            has_buffer = true;
+                    for buffers in t.note_in_buffers.iter().flatten() {
+                        has_buffer = true;
 
-                            s.push_str("[");
+                        s.push('[');
 
-                            for b in buffers.iter() {
-                                s.push_str(&format!("{:?}, ", b.id()))
-                            }
-
-                            s.push_str("], ");
+                        for b in buffers.iter() {
+                            s.push_str(&format!("{:?}, ", b.id()))
                         }
+
+                        s.push_str("], ");
                     }
 
                     if has_buffer {
@@ -78,12 +76,10 @@ impl std::fmt::Debug for Task {
                 if !t.note_out_buffers.is_empty() {
                     let mut has_buffer = false;
                     let mut s = String::new();
-                    for buffer in t.note_out_buffers.iter() {
-                        if let Some(b) = buffer {
-                            has_buffer = true;
+                    for buffer in t.note_out_buffers.iter().flatten() {
+                        has_buffer = true;
 
-                            s.push_str(&format!("{:?}, ", b.id()));
-                        }
+                        s.push_str(&format!("{:?}, ", buffer.id()));
                     }
 
                     if has_buffer {
@@ -137,12 +133,10 @@ impl std::fmt::Debug for Task {
                 if !t.note_out_buffers.is_empty() {
                     let mut has_buffer = false;
                     let mut s = String::new();
-                    for buffer in t.note_out_buffers.iter() {
-                        if let Some(b) = buffer {
-                            has_buffer = true;
+                    for buffer in t.note_out_buffers.iter().flatten() {
+                        has_buffer = true;
 
-                            s.push_str(&format!("{:?}, ", b.id()));
-                        }
+                        s.push_str(&format!("{:?}, ", buffer.id()));
                     }
 
                     if has_buffer {
@@ -241,11 +235,9 @@ impl DeactivatedPluginTask {
             let mut b = out_buf.borrow_mut();
             b.clear();
         }
-        for out_buf in self.note_out_buffers.iter() {
-            if let Some(out_buf) = out_buf {
-                let mut b = out_buf.borrow_mut();
-                b.clear();
-            }
+        for out_buf in self.note_out_buffers.iter().flatten() {
+            let mut b = out_buf.borrow_mut();
+            b.clear();
         }
     }
 }

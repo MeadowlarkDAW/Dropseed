@@ -16,7 +16,6 @@ use clack_extensions::thread_check::ThreadCheck;
 use clack_host::events::io::{InputEvents, OutputEvents};
 use clack_host::extensions::HostExtensions;
 use clack_host::host::{Host, HostAudioProcessor, HostMainThread, HostShared};
-use clap_sys::string_sizes::CLAP_NAME_SIZE;
 use meadowlark_core_types::SampleRate;
 use std::ffi::CString;
 use std::io::Cursor;
@@ -231,7 +230,7 @@ impl PluginMainThread for ClapPluginMainThread {
         if let Some(state_ext) = self.instance.shared_host_data().state_ext {
             let mut buffer = Vec::new();
 
-            state_ext.save(self.instance.main_thread_plugin_data(), &mut buffer).map_err(|e| {
+            state_ext.save(self.instance.main_thread_plugin_data(), &mut buffer).map_err(|_| {
                 format!(
                     "Plugin with ID {} returned error on call to clap_plugin_state.save()",
                     &*self.id()
@@ -240,7 +239,7 @@ impl PluginMainThread for ClapPluginMainThread {
 
             Ok(Some(buffer))
         } else {
-            return Ok(None);
+            Ok(None)
         }
     }
 
@@ -253,7 +252,7 @@ impl PluginMainThread for ClapPluginMainThread {
         if let Some(state_ext) = self.instance.shared_host_data().state_ext {
             let mut reader = Cursor::new(&preset.bytes);
 
-            state_ext.load(self.instance.main_thread_plugin_data(), &mut reader).map_err(|e| {
+            state_ext.load(self.instance.main_thread_plugin_data(), &mut reader).map_err(|_| {
                 format!(
                     "Plugin with ID {} returned error on call to clap_plugin_state.load()",
                     &*self.id()
@@ -376,7 +375,7 @@ impl PluginMainThread for ClapPluginMainThread {
     #[allow(unused)]
     fn param_value_to_text(&self, param_id: ParamID, value: f64) -> Result<String, ()> {
         if let Some(params_ext) = self.instance.shared_host_data().params_ext {
-            let mut char_buf = [MaybeUninit::uninit(); CLAP_NAME_SIZE];
+            let mut char_buf = [MaybeUninit::uninit(); 256];
 
             let bytes = params_ext
                 .value_to_text(&self.instance, param_id.0, value, &mut char_buf)
@@ -518,6 +517,7 @@ impl PluginAudioThread for ClapPluginAudioThread {
                     &mut out_events,
                     proc_info.steady_time,
                     Some(proc_info.frames),
+                    None,
                 );
 
             //#[cfg(debug_assertions)]

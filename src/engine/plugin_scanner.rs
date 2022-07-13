@@ -14,7 +14,7 @@ use crate::HostInfo;
     feature = "clap-host",
     any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd")
 ))]
-const DEFAULT_CLAP_SCAN_DIRECTORIES: [&'static str; 2] = ["/usr/lib/clap", "/usr/local/lib/clap"];
+const DEFAULT_CLAP_SCAN_DIRECTORIES: [&str; 2] = ["/usr/lib/clap", "/usr/local/lib/clap"];
 
 #[cfg(all(feature = "clap-host", target_os = "macos"))]
 const DEFAULT_CLAP_SCAN_DIRECTORIES: [&'static str; 1] = ["/Library/Audio/Plug-Ins/CLAP"];
@@ -124,7 +124,7 @@ impl PluginScanner {
     pub fn add_clap_scan_directory(&mut self, path: PathBuf) -> bool {
         // Check if the path is already a default path.
         for p in DEFAULT_CLAP_SCAN_DIRECTORIES.iter() {
-            if &path == &PathBuf::from_str(p).unwrap() {
+            if path == PathBuf::from_str(p).unwrap() {
                 log::warn!("Path is already a default scan directory {:?}", &path);
                 return false;
             }
@@ -195,7 +195,7 @@ impl PluginScanner {
         {
             let mut found_binaries: Vec<PathBuf> = Vec::new();
 
-            const CLAP_SEARCH_EXT: [&'static str; 1] = ["*.{clap}"];
+            const CLAP_SEARCH_EXT: [&str; 1] = ["*.{clap}"];
 
             let mut scan_directories: Vec<PathBuf> = DEFAULT_CLAP_SCAN_DIRECTORIES
                 .iter()
@@ -216,7 +216,7 @@ impl PluginScanner {
                     .build()
                 {
                     Ok(walker) => {
-                        for item in walker.into_iter() {
+                        for item in walker {
                             match item {
                                 Ok(binary) => {
                                     let binary_path = binary.into_path();
@@ -273,15 +273,19 @@ impl PluginScanner {
                                 key: key.clone(),
                             });
 
-                            if let Some(_) = self.scanned_external_plugins.insert(
-                                key,
-                                ScannedPluginFactory {
-                                    rdn: Shared::new(&self.coll_handle, id.clone()),
-                                    format: PluginFormat::Clap,
-                                    plugin_version,
-                                    factory: Box::new(f),
-                                },
-                            ) {
+                            if self
+                                .scanned_external_plugins
+                                .insert(
+                                    key,
+                                    ScannedPluginFactory {
+                                        rdn: Shared::new(&self.coll_handle, id.clone()),
+                                        format: PluginFormat::Clap,
+                                        plugin_version,
+                                        factory: Box::new(f),
+                                    },
+                                )
+                                .is_some()
+                            {
                                 // TODO: Handle this better
                                 log::warn!("Found duplicate CLAP plugins with ID: {}", &id);
                                 let _ = scanned_plugins.pop();
@@ -294,7 +298,7 @@ impl PluginScanner {
                             binary_path,
                             e
                         );
-                        failed_plugins.push((binary_path.clone(), format!("{}", e)));
+                        failed_plugins.push((binary_path.clone(), e));
                     }
                 }
             }
@@ -319,7 +323,7 @@ impl PluginScanner {
         let scanned_plugin = ScannedPluginFactory {
             factory,
             rdn: Shared::new(&self.coll_handle, key.rdn.clone()),
-            plugin_version: Shared::new(&self.coll_handle, description.version.clone()),
+            plugin_version: Shared::new(&self.coll_handle, description.version),
             format: PluginFormat::Internal,
         };
 

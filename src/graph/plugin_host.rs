@@ -3,6 +3,7 @@ use clack_host::events::event_types::{ParamModEvent, ParamValueEvent};
 use clack_host::events::io::EventBuffer;
 use clack_host::events::spaces::CoreEventSpace;
 use clack_host::events::{Event, EventFlags, EventHeader};
+use clack_host::utils::Cookie;
 use fnv::FnvHashMap;
 use meadowlark_core_types::SampleRate;
 use smallvec::SmallVec;
@@ -32,17 +33,8 @@ use crate::{HostRequest, ParamID, ProcInfo, ProcessStatus, ScannedPluginKey};
 #[derive(Clone, Copy)]
 struct MainToAudioParamValue {
     value: f64,
-    _cookie: *const std::ffi::c_void,
+    _cookie: Cookie,
 }
-
-// This is necessary because this event has a pointer which the CLAP plugin
-// owns (if it is a CLAP plugin). This should be safe since only the plugin
-// itself ever reads/writes to that pointer.
-unsafe impl Sync for MainToAudioParamValue {}
-// This is necessary because this event has a pointer which the CLAP plugin
-// owns (if it is a CLAP plugin). This should be safe since only the plugin
-// itself ever reads/writes to that pointer.
-unsafe impl Send for MainToAudioParamValue {}
 
 impl ReducFnvValue for MainToAudioParamValue {}
 
@@ -679,7 +671,7 @@ pub(crate) struct PluginInstanceHostAudioThread {
 }
 
 impl PluginInstanceHostAudioThread {
-    pub fn process<'a>(
+    pub fn process(
         &mut self,
         proc_info: &ProcInfo,
         buffers: &mut ProcBuffers,
@@ -700,11 +692,10 @@ impl PluginInstanceHostAudioThread {
             let mut b = out_buf.borrow_mut();
             b.clear();
         }
-        for out_buf in note_out_buffers.iter() {
-            if let Some(out_buf) = out_buf {
-                let mut b = out_buf.borrow_mut();
-                b.clear();
-            }
+
+        for out_buf in note_out_buffers.iter().flatten() {
+            let mut b = out_buf.borrow_mut();
+            b.clear();
         }
 
         let mut state = self.state.get();
@@ -749,7 +740,7 @@ impl PluginInstanceHostAudioThread {
                 let event = ParamValueEvent::new(
                     // TODO: Finer values for `time` instead of just setting it to the first frame?
                     EventHeader::new_core(0, EventFlags::empty()),
-                    core::ptr::null_mut(),
+                    Cookie::empty(),
                     // TODO: Note ID
                     -1,                // note_id
                     param_id.as_u32(), // param_id
@@ -771,7 +762,7 @@ impl PluginInstanceHostAudioThread {
                 let event = ParamModEvent::new(
                     // TODO: Finer values for `time` instead of just setting it to the first frame?
                     EventHeader::new_core(0, EventFlags::empty()),
-                    core::ptr::null_mut(),
+                    Cookie::empty(),
                     // TODO: Note ID
                     -1,                // note_id
                     param_id.as_u32(), // param_id
@@ -819,31 +810,14 @@ impl PluginInstanceHostAudioThread {
             for in_buf in event_in_buffers.iter() {
                 let mut b = in_buf.borrow_mut();
 
-                for mut event in b.drain(..) {
+                for event in b.drain(..) {
                     let do_add = match &event {
-                        ProcEvent::ParamValue(_, target_plugin) => {
-                            if let Some(target_plugin) = target_plugin {
-                                if *target_plugin == self.id.node_ref {
-                                    has_param_in_event = true;
-                                    true
-                                } else {
-                                    false
-                                }
-                            } else {
-                                false
-                            }
-                        }
-                        ProcEvent::ParamMod(_, target_plugin) => {
-                            if let Some(target_plugin) = target_plugin {
-                                if *target_plugin == self.id.node_ref {
-                                    has_param_in_event = true;
-                                    true
-                                } else {
-                                    false
-                                }
-                            } else {
-                                false
-                            }
+                        ProcEvent::ParamValue(_, Some(target_plugin))
+                        | ProcEvent::ParamMod(_, Some(target_plugin))
+                            if *target_plugin == self.id.node_ref =>
+                        {
+                            has_param_in_event = true;
+                            true
                         }
                         ProcEvent::Transport(_) => true,
                         _ => false,
@@ -897,7 +871,7 @@ impl PluginInstanceHostAudioThread {
 
             self.host_request.reset_process();
 
-            if let Err(_) = self.plugin.start_processing() {
+            if self.plugin.start_processing().is_err() {
                 // The plugin failed to start processing.
                 self.state.set(PluginState::ActiveWithError);
                 clear_outputs(proc_info, buffers);
@@ -989,13 +963,7 @@ impl PluginInstanceHostAudioThread {
                                     gesture: None,
                                 });
                             }
-                            Some(CoreEventSpace::ParamMod(_)) => {
-                                // This will only be `Some` if the plugin returned `true` in `has_event_out_port()`.
-                                if event_out_buffer.is_some() {
-                                    push_to_event_out = true;
-                                }
-                            }
-                            Some(CoreEventSpace::Transport(_)) => {
+                            Some(CoreEventSpace::ParamMod(_)) | Some(CoreEventSpace::Transport(_)) => {
                                 // This will only be `Some` if the plugin returned `true` in `has_event_out_port()`.
                                 if event_out_buffer.is_some() {
                                     push_to_event_out = true;
@@ -1066,13 +1034,7 @@ impl PluginInstanceHostAudioThread {
                 let mut push_to_event_out = false;
                 let mut push_to_note_out_i = None;
                 match out_event.as_core_event() {
-                    Some(CoreEventSpace::ParamMod(_)) => {
-                        // This will only be `Some` if the plugin returned `true` in `has_event_out_port()`.
-                        if event_out_buffer.is_some() {
-                            push_to_event_out = true;
-                        }
-                    }
-                    Some(CoreEventSpace::Transport(_)) => {
+                    Some(CoreEventSpace::ParamMod(_)) | Some(CoreEventSpace::Transport(_)) => {
                         // This will only be `Some` if the plugin returned `true` in `has_event_out_port()`.
                         if event_out_buffer.is_some() {
                             push_to_event_out = true;
@@ -1210,17 +1172,11 @@ pub(crate) enum PluginState {
 
 impl PluginState {
     pub fn is_active(&self) -> bool {
-        match self {
-            PluginState::Inactive | PluginState::InactiveWithError => false,
-            _ => true,
-        }
+        !matches!(self, PluginState::Inactive | PluginState::InactiveWithError)
     }
 
     pub fn is_processing(&self) -> bool {
-        match self {
-            PluginState::ActiveAndProcessing | PluginState::ActiveAndWaitingForQuiet => true,
-            _ => false,
-        }
+        matches!(self, PluginState::ActiveAndProcessing | PluginState::ActiveAndWaitingForQuiet)
     }
 
     pub fn is_sleeping(&self) -> bool {

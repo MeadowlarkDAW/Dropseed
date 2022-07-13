@@ -2,27 +2,9 @@
 //! If the plugin does not implement this extension, it won't have note input or output.
 //! The plugin is only allowed to change its note ports configuration while it is deactivated.
 
-use bitflags::bitflags;
-
-use clap_sys::ext::note_ports::{
-    CLAP_NOTE_DIALECT_CLAP, CLAP_NOTE_DIALECT_MIDI, CLAP_NOTE_DIALECT_MIDI2,
-    CLAP_NOTE_DIALECT_MIDI_MPE, CLAP_NOTE_PORTS_RESCAN_ALL, CLAP_NOTE_PORTS_RESCAN_NAMES,
-};
+use clack_extensions::note_ports::{NoteDialect, NoteDialects};
 
 pub(crate) static EMPTY_NOTE_PORTS_CONFIG: PluginNotePortsExt = PluginNotePortsExt::empty();
-
-bitflags! {
-    pub struct NoteDialect: u32 {
-        /// Uses clap_event_note and clap_event_note_expression.
-        const CLAP = CLAP_NOTE_DIALECT_CLAP;
-        /// Uses clap_event_midi, no polyphonic expression
-        const MIDI = CLAP_NOTE_DIALECT_MIDI;
-        /// Uses clap_event_midi, with polyphonic expression (MPE)
-        const MIDI_MPE = CLAP_NOTE_DIALECT_MIDI_MPE;
-        /// Uses clap_event_midi2
-        const MIDI2 = CLAP_NOTE_DIALECT_MIDI2;
-    }
-}
 
 #[derive(Debug, Clone, PartialEq)]
 /// The layout of the audio ports of a plugin.
@@ -46,26 +28,11 @@ pub struct NotePortInfo {
     pub stable_id: u32,
 
     /// bitfield, see `NoteDialect`
-    pub supported_dialects: NoteDialect,
+    pub supported_dialects: NoteDialects,
 
     /// one value of `NoteDialect`
-    pub preferred_dialect: NoteDialect,
+    pub preferred_dialect: Option<NoteDialect>,
 
     /// displayable name
     pub display_name: Option<String>,
-}
-
-bitflags! {
-    pub struct NotePortRescanFlags: u32 {
-        /// The ports have changed, the host shall perform a full scan of the ports.
-        ///
-        /// This flag can only be used if the plugin is not active.
-        ///
-        /// If the plugin active, call host_request.request_restart() and then call rescan()
-        /// when the host calls deactivate()
-        const RESCAN_ALL = CLAP_NOTE_PORTS_RESCAN_ALL;
-
-        /// The ports name did change, the host can scan them right away.
-        const RESCAN_NAMES = CLAP_NOTE_PORTS_RESCAN_NAMES;
-    }
 }

@@ -117,7 +117,7 @@ impl AudioPortBuffer {
     }
 
     #[inline]
-    pub fn channel<'a>(&'a self, index: usize) -> Option<MonoBuffer<'a>> {
+    pub fn channel(&self, index: usize) -> Option<MonoBuffer> {
         match &self.raw_channels {
             RawAudioChannelBuffers::F32(b) => {
                 b.get(index).map(|b| MonoBuffer::F32(b.buffer.data.borrow()))
@@ -129,7 +129,7 @@ impl AudioPortBuffer {
     }
 
     #[inline]
-    pub fn mono<'a>(&'a self) -> MonoBuffer<'a> {
+    pub fn mono(&self) -> MonoBuffer {
         match &self.raw_channels {
             RawAudioChannelBuffers::F32(b) => MonoBuffer::F32(b[0].buffer.data.borrow()),
             RawAudioChannelBuffers::F64(b) => MonoBuffer::F64(b[0].buffer.data.borrow()),
@@ -137,7 +137,7 @@ impl AudioPortBuffer {
     }
 
     #[inline]
-    pub fn stereo<'a>(&'a self) -> Option<StereoBuffer<'a>> {
+    pub fn stereo(&self) -> Option<StereoBuffer> {
         match &self.raw_channels {
             RawAudioChannelBuffers::F32(b) => {
                 if b.len() > 1 {
@@ -157,7 +157,7 @@ impl AudioPortBuffer {
     }
 
     #[inline]
-    pub fn mono_f32<'a>(&'a self) -> Option<AtomicRef<'a, Vec<f32>>> {
+    pub fn mono_f32(&self) -> Option<AtomicRef<Vec<f32>>> {
         match &self.raw_channels {
             RawAudioChannelBuffers::F32(b) => Some(b[0].buffer.data.borrow()),
             _ => None,
@@ -165,7 +165,7 @@ impl AudioPortBuffer {
     }
 
     #[inline]
-    pub fn stereo_f32<'a>(&'a self) -> Option<(AtomicRef<'a, Vec<f32>>, AtomicRef<'a, Vec<f32>>)> {
+    pub fn stereo_f32(&self) -> Option<(AtomicRef<Vec<f32>>, AtomicRef<Vec<f32>>)> {
         match &self.raw_channels {
             RawAudioChannelBuffers::F32(b) => {
                 if b.len() > 1 {
@@ -318,7 +318,7 @@ impl AudioPortBufferMut {
     }
 
     #[inline]
-    pub fn channel<'a>(&'a self, index: usize) -> Option<MonoBuffer<'a>> {
+    pub fn channel(&self, index: usize) -> Option<MonoBuffer> {
         match &self.raw_channels {
             RawAudioChannelBuffers::F32(b) => {
                 b.get(index).map(|b| MonoBuffer::F32(b.buffer.data.borrow()))
@@ -330,7 +330,7 @@ impl AudioPortBufferMut {
     }
 
     #[inline]
-    pub fn channel_mut<'a>(&'a mut self, index: usize) -> Option<MonoBufferMut<'a>> {
+    pub fn channel_mut(&mut self, index: usize) -> Option<MonoBufferMut> {
         match &mut self.raw_channels {
             RawAudioChannelBuffers::F32(b) => {
                 b.get(index).map(|b| MonoBufferMut::F32(b.buffer.data.borrow_mut()))
@@ -342,7 +342,7 @@ impl AudioPortBufferMut {
     }
 
     #[inline]
-    pub fn mono<'a>(&'a self) -> MonoBuffer<'a> {
+    pub fn mono(&self) -> MonoBuffer {
         match &self.raw_channels {
             RawAudioChannelBuffers::F32(b) => MonoBuffer::F32(b[0].buffer.data.borrow()),
             RawAudioChannelBuffers::F64(b) => MonoBuffer::F64(b[0].buffer.data.borrow()),
@@ -350,7 +350,7 @@ impl AudioPortBufferMut {
     }
 
     #[inline]
-    pub fn mono_mut<'a>(&'a mut self) -> MonoBufferMut<'a> {
+    pub fn mono_mut(&mut self) -> MonoBufferMut {
         match &mut self.raw_channels {
             RawAudioChannelBuffers::F32(b) => MonoBufferMut::F32(b[0].buffer.data.borrow_mut()),
             RawAudioChannelBuffers::F64(b) => MonoBufferMut::F64(b[0].buffer.data.borrow_mut()),
@@ -358,7 +358,7 @@ impl AudioPortBufferMut {
     }
 
     #[inline]
-    pub fn stereo<'a>(&'a self) -> Option<StereoBuffer<'a>> {
+    pub fn stereo(&self) -> Option<StereoBuffer> {
         match &self.raw_channels {
             RawAudioChannelBuffers::F32(b) => {
                 if b.len() > 1 {
@@ -378,7 +378,7 @@ impl AudioPortBufferMut {
     }
 
     #[inline]
-    pub fn stereo_mut<'a>(&'a mut self) -> Option<StereoBufferMut<'a>> {
+    pub fn stereo_mut(&mut self) -> Option<StereoBufferMut> {
         match &mut self.raw_channels {
             RawAudioChannelBuffers::F32(b) => {
                 if b.len() > 1 {
@@ -404,7 +404,7 @@ impl AudioPortBufferMut {
     }
 
     #[inline]
-    pub fn channel_f32<'a>(&'a self, index: usize) -> Option<AtomicRef<'a, Vec<f32>>> {
+    pub fn channel_f32(&self, index: usize) -> Option<AtomicRef<Vec<f32>>> {
         match &self.raw_channels {
             RawAudioChannelBuffers::F32(b) => b.get(index).map(|b| b.buffer.data.borrow()),
             _ => None,
@@ -412,7 +412,7 @@ impl AudioPortBufferMut {
     }
 
     #[inline]
-    pub fn channel_f32_mut<'a>(&'a mut self, index: usize) -> Option<AtomicRefMut<'a, Vec<f32>>> {
+    pub fn channel_f32_mut(&mut self, index: usize) -> Option<AtomicRefMut<Vec<f32>>> {
         match &mut self.raw_channels {
             RawAudioChannelBuffers::F32(b) => b.get_mut(index).map(|b| b.buffer.data.borrow_mut()),
             _ => None,
@@ -420,7 +420,7 @@ impl AudioPortBufferMut {
     }
 
     #[inline]
-    pub fn mono_f32<'a>(&'a self) -> Option<AtomicRef<'a, Vec<f32>>> {
+    pub fn mono_f32(&self) -> Option<AtomicRef<Vec<f32>>> {
         match &self.raw_channels {
             RawAudioChannelBuffers::F32(b) => Some(b[0].buffer.data.borrow()),
             _ => None,
@@ -428,7 +428,7 @@ impl AudioPortBufferMut {
     }
 
     #[inline]
-    pub fn mono_f32_mut<'a>(&'a mut self) -> Option<AtomicRefMut<'a, Vec<f32>>> {
+    pub fn mono_f32_mut(&mut self) -> Option<AtomicRefMut<Vec<f32>>> {
         match &mut self.raw_channels {
             RawAudioChannelBuffers::F32(b) => Some(b[0].buffer.data.borrow_mut()),
             _ => None,
@@ -436,7 +436,7 @@ impl AudioPortBufferMut {
     }
 
     #[inline]
-    pub fn stereo_f32<'a>(&'a self) -> Option<(AtomicRef<'a, Vec<f32>>, AtomicRef<'a, Vec<f32>>)> {
+    pub fn stereo_f32(&self) -> Option<(AtomicRef<Vec<f32>>, AtomicRef<Vec<f32>>)> {
         match &self.raw_channels {
             RawAudioChannelBuffers::F32(b) => {
                 if b.len() > 1 {
@@ -450,9 +450,7 @@ impl AudioPortBufferMut {
     }
 
     #[inline]
-    pub fn stereo_f32_mut<'a>(
-        &'a mut self,
-    ) -> Option<(AtomicRefMut<'a, Vec<f32>>, AtomicRefMut<'a, Vec<f32>>)> {
+    pub fn stereo_f32_mut(&mut self) -> Option<(AtomicRefMut<Vec<f32>>, AtomicRefMut<Vec<f32>>)> {
         match &mut self.raw_channels {
             RawAudioChannelBuffers::F32(b) => {
                 if b.len() > 1 {

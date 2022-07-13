@@ -90,7 +90,7 @@ impl DSEngineMainThread {
             while let Ok(msg) = self.handle_to_engine_rx.try_recv() {
                 match msg {
                     DSEngineRequest::ModifyGraph(req) => self.modify_graph(req),
-                    DSEngineRequest::ActivateEngine(settings) => self.activate_engine(settings),
+                    DSEngineRequest::ActivateEngine(settings) => self.activate_engine(&settings),
                     DSEngineRequest::DeactivateEngine => self.deactivate_engine(),
                     DSEngineRequest::RestoreFromSaveState(save_state) => {
                         self.restore_audio_graph_from_save_state(&save_state)
@@ -164,7 +164,7 @@ impl DSEngineMainThread {
         self.event_tx.send(PluginScannerEvent::RescanFinished(res).into()).unwrap();
     }
 
-    fn activate_engine(&mut self, settings: Box<ActivateEngineSettings>) {
+    fn activate_engine(&mut self, settings: &ActivateEngineSettings) {
         if self.audio_graph.is_some() {
             log::warn!("Ignored request to activate RustyDAW engine: Engine is already activated");
             return;
@@ -350,7 +350,7 @@ impl DSEngineMainThread {
                     PluginIDReq::Existing(id) => id,
                 };
 
-                if let Err(e) = audio_graph.connect_edge(&edge, src_plugin_id, dst_plugin_id) {
+                if let Err(e) = audio_graph.connect_edge(edge, src_plugin_id, dst_plugin_id) {
                     if edge.log_error_on_fail {
                         log::error!("Could not connect edge: {}", e);
                     }
