@@ -7,7 +7,7 @@ use std::sync::{
 
 use crate::graph::schedule::SharedSchedule;
 
-//static PROCESS_THREAD_POLL_INTERVAL: Duration = Duration::from_micros(5);
+use super::audio_thread::AUDIO_THREAD_POLL_INTERVAL;
 
 pub(crate) struct DSEngineProcessThread {
     to_audio_thread_audio_out_tx: Owned<Producer<f32>>,
@@ -50,20 +50,20 @@ impl DSEngineProcessThread {
     }
 
     pub fn run(&mut self, run: Arc<AtomicBool>) {
-        // TODO: Use some kind of interrupt to activate the thread as apposed
-        // to potentially pinning a whole CPU core just waiting for frames to
-        // process?
-        //
-        // Note that I already tried the method of calling `thread::sleep()`
-        // for a short amount of time while there is no work to be done, but
-        // apparently Windows does not like it when you call `thread::sleep()`
-        // on a high-priority thread (underruns galore).
+        #[cfg(target_os = "windows")]
+        let spin_sleeper = spin_sleep::SpinSleeper::default();
 
         while run.load(Ordering::Relaxed) {
             let num_frames = if let Some(num_frames_wanted) = &self.num_frames_wanted {
                 let num_frames = num_frames_wanted.load(Ordering::SeqCst);
 
                 if num_frames == 0 {
+                    #[cfg(not(target_os = "windows"))]
+                    std::thread::sleep(AUDIO_THREAD_POLL_INTERVAL);
+
+                    #[cfg(target_os = "windows")]
+                    spin_sleeper.sleep(AUDIO_THREAD_POLL_INTERVAL);
+
                     continue;
                 }
 
@@ -72,6 +72,12 @@ impl DSEngineProcessThread {
                 let num_samples = self.from_audio_thread_audio_in_rx.slots();
 
                 if num_samples == 0 {
+                    #[cfg(not(target_os = "windows"))]
+                    std::thread::sleep(AUDIO_THREAD_POLL_INTERVAL);
+
+                    #[cfg(target_os = "windows")]
+                    spin_sleeper.sleep(AUDIO_THREAD_POLL_INTERVAL);
+
                     continue;
                 }
 

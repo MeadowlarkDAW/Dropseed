@@ -16,7 +16,19 @@ static ALLOCATED_FRAMES_PER_CHANNEL: usize = 192_000 * 3;
 
 /// Make sure we have a bit of time to copy the engine's output buffer to the
 /// audio thread's output buffer.
-static COPY_OUT_TIME_WINDOW: f64 = 0.9;
+static COPY_OUT_TIME_WINDOW: f64 = 0.95;
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) static AUDIO_THREAD_POLL_INTERVAL: Duration = Duration::from_micros(100);
+#[cfg(not(target_os = "windows"))]
+// Handle worst-case scenario for thread sleep.
+pub(crate) static AUDIO_THREAD_POLL_INTERVAL_BUFFERED: Duration = Duration::from_micros(140);
+#[cfg(target_os = "windows")]
+// The best we can do on Windows is around 1ms.
+pub(crate) static AUDIO_THREAD_POLL_INTERVAL: Duration = Duration::from_micros(1200);
+#[cfg(target_os = "windows")]
+// Handle worst-case scenario for Windows thread sleep.
+pub(crate) static AUDIO_THREAD_POLL_INTERVAL_BUFFERED: Duration = Duration::from_micros(1500);
 
 pub struct DSEngineAudioThread {
     to_engine_audio_in_tx: Owned<Producer<f32>>,
@@ -105,15 +117,6 @@ impl DSEngineAudioThread {
         cpal_out_channels: usize,
         out: &mut [T],
     ) {
-        // TODO: Use some kind of interrupt to activate the thread as apposed
-        // to potentially pinning a whole CPU core just waiting for the process
-        // thread to finish?
-        //
-        // Note that I already tried the method of calling `thread::sleep()` for
-        // a short amount of time while the process thread is still running, but
-        // apparently Windows does not like it when you call `thread::sleep()` on
-        // a high-priority thread (underruns galore).
-
         let clear_output = |out: &mut [T]| {
             for s in out.iter_mut() {
                 *s = T::from(&0.0);
@@ -165,7 +168,10 @@ impl DSEngineAudioThread {
             total_frames as f64 * self.sample_rate_recip * COPY_OUT_TIME_WINDOW,
         );
 
-        while proc_start_time.elapsed() < max_proc_time {
+        #[cfg(target_os = "windows")]
+        let spin_sleeper = spin_sleep::SpinSleeper::default();
+
+        loop {
             if let Ok(chunk) = self.from_engine_audio_out_rx.read_chunk(num_out_samples) {
                 if cpal_out_channels == self.out_channels {
                     // We can simply just convert the interlaced buffer over.
@@ -208,6 +214,16 @@ impl DSEngineAudioThread {
                 chunk.commit_all();
                 return;
             }
+
+            if proc_start_time.elapsed() + AUDIO_THREAD_POLL_INTERVAL_BUFFERED >= max_proc_time {
+                break;
+            }
+
+            #[cfg(not(target_os = "windows"))]
+            std::thread::sleep(AUDIO_THREAD_POLL_INTERVAL);
+
+            #[cfg(target_os = "windows")]
+            spin_sleeper.sleep(AUDIO_THREAD_POLL_INTERVAL);
         }
 
         log::trace!("underrun");

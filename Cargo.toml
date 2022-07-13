@@ -48,3 +48,6 @@ bincode = "1.3.3"
 #samplerate-rs = "0.1"
 #samplerate-rs = { path = "../samplerate-rs" }
 samplerate-rs = { git = "https://github.com/MeadowlarkDAW/samplerate-rs.git", branch = "master" }
+
+[target.'cfg(windows)'.dependencies]
+spin_sleep = "1.1"
