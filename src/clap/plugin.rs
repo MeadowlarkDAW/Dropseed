@@ -517,6 +517,7 @@ impl PluginAudioThread for ClapPluginAudioThread {
                     &mut out_events,
                     proc_info.steady_time,
                     Some(proc_info.frames),
+                    None,
                 );
 
             //#[cfg(debug_assertions)]
