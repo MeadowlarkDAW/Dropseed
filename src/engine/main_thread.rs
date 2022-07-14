@@ -1,5 +1,5 @@
 use basedrop::{Collector, Shared, SharedCell};
-use crossbeam::channel::{Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender};
 use fnv::FnvHashSet;
 use meadowlark_core_types::SampleRate;
 use std::path::PathBuf;

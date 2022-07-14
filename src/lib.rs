@@ -7,7 +7,6 @@ mod graph;
 mod clap;
 
 pub mod plugins;
-pub mod resource_loader;
 pub mod transport;
 pub mod utils;
 
@@ -38,5 +37,4 @@ pub use graph::{
     ParamModifiedInfo, PluginActivationStatus, PluginEdges, PluginHandle, PluginParamsExt,
     PortType,
 };
-pub use resource_loader::ResourceLoader;
 pub use transport::TransportInfo;

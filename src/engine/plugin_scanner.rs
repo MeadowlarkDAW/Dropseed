@@ -2,6 +2,7 @@ use basedrop::Shared;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::{collections::HashMap, error::Error};
+use walkdir::WalkDir;
 
 use crate::graph::plugin_host::PluginInstanceHost;
 use crate::graph::shared_pool::{PluginInstanceID, PluginInstanceType};
@@ -195,8 +196,6 @@ impl PluginScanner {
         {
             let mut found_binaries: Vec<PathBuf> = Vec::new();
 
-            const CLAP_SEARCH_EXT: [&str; 1] = ["*.{clap}"];
-
             let mut scan_directories: Vec<PathBuf> = DEFAULT_CLAP_SCAN_DIRECTORIES
                 .iter()
                 .map(|s| PathBuf::from_str(s).unwrap())
@@ -210,30 +209,27 @@ impl PluginScanner {
             }
 
             for dir in scan_directories.iter().chain(self.clap_scan_directories.iter()) {
-                match globwalk::GlobWalkerBuilder::from_patterns(dir, &CLAP_SEARCH_EXT)
-                    .max_depth(MAX_SCAN_DEPTH)
-                    .follow_links(true)
-                    .build()
-                {
-                    Ok(walker) => {
-                        for item in walker {
-                            match item {
-                                Ok(binary) => {
-                                    let binary_path = binary.into_path();
-                                    log::trace!("Found CLAP binary: {:?}", &binary_path);
-                                    found_binaries.push(binary_path);
-                                }
-                                Err(e) => {
-                                    log::warn!(
-                                        "Failed to scan binary for potential CLAP plugin: {}",
-                                        e
-                                    );
-                                }
+                let walker = WalkDir::new(dir).max_depth(MAX_SCAN_DEPTH).follow_links(true);
+
+                for item in walker {
+                    match item {
+                        Ok(binary) => {
+                            if !binary.file_type().is_file() {
+                                continue;
                             }
+
+                            match binary.path().extension().and_then(|e| e.to_str()) {
+                                Some(ext) if ext == "clap" => {}
+                                _ => continue,
+                            };
+
+                            let binary_path = binary.into_path();
+                            log::trace!("Found CLAP binary: {:?}", &binary_path);
+                            found_binaries.push(binary_path);
                         }
-                    }
-                    Err(e) => {
-                        log::error!("Failed to walk directory {:?} for CLAP plugins: {}", dir, e);
+                        Err(e) => {
+                            log::warn!("Failed to scan binary for potential CLAP plugin: {}", e);
+                        }
                     }
                 }
             }

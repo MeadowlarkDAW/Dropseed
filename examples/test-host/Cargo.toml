@@ -11,7 +11,7 @@ dropseed = { path = "../../" }
 meadowlark-core-types = { git = "https://github.com/MeadowlarkDAW/meadowlark-core-types.git", branch = "main" }
 eframe = "0.18"
 cpal = "0.13"
-crossbeam = "0.8"
+crossbeam-channel = "0.5"
 ringbuf = "0.2"
 fnv = "1.0"
 fast_log = "1.5.16"

@@ -11,11 +11,11 @@ use crate::plugin::{
     ext, PluginActivatedInfo, PluginAudioThread, PluginDescriptor, PluginFactory, PluginMainThread,
     PluginPreset,
 };
-use crate::resource_loader::PcmResource;
 use crate::{
     EventBuffer, HostRequest, ParamID, ParamInfoFlags, PluginInstanceID, ProcBuffers, ProcInfo,
     ProcessStatus,
 };
+use dropseed_resource_loader::PcmResource;
 
 pub static SAMPLE_BROWSER_PLUG_RDN: &str = "app.meadowlark.sample-browser";
 
