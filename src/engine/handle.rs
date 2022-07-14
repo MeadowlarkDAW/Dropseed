@@ -1,4 +1,4 @@
-use crossbeam::channel::{self, Receiver, Sender};
+use crossbeam_channel::{self, Receiver, Sender};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -36,10 +36,12 @@ impl DSEngineHandle {
         host_info: HostInfo,
         internal_plugins: Vec<Box<dyn PluginFactory>>,
     ) -> (Self, Receiver<DSEngineEvent>) {
-        let (event_tx, event_rx) = channel::unbounded::<DSEngineEvent>();
-        let (handle_to_engine_tx, handle_to_engine_rx) = channel::unbounded::<DSEngineRequest>();
+        let (event_tx, event_rx) = crossbeam_channel::unbounded::<DSEngineEvent>();
+        let (handle_to_engine_tx, handle_to_engine_rx) =
+            crossbeam_channel::unbounded::<DSEngineRequest>();
 
-        let (spawn_engine_res_tx, spawn_engine_res_rx) = channel::bounded::<SpawnEngineRes>(1);
+        let (spawn_engine_res_tx, spawn_engine_res_rx) =
+            crossbeam_channel::bounded::<SpawnEngineRes>(1);
 
         let host_info_clone = host_info.clone();
 

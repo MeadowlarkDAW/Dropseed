@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::fs::File;
@@ -19,7 +20,6 @@ use symphonia::core::probe::{Hint, Probe};
 pub static MAX_FILE_BYTES: u64 = 1_000_000_000;
 
 use super::{decode, PcmResource, PcmResourceType};
-use crate::utils::twox_hash_map::TwoXHashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]
 pub enum ResampleQuality {
@@ -82,7 +82,7 @@ struct ResamplerKey {
 }
 
 pub struct PcmLoader {
-    loaded: TwoXHashMap<PcmKey, Shared<PcmResource>>,
+    loaded: HashMap<PcmKey, Shared<PcmResource>>,
 
     /// The resource to send when the resource could not be loaded.
     empty_pcm: Shared<PcmResource>,

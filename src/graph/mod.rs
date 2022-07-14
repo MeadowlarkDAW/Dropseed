@@ -1,7 +1,7 @@
 use atomic_refcell::AtomicRefCell;
 use audio_graph::{Graph, NodeRef};
 use basedrop::Shared;
-use crossbeam::channel::Sender;
+use crossbeam_channel::Sender;
 use fnv::FnvHashMap;
 use fnv::FnvHashSet;
 use meadowlark_core_types::SampleRate;
