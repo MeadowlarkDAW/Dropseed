@@ -6,7 +6,6 @@ mod graph;
 #[cfg(feature = "clap-host")]
 mod clap;
 
-pub mod plugins;
 pub mod transport;
 pub mod utils;
 

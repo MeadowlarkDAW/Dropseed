@@ -8,7 +8,7 @@ use std::sync::{
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ParamID(pub(crate) u32);
+pub struct ParamID(pub u32);
 
 impl ParamID {
     pub const fn new(stable_id: u32) -> Self {

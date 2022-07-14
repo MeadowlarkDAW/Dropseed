@@ -1,20 +1,20 @@
 use basedrop::{Owned, Shared};
 use clack_host::events::event_types::ParamValueEvent;
+use dropseed::plugin::ext::params::{default_db_value_to_text, parse_text_to_f64};
+use dropseed::plugin::{
+    ext, PluginActivatedInfo, PluginAudioThread, PluginDescriptor, PluginFactory, PluginMainThread,
+    PluginPreset,
+};
+use dropseed::{
+    EventBuffer, HostRequest, ParamID, ParamInfoFlags, PluginInstanceID, ProcBuffers, ProcInfo,
+    ProcessStatus,
+};
 use meadowlark_core_types::{
     ParamF32, ParamF32Handle, SampleRate, Seconds, Unit, DEFAULT_DB_GRADIENT, DEFAULT_SMOOTH_SECS,
 };
 use rtrb::{Consumer, Producer, RingBuffer};
 use serde::{Deserialize, Serialize};
 
-use crate::plugin::ext::params::{default_db_value_to_text, parse_text_to_f64};
-use crate::plugin::{
-    ext, PluginActivatedInfo, PluginAudioThread, PluginDescriptor, PluginFactory, PluginMainThread,
-    PluginPreset,
-};
-use crate::{
-    EventBuffer, HostRequest, ParamID, ParamInfoFlags, PluginInstanceID, ProcBuffers, ProcInfo,
-    ProcessStatus,
-};
 use dropseed_resource_loader::PcmResource;
 
 pub static SAMPLE_BROWSER_PLUG_RDN: &str = "app.meadowlark.sample-browser";

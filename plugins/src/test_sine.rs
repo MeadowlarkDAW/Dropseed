@@ -1,9 +1,8 @@
-use meadowlark_core_types::SampleRate;
-
-use crate::plugin::{
+use dropseed::plugin::{
     ext, PluginActivatedInfo, PluginAudioThread, PluginDescriptor, PluginFactory, PluginMainThread,
 };
-use crate::{EventBuffer, HostRequest, PluginInstanceID, ProcBuffers, ProcInfo, ProcessStatus};
+use dropseed::{EventBuffer, HostRequest, PluginInstanceID, ProcBuffers, ProcInfo, ProcessStatus};
+use meadowlark_core_types::SampleRate;
 
 pub static TEST_SINE_STEREO_RDN: &str = "app.meadowlark.test-sine-stereo";
 
