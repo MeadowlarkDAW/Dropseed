@@ -16,7 +16,7 @@ use clack_extensions::thread_check::ThreadCheck;
 use clack_host::events::io::{InputEvents, OutputEvents};
 use clack_host::extensions::HostExtensions;
 use clack_host::host::{Host, HostAudioProcessor, HostMainThread, HostShared};
-use meadowlark_core_types::SampleRate;
+use meadowlark_core_types::time::SampleRate;
 use std::ffi::CString;
 use std::io::Cursor;
 use std::mem::MaybeUninit;

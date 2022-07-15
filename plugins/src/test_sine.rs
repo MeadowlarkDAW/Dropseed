@@ -2,7 +2,7 @@ use dropseed_core::plugin::{
     ext, EventBuffer, HostRequest, PluginActivatedInfo, PluginAudioThread, PluginDescriptor,
     PluginFactory, PluginInstanceID, PluginMainThread, ProcBuffers, ProcInfo, ProcessStatus,
 };
-use meadowlark_core_types::SampleRate;
+use meadowlark_core_types::time::SampleRate;
 
 pub static TEST_SINE_STEREO_RDN: &str = "app.meadowlark.test-sine-stereo";
 

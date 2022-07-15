@@ -5,7 +5,7 @@ use clack_host::events::spaces::CoreEventSpace;
 use clack_host::events::{Event, EventFlags, EventHeader};
 use clack_host::utils::Cookie;
 use fnv::FnvHashMap;
-use meadowlark_core_types::SampleRate;
+use meadowlark_core_types::time::SampleRate;
 use smallvec::SmallVec;
 use std::error::Error;
 use std::fmt::Debug;

@@ -4,7 +4,7 @@ use basedrop::Shared;
 use crossbeam_channel::Sender;
 use fnv::FnvHashMap;
 use fnv::FnvHashSet;
-use meadowlark_core_types::SampleRate;
+use meadowlark_core_types::time::SampleRate;
 use smallvec::SmallVec;
 use std::error::Error;
 

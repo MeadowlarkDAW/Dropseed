@@ -1,5 +1,5 @@
 use basedrop::Shared;
-use meadowlark_core_types::SampleRate;
+use meadowlark_core_types::time::SampleRate;
 
 pub mod ext;
 

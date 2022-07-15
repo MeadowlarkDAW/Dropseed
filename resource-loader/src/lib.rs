@@ -1,5 +1,5 @@
 use basedrop::Collector;
-use meadowlark_core_types::SampleRate;
+use meadowlark_core_types::time::SampleRate;
 
 pub mod pcm;
 pub use pcm::{PcmKey, PcmLoadError, PcmLoader, ResampleQuality};

@@ -1,5 +1,5 @@
 use basedrop::Owned;
-use meadowlark_core_types::SampleRate;
+use meadowlark_core_types::time::SampleRate;
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::fmt::Debug;
 use std::sync::{

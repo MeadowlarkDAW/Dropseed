@@ -26,7 +26,7 @@ resource-loader = ["dropseed-resource-loader"]
 [dependencies]
 dropseed-core = { path = "./core" }
 dropseed-resource-loader = { path = "./resource-loader", optional = true }
-meadowlark-core-types = { git = "https://github.com/MeadowlarkDAW/meadowlark-core-types", branch = "main" }
+meadowlark-core-types = "0.3"
 audio-graph = { git = "https://github.com/MeadowlarkDAW/audio-graph", branch = "main" }
 clack-host = { git = "https://github.com/prokopyl/clack", rev = "6629394c664af6889b0396a2880cd1efcf847727" }
 clack-extensions = { git = "https://github.com/prokopyl/clack", features = ["clack-host", "audio-ports", "log", "note-ports", "params", "state", "thread-check"], rev = "6629394c664af6889b0396a2880cd1efcf847727" }

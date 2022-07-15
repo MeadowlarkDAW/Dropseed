@@ -8,7 +8,7 @@ use clack_host::utils::{BeatTime, SecondsTime};
 use dropseed_core::transport::{
     LoopBackInfo, LoopState, LoopStateProcInfo, RangeChecker, SeekInfo, TempoMap, TransportInfo,
 };
-use meadowlark_core_types::{Frames, MusicalTime, SampleRate};
+use meadowlark_core_types::time::{Frames, MusicalTime, SampleRate};
 
 pub struct TransportSaveState {
     pub seek_to: MusicalTime,

@@ -9,9 +9,10 @@ use dropseed_core::plugin::{
     PluginFactory, PluginInstanceID, PluginMainThread, PluginPreset, ProcBuffers, ProcInfo,
     ProcessStatus,
 };
-use meadowlark_core_types::{
-    ParamF32, ParamF32Handle, SampleRate, Seconds, Unit, DEFAULT_DB_GRADIENT, DEFAULT_SMOOTH_SECS,
+use meadowlark_core_types::parameter::{
+    ParamF32, ParamF32Handle, Unit, DEFAULT_DB_GRADIENT, DEFAULT_SMOOTH_SECS,
 };
+use meadowlark_core_types::time::{SampleRate, Seconds};
 use rtrb::{Consumer, Producer, RingBuffer};
 use serde::{Deserialize, Serialize};
 

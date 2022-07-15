@@ -1,7 +1,7 @@
 use basedrop::{Collector, Shared, SharedCell};
 use crossbeam_channel::{Receiver, Sender};
 use fnv::FnvHashSet;
-use meadowlark_core_types::SampleRate;
+use meadowlark_core_types::time::SampleRate;
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},

@@ -1,4 +1,4 @@
-use meadowlark_core_types::{Frames, SampleRate};
+use meadowlark_core_types::time::{Frames, SampleRate};
 
 pub mod convert;
 

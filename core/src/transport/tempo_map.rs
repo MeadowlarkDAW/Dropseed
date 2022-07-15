@@ -1,5 +1,5 @@
 use clack_host::utils::BeatTime;
-use meadowlark_core_types::{Frames, MusicalTime, SampleRate, Seconds};
+use meadowlark_core_types::time::{Frames, MusicalTime, SampleRate, Seconds};
 
 // TODO: Make tempo map work like series of automation lines/curves between points in time.
 

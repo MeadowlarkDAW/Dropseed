@@ -7,7 +7,7 @@ use dropseed::{
     EngineDeactivatedInfo, PluginActivationStatus, PluginEvent, PluginScannerEvent, ScannedPlugin,
 };
 use eframe::egui;
-use meadowlark_core_types::SampleRate;
+use meadowlark_core_types::time::SampleRate;
 
 mod effect_rack_page;
 mod scanned_plugins_page;

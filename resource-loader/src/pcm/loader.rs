@@ -8,7 +8,7 @@ use basedrop::{Handle, Shared};
 use dropseed_core::pcm::{PcmResource, PcmResourceType};
 
 use fnv::FnvHashMap;
-use meadowlark_core_types::{Frames, SampleRate};
+use meadowlark_core_types::time::{Frames, SampleRate};
 use samplerate_rs::ConverterType;
 use symphonia::core::codecs::CodecRegistry;
 use symphonia::core::formats::FormatOptions;

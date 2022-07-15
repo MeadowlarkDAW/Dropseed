@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::path::PathBuf;
 
-use meadowlark_core_types::{Frames, SampleRate};
+use meadowlark_core_types::time::{Frames, SampleRate};
 use symphonia::core::audio::AudioBufferRef;
 use symphonia::core::audio::{AudioBuffer, SampleBuffer, Signal};
 use symphonia::core::codecs::{CodecRegistry, DecoderOptions};

@@ -8,7 +8,7 @@ publish = false
 dropseed = { path = "../../" }
 #noise-generator-dropseed = { git = "https://github.com/MeadowlarkDAW/meadowlark-plugins", package = "noise-generator-dropseed", branch = "main" }
 #noise-generator-dropseed = { path = "../meadowlark-plugins/noise-generator/noise-generator-dropseed" }
-meadowlark-core-types = { git = "https://github.com/MeadowlarkDAW/meadowlark-core-types.git", branch = "main" }
+meadowlark-core-types = "0.3"
 eframe = "0.18"
 cpal = "0.13"
 crossbeam-channel = "0.5"

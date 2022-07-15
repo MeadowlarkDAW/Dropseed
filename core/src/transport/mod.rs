@@ -1,5 +1,5 @@
 use clack_host::events::event_types::TransportEvent;
-use meadowlark_core_types::{Frames, MusicalTime};
+use meadowlark_core_types::time::{Frames, MusicalTime};
 
 mod tempo_map;
 pub use tempo_map::TempoMap;
