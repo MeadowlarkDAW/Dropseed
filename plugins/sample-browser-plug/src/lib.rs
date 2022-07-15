@@ -1,6 +1,5 @@
 use basedrop::{Owned, Shared};
 use clack_host::events::event_types::ParamValueEvent;
-use dropseed_core::pcm::PcmResource;
 use dropseed_core::plugin::ext::params::{
     default_db_value_to_text, parse_text_to_f64, ParamID, ParamInfoFlags,
 };
@@ -9,6 +8,7 @@ use dropseed_core::plugin::{
     PluginFactory, PluginInstanceID, PluginMainThread, PluginPreset, ProcBuffers, ProcInfo,
     ProcessStatus,
 };
+use dropseed_resource_loader::pcm::PcmRAM;
 use meadowlark_core_types::parameter::{
     ParamF32, ParamF32Handle, Unit, DEFAULT_DB_GRADIENT, DEFAULT_SMOOTH_SECS,
 };
@@ -69,7 +69,7 @@ pub struct SampleBrowserPlugHandle {
 }
 
 impl SampleBrowserPlugHandle {
-    pub fn play_sample(&mut self, pcm: Shared<PcmResource>) {
+    pub fn play_sample(&mut self, pcm: Shared<PcmRAM>) {
         self.send(ProcessMsg::PlayNewSample { pcm });
         self.host_request.request_process();
     }
@@ -91,7 +91,7 @@ impl SampleBrowserPlugHandle {
 }
 
 enum ProcessMsg {
-    PlayNewSample { pcm: Shared<PcmResource> },
+    PlayNewSample { pcm: Shared<PcmRAM> },
     ReplaySample,
     Stop,
 }
@@ -276,8 +276,8 @@ pub struct SampleBrowserPlugAudioThread {
     play_state: PlayState,
     declick_state: DeclickState,
 
-    pcm: Option<Shared<PcmResource>>,
-    old_pcm: Option<Shared<PcmResource>>,
+    pcm: Option<Shared<PcmRAM>>,
+    old_pcm: Option<Shared<PcmRAM>>,
 
     declick_dec: f32,
     declick_frames: usize,
@@ -377,7 +377,7 @@ impl PluginAudioThread for SampleBrowserPlugAudioThread {
         if let PlayState::Playing { mut playhead } = self.play_state {
             let pcm = self.pcm.as_ref().unwrap();
 
-            if playhead < pcm.len_frames.0 as usize {
+            if playhead < pcm.len_frames() as usize {
                 pcm.fill_stereo_f32(playhead as isize, buf_l_part, buf_r_part);
 
                 playhead += proc_info.frames;
@@ -409,7 +409,7 @@ impl PluginAudioThread for SampleBrowserPlugAudioThread {
             let declick_buf_l_part = &mut self.declick_buf_l[0..proc_info.frames];
             let declick_buf_r_part = &mut self.declick_buf_r[0..proc_info.frames];
 
-            if old_playhead < old_pcm.len_frames.0 as usize {
+            if old_playhead < old_pcm.len_frames() as usize {
                 old_pcm.fill_stereo_f32(
                     old_playhead as isize,
                     declick_buf_l_part,

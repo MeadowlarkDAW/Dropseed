@@ -10,9 +10,7 @@ documentation = "https://docs.rs/dropseed"
 repository = "https://github.com/MeadowlarkDAW/dropseed"
 
 [dependencies]
-dropseed-core = { path = "../core" }
 basedrop = "0.1"
-meadowlark-core-types = "0.3"
 fnv = "1.0"
 log = "0.4"
 samplerate-rs = { git = "https://github.com/MeadowlarkDAW/samplerate-rs.git", branch = "master" }

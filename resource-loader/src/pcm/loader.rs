@@ -5,10 +5,8 @@ use std::fs::File;
 use std::path::PathBuf;
 
 use basedrop::{Handle, Shared};
-use dropseed_core::pcm::{PcmResource, PcmResourceType};
 
 use fnv::FnvHashMap;
-use meadowlark_core_types::time::{Frames, SampleRate};
 use samplerate_rs::ConverterType;
 use symphonia::core::codecs::CodecRegistry;
 use symphonia::core::formats::FormatOptions;
@@ -21,6 +19,7 @@ use symphonia::core::probe::{Hint, Probe};
 pub static MAX_FILE_BYTES: u64 = 1_000_000_000;
 
 use super::decode;
+use super::{PcmRAM, PcmRAMType};
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]
 pub enum ResampleQuality {
@@ -83,12 +82,12 @@ struct ResamplerKey {
 }
 
 pub struct PcmLoader {
-    loaded: HashMap<PcmKey, Shared<PcmResource>>,
+    loaded: HashMap<PcmKey, Shared<PcmRAM>>,
 
     /// The resource to send when the resource could not be loaded.
-    empty_pcm: Shared<PcmResource>,
+    empty_pcm: Shared<PcmRAM>,
 
-    project_sr: SampleRate,
+    project_sr: u32,
 
     codec_registry: &'static CodecRegistry,
     probe: &'static Probe,
@@ -100,16 +99,9 @@ pub struct PcmLoader {
 }
 
 impl PcmLoader {
-    pub fn new(coll_handle: Handle, project_sr: SampleRate) -> Self {
-        let empty_pcm = Shared::new(
-            &coll_handle,
-            PcmResource {
-                pcm_type: PcmResourceType::F32(vec![Vec::new()]),
-                sample_rate: project_sr,
-                channels: 1,
-                len_frames: Frames(0),
-            },
-        );
+    pub fn new(coll_handle: Handle, project_sr: u32) -> Self {
+        let empty_pcm =
+            Shared::new(&coll_handle, PcmRAM::new(PcmRAMType::F32(vec![Vec::new()]), project_sr));
 
         Self {
             loaded: Default::default(),
@@ -122,7 +114,7 @@ impl PcmLoader {
         }
     }
 
-    pub fn load(&mut self, key: &PcmKey) -> (Shared<PcmResource>, Result<(), PcmLoadError>) {
+    pub fn load(&mut self, key: &PcmKey) -> (Shared<PcmRAM>, Result<(), PcmLoadError>) {
         match self.try_load(key) {
             Ok(pcm) => (pcm, Ok(())),
             Err(e) => {
@@ -134,7 +126,7 @@ impl PcmLoader {
         }
     }
 
-    fn try_load(&mut self, key: &PcmKey) -> Result<Shared<PcmResource>, PcmLoadError> {
+    fn try_load(&mut self, key: &PcmKey) -> Result<Shared<PcmRAM>, PcmLoadError> {
         log::debug!("Loading PCM file: {:?}", &key.path);
 
         if let Some(pcm) = self.loaded.get(key) {
@@ -176,10 +168,10 @@ impl PcmLoader {
             .default_track()
             .ok_or_else(|| PcmLoadError::NoTrackFound(key.path.clone()))?;
 
-        let sample_rate = SampleRate(track.codec_params.sample_rate.unwrap_or_else(|| {
+        let sample_rate = track.codec_params.sample_rate.unwrap_or_else(|| {
             log::warn!("Could not find sample rate of PCM resource at {:?}. Assuming a sample rate of 44100", &key.path);
             44100
-        }) as f64);
+        });
 
         let n_channels = track
             .codec_params
@@ -192,8 +184,8 @@ impl PcmLoader {
         } else {
             // Resampling is needed.
 
-            let project_sr = self.project_sr.as_usize();
-            let pcm_sr = sample_rate.as_usize();
+            let project_sr = self.project_sr;
+            let pcm_sr = sample_rate;
 
             let resampler_key = ResamplerKey {
                 pcm_sr: pcm_sr as u32,

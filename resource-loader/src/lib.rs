@@ -1,8 +1,7 @@
 use basedrop::Collector;
-use meadowlark_core_types::time::SampleRate;
 
 pub mod pcm;
-pub use pcm::{PcmKey, PcmLoadError, PcmLoader, ResampleQuality};
+pub use pcm::{PcmKey, PcmLoadError, PcmLoader, PcmRAM, PcmRAMType, ResampleQuality};
 
 pub struct ResourceLoader {
     pub pcm_loader: PcmLoader,
@@ -10,10 +9,10 @@ pub struct ResourceLoader {
 }
 
 impl ResourceLoader {
-    pub fn new(default_sample_rate: SampleRate) -> Self {
+    pub fn new(project_sample_rate: u32) -> Self {
         let collector = Collector::new();
 
-        let pcm_loader = PcmLoader::new(collector.handle(), default_sample_rate);
+        let pcm_loader = PcmLoader::new(collector.handle(), project_sample_rate);
 
         Self { pcm_loader, collector }
     }

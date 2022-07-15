@@ -14,9 +14,6 @@ pub use clack_host::utils::FixedPoint;
 
 pub use dropseed_core::*;
 
-#[cfg(feature = "resource-loader")]
-pub use dropseed_resource_loader as resource_loader;
-
 pub use engine::audio_thread::DSEngineAudioThread;
 pub use engine::events::from_engine::{
     DSEngineEvent, EngineDeactivatedInfo, PluginEvent, PluginScannerEvent,

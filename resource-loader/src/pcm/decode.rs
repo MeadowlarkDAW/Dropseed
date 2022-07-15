@@ -1,26 +1,25 @@
 use std::borrow::Cow;
 use std::path::PathBuf;
 
-use meadowlark_core_types::time::{Frames, SampleRate};
 use symphonia::core::audio::AudioBufferRef;
 use symphonia::core::audio::{AudioBuffer, SampleBuffer, Signal};
 use symphonia::core::codecs::{CodecRegistry, DecoderOptions};
 use symphonia::core::probe::ProbeResult;
 use symphonia::core::sample::{i24, u24};
 
-use dropseed_core::pcm::{convert, PcmResource, PcmResourceType};
+use super::ram::{PcmRAM, PcmRAMType};
 
 use super::loader::MAX_FILE_BYTES;
-use super::{PcmKey, PcmLoadError};
+use super::{convert, PcmKey, PcmLoadError};
 
 pub(crate) fn decode_f32_resampled(
     probed: &mut ProbeResult,
     key: &PcmKey,
     codec_registry: &CodecRegistry,
-    pcm_sample_rate: usize,
-    target_sample_rate: usize,
+    pcm_sample_rate: u32,
+    target_sample_rate: u32,
     resampler: &mut samplerate_rs::Samplerate,
-) -> Result<PcmResource, PcmLoadError> {
+) -> Result<PcmRAM, PcmLoadError> {
     // Get the default track in the audio stream.
     let track = probed
         .format
@@ -123,22 +122,15 @@ pub(crate) fn decode_f32_resampled(
         }
     }
 
-    let total_frames = resampled_channels[0].len();
-
-    Ok(PcmResource {
-        pcm_type: PcmResourceType::F32(resampled_channels),
-        sample_rate: SampleRate(target_sample_rate as f64),
-        channels: n_channels,
-        len_frames: Frames(total_frames as u64),
-    })
+    Ok(PcmRAM::new(PcmRAMType::F32(resampled_channels), target_sample_rate))
 }
 
 pub(crate) fn decode_native_bitdepth(
     probed: &mut ProbeResult,
     key: &PcmKey,
     codec_registry: &CodecRegistry,
-    sample_rate: SampleRate,
-) -> Result<PcmResource, PcmLoadError> {
+    sample_rate: u32,
+) -> Result<PcmRAM, PcmLoadError> {
     // Get the default track in the audio stream.
     let track = probed
         .format
@@ -515,9 +507,7 @@ pub(crate) fn decode_native_bitdepth(
                 }
             }
 
-            total_frames = decoded_channels[0].len() as u64;
-
-            PcmResourceType::U8(decoded_channels)
+            PcmRAMType::U8(decoded_channels)
         }
         FirstPacketType::U16(mut decoded_channels) => {
             while let Ok(packet) = probed.format.next_packet() {
@@ -547,9 +537,7 @@ pub(crate) fn decode_native_bitdepth(
                 }
             }
 
-            total_frames = decoded_channels[0].len() as u64;
-
-            PcmResourceType::U16(decoded_channels)
+            PcmRAMType::U16(decoded_channels)
         }
         FirstPacketType::U24(mut decoded_channels) => {
             while let Ok(packet) = probed.format.next_packet() {
@@ -579,9 +567,7 @@ pub(crate) fn decode_native_bitdepth(
                 }
             }
 
-            total_frames = decoded_channels[0].len() as u64;
-
-            PcmResourceType::U24(decoded_channels)
+            PcmRAMType::U24(decoded_channels)
         }
         FirstPacketType::U32(mut decoded_channels) => {
             while let Ok(packet) = probed.format.next_packet() {
@@ -611,9 +597,7 @@ pub(crate) fn decode_native_bitdepth(
                 }
             }
 
-            total_frames = decoded_channels[0].len() as u64;
-
-            PcmResourceType::F32(decoded_channels)
+            PcmRAMType::F32(decoded_channels)
         }
         FirstPacketType::S8(mut decoded_channels) => {
             while let Ok(packet) = probed.format.next_packet() {
@@ -643,9 +627,7 @@ pub(crate) fn decode_native_bitdepth(
                 }
             }
 
-            total_frames = decoded_channels[0].len() as u64;
-
-            PcmResourceType::S8(decoded_channels)
+            PcmRAMType::S8(decoded_channels)
         }
         FirstPacketType::S16(mut decoded_channels) => {
             while let Ok(packet) = probed.format.next_packet() {
@@ -675,9 +657,7 @@ pub(crate) fn decode_native_bitdepth(
                 }
             }
 
-            total_frames = decoded_channels[0].len() as u64;
-
-            PcmResourceType::S16(decoded_channels)
+            PcmRAMType::S16(decoded_channels)
         }
         FirstPacketType::S24(mut decoded_channels) => {
             while let Ok(packet) = probed.format.next_packet() {
@@ -707,9 +687,7 @@ pub(crate) fn decode_native_bitdepth(
                 }
             }
 
-            total_frames = decoded_channels[0].len() as u64;
-
-            PcmResourceType::S24(decoded_channels)
+            PcmRAMType::S24(decoded_channels)
         }
         FirstPacketType::S32(mut decoded_channels) => {
             while let Ok(packet) = probed.format.next_packet() {
@@ -739,9 +717,7 @@ pub(crate) fn decode_native_bitdepth(
                 }
             }
 
-            total_frames = decoded_channels[0].len() as u64;
-
-            PcmResourceType::F32(decoded_channels)
+            PcmRAMType::F32(decoded_channels)
         }
         FirstPacketType::F32(mut decoded_channels) => {
             while let Ok(packet) = probed.format.next_packet() {
@@ -771,9 +747,7 @@ pub(crate) fn decode_native_bitdepth(
                 }
             }
 
-            total_frames = decoded_channels[0].len() as u64;
-
-            PcmResourceType::F32(decoded_channels)
+            PcmRAMType::F32(decoded_channels)
         }
         FirstPacketType::F64(mut decoded_channels) => {
             while let Ok(packet) = probed.format.next_packet() {
@@ -803,18 +777,11 @@ pub(crate) fn decode_native_bitdepth(
                 }
             }
 
-            total_frames = decoded_channels[0].len() as u64;
-
-            PcmResourceType::F64(decoded_channels)
+            PcmRAMType::F64(decoded_channels)
         }
     };
 
-    Ok(PcmResource {
-        pcm_type,
-        sample_rate,
-        channels: n_channels,
-        len_frames: Frames(total_frames),
-    })
+    Ok(PcmRAM::new(pcm_type, sample_rate))
 }
 
 #[inline]
