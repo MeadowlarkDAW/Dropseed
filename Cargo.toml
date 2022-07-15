@@ -17,17 +17,15 @@ readme = "README.md"
 members = ["examples/test-host", "core", "plugins", "resource-loader"]
 
 [features]
-default = ["clap-host", "cpal-backend", "resource-loader", "plugins"]
+default = ["clap-host", "cpal-backend", "resource-loader"]
 clap-host = ["walkdir", "dirs"]
 cpal-backend = ["cpal"]
 cpal-asio = ["cpal/asio"]
 resource-loader = ["dropseed-resource-loader"]
-plugins = ["dropseed-plugins"]
 
 [dependencies]
 dropseed-core = { path = "./core" }
 dropseed-resource-loader = { path = "./resource-loader", optional = true }
-dropseed-plugins = { path = "./plugins", optional = true }
 meadowlark-core-types = { git = "https://github.com/MeadowlarkDAW/meadowlark-core-types", branch = "main" }
 audio-graph = { git = "https://github.com/MeadowlarkDAW/audio-graph", branch = "main" }
 clack-host = { git = "https://github.com/prokopyl/clack", rev = "6629394c664af6889b0396a2880cd1efcf847727" }

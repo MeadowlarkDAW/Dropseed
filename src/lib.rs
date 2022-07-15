@@ -14,9 +14,6 @@ pub use clack_host::utils::FixedPoint;
 
 pub use dropseed_core::*;
 
-#[cfg(feature = "plugins")]
-pub use dropseed_plugins;
-
 #[cfg(feature = "resource-loader")]
 pub use dropseed_resource_loader as resource_loader;
 
