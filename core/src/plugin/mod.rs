@@ -1,16 +1,28 @@
 use basedrop::Shared;
 use meadowlark_core_types::SampleRate;
 
-pub mod audio_buffer;
-pub mod events;
 pub mod ext;
+
+pub mod buffer;
 pub mod host_request;
-pub(crate) mod process_info;
+
+mod event;
+mod instance_id;
+mod process_info;
 mod save_state;
 
-use crate::{transport::TempoMap, EventBuffer, ParamID, PluginInstanceID};
-use host_request::HostRequest;
-use process_info::{ProcBuffers, ProcInfo, ProcessStatus};
+use crate::transport::TempoMap;
+
+pub use clack_host::events::io::EventBuffer;
+
+pub use buffer::{
+    AudioPortBuffer, AudioPortBufferMut, MonoBuffer, MonoBufferMut, StereoBuffer, StereoBufferMut,
+};
+pub use event::ProcEvent;
+pub use ext::params::ParamID;
+pub use host_request::{HostInfo, HostRequest};
+pub use instance_id::*;
+pub use process_info::{ProcBuffers, ProcInfo, ProcessStatus};
 pub use save_state::{PluginPreset, PluginSaveState};
 
 /// The description of a plugin.

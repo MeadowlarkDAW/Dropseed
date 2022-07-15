@@ -131,7 +131,7 @@ pub struct ParamInfo {
 
     /// Reserved for CLAP plugins.
     #[allow(unused)]
-    pub(crate) cookie: Cookie,
+    pub _cookie: Cookie,
 }
 
 impl ParamInfo {
@@ -163,7 +163,7 @@ impl ParamInfo {
             min_value,
             max_value,
             default_value,
-            cookie: Cookie::empty(),
+            _cookie: Cookie::empty(),
         }
     }
 }
@@ -265,13 +265,16 @@ impl HostParamsExtMainThread {
     /// Clears references to a parameter.
     ///
     /// [main-thread]
+    #[allow(unused)]
     pub fn clear(&self, param_id: ParamID, clear_flags: ParamClearFlags) {
         // TODO
+        /*
         log::info!(
             "got request to clear param with id {:?} and flags: {:?}",
             param_id,
             clear_flags
         );
+        */
     }
 
     /// Request the host to call clap_plugin_params->fush().

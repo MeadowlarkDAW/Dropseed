@@ -14,15 +14,20 @@ readme = "README.md"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [workspace]
-members = ["examples/test-host", "plugins", "resource-loader"]
+members = ["examples/test-host", "core", "plugins", "resource-loader"]
 
 [features]
-default = ["clap-host", "cpal-backend"]
+default = ["clap-host", "cpal-backend", "resource-loader", "plugins"]
 clap-host = ["walkdir", "dirs"]
 cpal-backend = ["cpal"]
 cpal-asio = ["cpal/asio"]
+resource-loader = ["dropseed-resource-loader"]
+plugins = ["dropseed-plugins"]
 
 [dependencies]
+dropseed-core = { path = "./core" }
+dropseed-resource-loader = { path = "./resource-loader", optional = true }
+dropseed-plugins = { path = "./plugins", optional = true }
 meadowlark-core-types = { git = "https://github.com/MeadowlarkDAW/meadowlark-core-types", branch = "main" }
 audio-graph = { git = "https://github.com/MeadowlarkDAW/audio-graph", branch = "main" }
 clack-host = { git = "https://github.com/prokopyl/clack", rev = "6629394c664af6889b0396a2880cd1efcf847727" }
@@ -37,6 +42,7 @@ atomic_refcell = "0.1"
 fnv = "1.0"
 log = "0.4"
 thread-priority = "0.8"
+recycle_vec = "1.0"
 cpal = { version = "0.13", optional = true }
 walkdir = { version = "2.3.2", optional = true }
 

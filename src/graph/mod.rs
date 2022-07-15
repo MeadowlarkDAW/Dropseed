@@ -12,11 +12,17 @@ pub(crate) mod plugin_host;
 pub(crate) mod schedule;
 pub(crate) mod shared_pool;
 
-pub mod plugin;
-
 mod compiler;
 mod save_state;
 mod verifier;
+
+use dropseed_core::plugin::ext::audio_ports::{MainPortsLayout, PluginAudioPortsExt};
+use dropseed_core::plugin::ext::note_ports::PluginNotePortsExt;
+use dropseed_core::plugin::ext::params::ParamID;
+use dropseed_core::plugin::{
+    HostInfo, HostRequest, PluginInstanceID, PluginInstanceType, PluginSaveState,
+};
+use dropseed_core::transport::TempoMap;
 
 use plugin_host::OnIdleResult;
 use schedule::{Schedule, SharedSchedule};
@@ -27,22 +33,15 @@ use crate::engine::events::from_engine::{DSEngineEvent, PluginEvent};
 use crate::engine::main_thread::{EdgeReq, EdgeReqPortID, PluginIDReq};
 use crate::engine::plugin_scanner::{NewPluginInstanceError, PluginScanner};
 use crate::graph::plugin_host::PluginInstanceHost;
-use crate::transport::TempoMap;
 use crate::transport::TransportHandle;
 use crate::transport::TransportTask;
 use crate::utils::thread_id::SharedThreadIDs;
-use crate::{MainPortsLayout, ParamID};
-use plugin::ext::audio_ports::PluginAudioPortsExt;
-use plugin::ext::note_ports::PluginNotePortsExt;
-use plugin::host_request::{HostInfo, HostRequest};
-use plugin::PluginSaveState;
 
 pub use compiler::GraphCompilerError;
 pub use plugin_host::{
     ActivatePluginError, ParamGestureInfo, ParamModifiedInfo, PluginHandle, PluginParamsExt,
 };
 pub use save_state::{AudioGraphSaveState, EdgeSaveState};
-pub use shared_pool::PluginInstanceID;
 pub use verifier::VerifyScheduleError;
 
 /// A default port type for general purpose applications
@@ -146,18 +145,18 @@ impl AudioGraph {
         let temp_rdn = Shared::new(&coll_handle, String::from("org.rustydaw.temporary_plugin_rdn"));
 
         // These will get overwritten in the `reset()` method.
-        let graph_in_node_id = PluginInstanceID {
-            node_ref: audio_graph::NodeRef::new(0),
-            unique_id: 0,
-            format: shared_pool::PluginInstanceType::GraphInput,
-            rdn: Shared::clone(&graph_in_rdn),
-        };
-        let graph_out_node_id = PluginInstanceID {
-            node_ref: audio_graph::NodeRef::new(1),
-            unique_id: 1,
-            format: shared_pool::PluginInstanceType::GraphOutput,
-            rdn: Shared::clone(&graph_out_rdn),
-        };
+        let graph_in_node_id = PluginInstanceID::_new(
+            0,
+            0,
+            PluginInstanceType::GraphInput,
+            Shared::clone(&graph_in_rdn),
+        );
+        let graph_out_node_id = PluginInstanceID::_new(
+            1,
+            1,
+            PluginInstanceType::GraphOutput,
+            Shared::clone(&graph_out_rdn),
+        );
 
         let mut new_self = Self {
             shared_plugin_pool,
@@ -199,12 +198,12 @@ impl AudioGraph {
         plugin_scanner: &mut PluginScanner,
         fallback_to_other_formats: bool,
     ) -> NewPluginRes {
-        let temp_id = PluginInstanceID {
-            node_ref: audio_graph::NodeRef::new(0),
-            unique_id: 0,
-            format: shared_pool::PluginInstanceType::Unloaded,
-            rdn: Shared::clone(&self.temp_rdn),
-        };
+        let temp_id = PluginInstanceID::_new(
+            0,
+            0,
+            PluginInstanceType::Unloaded,
+            Shared::clone(&self.temp_rdn),
+        );
 
         let node_ref = self.abstract_graph.node(temp_id);
 
@@ -331,7 +330,7 @@ impl AudioGraph {
                         plugin.plugin_host.schedule_remove();
                     }
 
-                    if let Err(e) = self.abstract_graph.delete_node(id.node_ref) {
+                    if let Err(e) = self.abstract_graph.delete_node(NodeRef::new(id._node_ref())) {
                         log::error!("Abstract node failed to delete node: {}", e);
                     }
                 } else {
@@ -507,13 +506,15 @@ impl AudioGraph {
 
     pub fn disconnect_edge(&mut self, edge: &Edge) -> bool {
         let mut found_ports = None;
-        if let Ok(edges) = self.abstract_graph.node_edges(edge.src_plugin_id.node_ref) {
+        if let Ok(edges) =
+            self.abstract_graph.node_edges(NodeRef::new(edge.src_plugin_id._node_ref()))
+        {
             // Find the corresponding edge.
             for e in edges.iter() {
-                if e.dst_node != edge.dst_plugin_id.node_ref {
+                if e.dst_node.as_usize() != edge.dst_plugin_id._node_ref() {
                     continue;
                 }
-                if e.src_node != edge.src_plugin_id.node_ref {
+                if e.src_node.as_usize() != edge.src_plugin_id._node_ref() {
                     continue;
                 }
                 if e.port_type != edge.edge_type {
@@ -563,7 +564,7 @@ impl AudioGraph {
     }
 
     pub fn get_plugin_edges(&self, id: &PluginInstanceID) -> Result<PluginEdges, ()> {
-        if let Ok(edges) = self.abstract_graph.node_edges(id.node_ref) {
+        if let Ok(edges) = self.abstract_graph.node_edges(NodeRef::new(id._node_ref())) {
             let mut incoming: SmallVec<[Edge; 8]> = SmallVec::new();
             let mut outgoing: SmallVec<[Edge; 8]> = SmallVec::new();
 
@@ -571,7 +572,7 @@ impl AudioGraph {
                 let src_port = self.abstract_graph.port_ident(edge.src_port).unwrap();
                 let dst_port = self.abstract_graph.port_ident(edge.dst_port).unwrap();
 
-                if edge.src_node == id.node_ref {
+                if edge.src_node.as_usize() == id._node_ref() {
                     outgoing.push(Edge {
                         edge_type: edge.port_type,
                         src_plugin_id: id.clone(),
@@ -616,20 +617,20 @@ impl AudioGraph {
         let mut plugin_save_states: Vec<PluginSaveState> = Vec::with_capacity(num_plugins);
         let mut edge_save_states: Vec<EdgeSaveState> = Vec::with_capacity(num_plugins * 3);
 
-        let mut node_ref_to_index: FnvHashMap<NodeRef, usize> = FnvHashMap::default();
+        let mut node_ref_to_index: FnvHashMap<usize, usize> = FnvHashMap::default();
         node_ref_to_index.reserve(num_plugins);
 
         for (index, (plugin_id, plugin_entry)) in
             self.shared_plugin_pool.plugins.iter_mut().enumerate()
         {
-            if node_ref_to_index.insert(plugin_id.node_ref, index).is_some() {
+            if node_ref_to_index.insert(plugin_id._node_ref(), index).is_some() {
                 // In theory this should never happen.
-                panic!("More than one plugin with node ref: {:?}", plugin_id.node_ref);
+                panic!("More than one plugin with node ref: {:?}", plugin_id._node_ref());
             }
 
             // These are the only two "plugins" without a save state.
-            if plugin_id.node_ref == self.graph_in_node_id.node_ref
-                || plugin_id.node_ref == self.graph_out_node_id.node_ref
+            if plugin_id._node_ref() == self.graph_in_node_id._node_ref()
+                || plugin_id._node_ref() == self.graph_out_node_id._node_ref()
             {
                 continue;
             }
@@ -639,14 +640,15 @@ impl AudioGraph {
 
         // Iterate again to get all the edges.
         for plugin_id in self.shared_plugin_pool.plugins.keys() {
-            for edge in self.abstract_graph.node_edges(plugin_id.node_ref).unwrap() {
+            for edge in self.abstract_graph.node_edges(NodeRef::new(plugin_id._node_ref())).unwrap()
+            {
                 let src_port = self.abstract_graph.port_ident(edge.src_port).unwrap();
                 let dst_port = self.abstract_graph.port_ident(edge.dst_port).unwrap();
 
                 edge_save_states.push(EdgeSaveState {
                     edge_type: edge.port_type,
-                    src_plugin_i: *node_ref_to_index.get(&edge.src_node).unwrap(),
-                    dst_plugin_i: *node_ref_to_index.get(&edge.dst_node).unwrap(),
+                    src_plugin_i: *node_ref_to_index.get(&edge.src_node.as_usize()).unwrap(),
+                    dst_plugin_i: *node_ref_to_index.get(&edge.dst_node.as_usize()).unwrap(),
                     src_port_stable_id: src_port.port_stable_id,
                     src_port_channel: src_port.port_channel,
                     dst_port_stable_id: dst_port.port_stable_id,
@@ -703,28 +705,37 @@ impl AudioGraph {
 
         // ---  Add the graph input and graph output nodes to the graph  --------------------------
 
-        let mut graph_in_node_id = PluginInstanceID {
-            node_ref: audio_graph::NodeRef::new(0),
-            unique_id: 0,
-            format: shared_pool::PluginInstanceType::GraphInput,
-            rdn: Shared::clone(&self.graph_in_rdn),
-        };
-        let mut graph_out_node_id = PluginInstanceID {
-            node_ref: audio_graph::NodeRef::new(1),
-            unique_id: 1,
-            format: shared_pool::PluginInstanceType::GraphOutput,
-            rdn: Shared::clone(&self.graph_out_rdn),
-        };
+        let graph_in_node_id = PluginInstanceID::_new(
+            0,
+            0,
+            PluginInstanceType::GraphInput,
+            Shared::clone(&self.graph_in_rdn),
+        );
+        let graph_out_node_id = PluginInstanceID::_new(
+            1,
+            1,
+            PluginInstanceType::GraphOutput,
+            Shared::clone(&self.graph_out_rdn),
+        );
 
-        graph_in_node_id.node_ref = self.abstract_graph.node(graph_in_node_id.clone());
-        graph_out_node_id.node_ref = self.abstract_graph.node(graph_out_node_id.clone());
+        let graph_in_node_ref = self.abstract_graph.node(graph_in_node_id.clone());
+        let graph_out_node_ref = self.abstract_graph.node(graph_out_node_id.clone());
 
-        self.abstract_graph
-            .set_node_ident(graph_in_node_id.node_ref, graph_in_node_id.clone())
-            .unwrap();
-        self.abstract_graph
-            .set_node_ident(graph_out_node_id.node_ref, graph_out_node_id.clone())
-            .unwrap();
+        let graph_in_node_id = PluginInstanceID::_new(
+            graph_in_node_ref.as_usize(),
+            0,
+            PluginInstanceType::GraphInput,
+            Shared::clone(&self.graph_in_rdn),
+        );
+        let graph_out_node_id = PluginInstanceID::_new(
+            graph_out_node_ref.as_usize(),
+            1,
+            PluginInstanceType::GraphOutput,
+            Shared::clone(&self.graph_out_rdn),
+        );
+
+        self.abstract_graph.set_node_ident(graph_in_node_ref, graph_in_node_id.clone()).unwrap();
+        self.abstract_graph.set_node_ident(graph_out_node_ref, graph_out_node_id.clone()).unwrap();
 
         let mut graph_in_port_refs: FnvHashMap<PortChannelID, audio_graph::PortRef> =
             FnvHashMap::default();
@@ -741,10 +752,8 @@ impl AudioGraph {
                 port_channel: i,
             };
 
-            let port_ref = self
-                .abstract_graph
-                .port(graph_in_node_id.node_ref, PortType::Audio, port_id)
-                .unwrap();
+            let port_ref =
+                self.abstract_graph.port(graph_in_node_ref, PortType::Audio, port_id).unwrap();
 
             let _ = graph_in_port_refs.insert(port_id, port_ref);
 
@@ -758,10 +767,8 @@ impl AudioGraph {
                 port_channel: i,
             };
 
-            let port_ref = self
-                .abstract_graph
-                .port(graph_out_node_id.node_ref, PortType::Audio, port_id)
-                .unwrap();
+            let port_ref =
+                self.abstract_graph.port(graph_out_node_ref, PortType::Audio, port_id).unwrap();
 
             let _ = graph_out_port_refs.insert(port_id, port_ref);
 
@@ -773,7 +780,7 @@ impl AudioGraph {
             PluginInstanceHostEntry {
                 plugin_host: PluginInstanceHost::new_graph_in(
                     graph_in_node_id.clone(),
-                    HostRequest::new(Shared::clone(&self.host_info)),
+                    HostRequest::_new(Shared::clone(&self.host_info)),
                     self.graph_in_channels as usize,
                 ),
                 port_channels_refs: graph_in_port_refs,
@@ -790,7 +797,7 @@ impl AudioGraph {
             PluginInstanceHostEntry {
                 plugin_host: PluginInstanceHost::new_graph_out(
                     graph_in_node_id,
-                    HostRequest::new(Shared::clone(&self.host_info)),
+                    HostRequest::_new(Shared::clone(&self.host_info)),
                     self.graph_out_channels as usize,
                 ),
                 port_channels_refs: graph_out_port_refs,
@@ -1048,7 +1055,7 @@ fn update_plugin_ports(
                 port_ref
             } else {
                 let port_ref = abstract_graph
-                    .port(entry.plugin_host.id.node_ref, PortType::Audio, port_id)
+                    .port(NodeRef::new(entry.plugin_host.id._node_ref()), PortType::Audio, port_id)
                     .unwrap();
 
                 let _ = entry.port_channels_refs.insert(port_id, port_ref);
@@ -1082,7 +1089,7 @@ fn update_plugin_ports(
                 port_ref
             } else {
                 let port_ref = abstract_graph
-                    .port(entry.plugin_host.id.node_ref, PortType::Audio, port_id)
+                    .port(NodeRef::new(entry.plugin_host.id._node_ref()), PortType::Audio, port_id)
                     .unwrap();
 
                 let _ = entry.port_channels_refs.insert(port_id, port_ref);
@@ -1117,7 +1124,11 @@ fn update_plugin_ports(
     // Plugins always have one automation in port.
     if prev_port_channel_refs.get(&IN_AUTOMATION_PORT_ID).is_none() {
         let in_port_ref = abstract_graph
-            .port(entry.plugin_host.id.node_ref, PortType::ParamAutomation, IN_AUTOMATION_PORT_ID)
+            .port(
+                NodeRef::new(entry.plugin_host.id._node_ref()),
+                PortType::ParamAutomation,
+                IN_AUTOMATION_PORT_ID,
+            )
             .unwrap();
 
         let _ = entry.port_channels_refs.insert(IN_AUTOMATION_PORT_ID, in_port_ref);
@@ -1131,7 +1142,7 @@ fn update_plugin_ports(
         if prev_port_channel_refs.get(&OUT_AUTOMATION_PORT_ID).is_none() {
             let out_port_ref = abstract_graph
                 .port(
-                    entry.plugin_host.id.node_ref,
+                    NodeRef::new(entry.plugin_host.id._node_ref()),
                     PortType::ParamAutomation,
                     OUT_AUTOMATION_PORT_ID,
                 )
@@ -1162,7 +1173,7 @@ fn update_plugin_ports(
             port_ref
         } else {
             let port_ref = abstract_graph
-                .port(entry.plugin_host.id.node_ref, PortType::Note, port_id)
+                .port(NodeRef::new(entry.plugin_host.id._node_ref()), PortType::Note, port_id)
                 .unwrap();
 
             let _ = entry.port_channels_refs.insert(port_id, port_ref);
@@ -1190,7 +1201,7 @@ fn update_plugin_ports(
             port_ref
         } else {
             let port_ref = abstract_graph
-                .port(entry.plugin_host.id.node_ref, PortType::Note, port_id)
+                .port(NodeRef::new(entry.plugin_host.id._node_ref()), PortType::Note, port_id)
                 .unwrap();
 
             let _ = entry.port_channels_refs.insert(port_id, port_ref);

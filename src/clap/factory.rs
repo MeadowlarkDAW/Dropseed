@@ -1,11 +1,11 @@
 use crate::clap::plugin::{ClapHostMainThread, ClapHostShared, ClapPluginMainThread};
 use crate::plugin::{PluginDescriptor, PluginFactory, PluginMainThread};
 use crate::utils::thread_id::SharedThreadIDs;
-use crate::{HostRequest, PluginInstanceID};
 use basedrop::Shared;
 use clack_host::bundle::PluginBundle;
 use clack_host::factory::PluginFactory as RawClapPluginFactory;
 use clack_host::instance::PluginInstance;
+use dropseed_core::plugin::{HostRequest, PluginInstanceID};
 use std::ffi::CStr;
 use std::path::PathBuf;
 
@@ -39,7 +39,7 @@ impl PluginFactory for ClapPluginFactory {
     ) -> Result<Box<dyn PluginMainThread>, String> {
         log::trace!("clap plugin factory new {}", &*self.descriptor.id);
 
-        let id = Shared::clone(&plugin_id.rdn);
+        let id = Shared::clone(plugin_id.rdn());
 
         // TODO: this is a little wasteful, the PluginHost should be able to fit somewhere else
         let host = host_request.info.clack_host_info.clone();

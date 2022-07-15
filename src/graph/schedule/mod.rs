@@ -2,11 +2,11 @@ use atomic_refcell::AtomicRefCell;
 use basedrop::{Shared, SharedCell};
 use smallvec::SmallVec;
 
+use dropseed_core::plugin::buffer::SharedBuffer;
+use dropseed_core::plugin::ProcInfo;
+
 use crate::transport::TransportTask;
 use crate::utils::thread_id::SharedThreadIDs;
-use crate::ProcInfo;
-
-use super::shared_pool::SharedBuffer;
 
 pub(crate) mod delay_comp_node;
 pub(crate) mod sum;

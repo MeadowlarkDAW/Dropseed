@@ -5,6 +5,7 @@ use std::fs::File;
 use std::path::PathBuf;
 
 use basedrop::{Handle, Shared};
+use dropseed_core::pcm::{PcmResource, PcmResourceType};
 
 use fnv::FnvHashMap;
 use meadowlark_core_types::{Frames, SampleRate};
@@ -19,7 +20,7 @@ use symphonia::core::probe::{Hint, Probe};
 // safety check for now.
 pub static MAX_FILE_BYTES: u64 = 1_000_000_000;
 
-use super::{decode, PcmResource, PcmResourceType};
+use super::decode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]
 pub enum ResampleQuality {

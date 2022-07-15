@@ -2,14 +2,14 @@ use fnv::FnvHashMap;
 use smallvec::SmallVec;
 use std::path::PathBuf;
 
+use dropseed_core::plugin::{ParamID, PluginInstanceID};
+
 use crate::{
     engine::main_thread::{EngineActivatedInfo, ModifyGraphRes},
     engine::plugin_scanner::RescanPluginDirectoriesRes,
     graph::{
         plugin_host::PluginHandle, ActivatePluginError, AudioGraphSaveState, ParamModifiedInfo,
-        PluginInstanceID,
     },
-    ParamID,
 };
 
 #[derive(Debug)]

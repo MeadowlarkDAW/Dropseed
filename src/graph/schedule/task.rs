@@ -1,9 +1,9 @@
 use smallvec::SmallVec;
 
-use crate::graph::shared_pool::{SharedBuffer, SharedDelayCompNode, SharedPluginHostAudioThread};
-use crate::plugin::events::ProcEvent;
-use crate::plugin::process_info::ProcBuffers;
-use crate::ProcInfo;
+use dropseed_core::plugin::buffer::SharedBuffer;
+use dropseed_core::plugin::{ProcBuffers, ProcEvent, ProcInfo};
+
+use crate::graph::shared_pool::{SharedDelayCompNode, SharedPluginHostAudioThread};
 
 use super::sum::SumTask;
 
@@ -92,8 +92,8 @@ impl std::fmt::Debug for Task {
             Task::DelayComp(t) => {
                 let mut f = f.debug_struct("DelayComp");
 
-                f.field("audio_in", t.audio_in.id());
-                f.field("audio_out", t.audio_out.id());
+                f.field("audio_in", &t.audio_in.id());
+                f.field("audio_out", &t.audio_out.id());
                 f.field("delay", &t.delay_comp_node.delay());
 
                 f.finish()

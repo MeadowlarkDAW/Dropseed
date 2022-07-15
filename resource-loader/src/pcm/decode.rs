@@ -8,8 +8,10 @@ use symphonia::core::codecs::{CodecRegistry, DecoderOptions};
 use symphonia::core::probe::ProbeResult;
 use symphonia::core::sample::{i24, u24};
 
+use dropseed_core::pcm::{convert, PcmResource, PcmResourceType};
+
 use super::loader::MAX_FILE_BYTES;
-use super::{convert, PcmKey, PcmLoadError, PcmResource, PcmResourceType};
+use super::{PcmKey, PcmLoadError};
 
 pub(crate) fn decode_f32_resampled(
     probed: &mut ProbeResult,

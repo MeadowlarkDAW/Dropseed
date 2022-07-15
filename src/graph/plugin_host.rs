@@ -14,21 +14,22 @@ use std::sync::{
     Arc,
 };
 
-use super::shared_pool::PluginInstanceID;
-use crate::engine::plugin_scanner::PluginFormat;
-use crate::graph::shared_pool::{SharedBuffer, SharedPluginHostAudioThread};
-use crate::plugin::events::ProcEvent;
-use crate::plugin::ext::audio_ports::PluginAudioPortsExt;
-use crate::plugin::ext::note_ports::PluginNotePortsExt;
-use crate::plugin::ext::params::{ParamInfo, ParamInfoFlags};
-use crate::plugin::host_request::RequestFlags;
-use crate::plugin::process_info::ProcBuffers;
-use crate::plugin::{PluginAudioThread, PluginMainThread, PluginPreset, PluginSaveState};
-use crate::transport::TempoMap;
+use dropseed_core::plugin::buffer::SharedBuffer;
+use dropseed_core::plugin::ext::audio_ports::PluginAudioPortsExt;
+use dropseed_core::plugin::ext::note_ports::PluginNotePortsExt;
+use dropseed_core::plugin::ext::params::{ParamID, ParamInfo, ParamInfoFlags};
+use dropseed_core::plugin::host_request::RequestFlags;
+use dropseed_core::plugin::{
+    HostRequest, PluginAudioThread, PluginInstanceID, PluginMainThread, PluginPreset,
+    PluginSaveState, ProcBuffers, ProcEvent, ProcInfo, ProcessStatus,
+};
+use dropseed_core::plugin_scanner::{PluginFormat, ScannedPluginKey};
+use dropseed_core::transport::TempoMap;
+
+use crate::graph::shared_pool::SharedPluginHostAudioThread;
 use crate::utils::reducing_queue::{
     ReducFnvConsumer, ReducFnvProducer, ReducFnvValue, ReducingFnvQueue,
 };
-use crate::{HostRequest, ParamID, ProcInfo, ProcessStatus, ScannedPluginKey};
 
 #[derive(Clone, Copy)]
 struct MainToAudioParamValue {
@@ -118,8 +119,10 @@ impl PluginParamsExt {
                 if param_info.flags.contains(ParamInfoFlags::IS_READONLY) {
                     log::warn!("Ignored request to set parameter value: parameter with id {:?} is read only", &param_id);
                 } else {
-                    ui_to_audio_param_value_tx
-                        .set(param_id, MainToAudioParamValue { value, _cookie: param_info.cookie });
+                    ui_to_audio_param_value_tx.set(
+                        param_id,
+                        MainToAudioParamValue { value, _cookie: param_info._cookie },
+                    );
                     ui_to_audio_param_value_tx.producer_done();
                 }
             } else {
@@ -138,7 +141,7 @@ impl PluginParamsExt {
             if let Some(param_info) = self.params.get(&param_id) {
                 ui_to_audio_param_mod_tx.set(
                     param_id,
-                    MainToAudioParamValue { value: amount, _cookie: param_info.cookie },
+                    MainToAudioParamValue { value: amount, _cookie: param_info._cookie },
                 );
                 ui_to_audio_param_mod_tx.producer_done();
             } else {
@@ -321,7 +324,7 @@ impl PluginInstanceHost {
     }
 
     pub fn collect_save_state(&mut self) -> PluginSaveState {
-        if self.host_request.state_marked_dirty_and_reset_dirty() {
+        if self.host_request._state_marked_dirty_and_reset_dirty() {
             if let Some(main_thread) = &mut self.main_thread {
                 let preset = match main_thread.collect_save_state() {
                     Ok(preset) => preset.map(|bytes| PluginPreset {
@@ -353,7 +356,7 @@ impl PluginInstanceHost {
         if self.state.get().is_active() {
             return Err(ActivatePluginError::AlreadyActive);
         }
-        if self.host_request.load_requested().contains(RequestFlags::RESTART) {
+        if self.host_request._load_requested().contains(RequestFlags::RESTART) {
             return Err(ActivatePluginError::RestartScheduled);
         }
         Ok(())
@@ -437,7 +440,7 @@ impl PluginInstanceHost {
 
         match plugin_main_thread.activate(sample_rate, min_frames, max_frames, coll_handle) {
             Ok(info) => {
-                self.host_request.reset_deactivate();
+                self.host_request._reset_deactivate();
                 self.host_request.request_process();
 
                 self.state.set(PluginState::ActiveAndSleeping);
@@ -524,7 +527,7 @@ impl PluginInstanceHost {
 
         // Wait for the audio thread part to go to sleep before
         // deactivating.
-        self.host_request.request_deactivate();
+        self.host_request._request_deactivate();
     }
 
     pub fn schedule_remove(&mut self) {
@@ -581,7 +584,7 @@ impl PluginInstanceHost {
 
         let plugin_main_thread = self.main_thread.as_mut().unwrap();
 
-        let request_flags = self.host_request.load_requests_and_reset_callback();
+        let request_flags = self.host_request._load_requests_and_reset_callback();
         let state = self.state.get();
 
         /*
@@ -601,14 +604,14 @@ impl PluginInstanceHost {
                 plugin_main_thread.deactivate();
 
                 self.state.set(PluginState::Inactive);
-                self.host_request.reset_deactivate();
+                self.host_request._reset_deactivate();
 
                 self.param_queues = None;
 
                 if !self.remove_requested {
                     let mut res = OnIdleResult::PluginDeactivated;
 
-                    if self.host_request.reset_restart() {
+                    if self.host_request._reset_restart() {
                         match self.activate(sample_rate, min_frames, max_frames, coll_handle) {
                             Ok((ui_handle, param_values)) => {
                                 res = OnIdleResult::PluginActivated(ui_handle, param_values)
@@ -625,7 +628,7 @@ impl PluginInstanceHost {
         } else if request_flags.contains(RequestFlags::RESTART) && !self.remove_requested {
             // Wait for the audio thread part to go to sleep before
             // deactivating.
-            self.host_request.request_deactivate();
+            self.host_request._request_deactivate();
         }
 
         if let Some(params_queue) = &mut self.param_queues {
@@ -692,7 +695,7 @@ impl PluginInstanceHostAudioThread {
         let clear_outputs = |proc_info: &ProcInfo, buffers: &mut ProcBuffers| {
             buffers.clear_all_outputs(proc_info.frames);
             for b in buffers.audio_out.iter_mut() {
-                b.sync_constant_mask_to_buffers();
+                b._sync_constant_mask_to_buffers();
             }
         };
 
@@ -716,7 +719,7 @@ impl PluginInstanceHostAudioThread {
             return;
         }
 
-        let request_flags = self.host_request.load_requested();
+        let request_flags = self.host_request._load_requested();
 
         // Do we want to deactivate the plugin?
         if request_flags.contains(RequestFlags::DEACTIVATE) {
@@ -823,7 +826,7 @@ impl PluginInstanceHostAudioThread {
                     let do_add = match &event {
                         ProcEvent::ParamValue(_, Some(target_plugin))
                         | ProcEvent::ParamMod(_, Some(target_plugin))
-                            if *target_plugin == self.id.node_ref =>
+                            if *target_plugin == self.id.unique_id() =>
                         {
                             has_param_in_event = true;
                             true
@@ -846,10 +849,10 @@ impl PluginInstanceHostAudioThread {
         if state == PluginState::ActiveAndWaitingForQuiet && !has_note_in_event {
             // Sync constant masks for more efficient silence checking.
             for buf in buffers.audio_in.iter_mut() {
-                buf.sync_constant_mask_from_buffers();
+                buf._sync_constant_mask_from_buffers();
             }
 
-            if buffers.audio_inputs_silent(proc_info.frames) {
+            if buffers.audio_inputs_silent(true, proc_info.frames) {
                 self.plugin.stop_processing();
 
                 self.state.set(PluginState::ActiveAndSleeping);
@@ -878,7 +881,7 @@ impl PluginInstanceHostAudioThread {
                 return;
             }
 
-            self.host_request.reset_process();
+            self.host_request._reset_process();
 
             if self.plugin.start_processing().is_err() {
                 // The plugin failed to start processing.
@@ -900,11 +903,11 @@ impl PluginInstanceHostAudioThread {
         // Sync constant masks for the plugin.
         if state != PluginState::ActiveAndWaitingForQuiet {
             for buf in buffers.audio_in.iter_mut() {
-                buf.sync_constant_mask_from_buffers();
+                buf._sync_constant_mask_from_buffers();
             }
         }
         for buf in buffers.audio_out.iter_mut() {
-            buf.set_constant_mask(0);
+            buf.constant_mask = 0;
         }
 
         let status = self.plugin.process(proc_info, buffers, &self.in_events, &mut self.out_events);
@@ -1128,7 +1131,7 @@ impl PluginInstanceHostAudioThread {
                     self.state.set(PluginState::ActiveAndProcessing);
                 }
 
-                if buffers.audio_outputs_silent(proc_info.frames) {
+                if buffers.audio_outputs_silent(true, proc_info.frames) {
                     self.plugin.stop_processing();
 
                     self.state.set(PluginState::ActiveAndSleeping);
@@ -1147,7 +1150,7 @@ impl PluginInstanceHostAudioThread {
         }
 
         for buf in buffers.audio_out.iter_mut() {
-            buf.sync_constant_mask_to_buffers();
+            buf._sync_constant_mask_to_buffers();
         }
     }
 }

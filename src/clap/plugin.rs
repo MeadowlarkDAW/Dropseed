@@ -28,15 +28,20 @@ use clack_host::instance::processor::PluginAudioProcessor;
 use clack_host::instance::{PluginAudioConfiguration, PluginInstance};
 use clack_host::plugin::{PluginAudioProcessorHandle, PluginMainThreadHandle, PluginSharedHandle};
 
+use dropseed_core::plugin::buffer::RawAudioChannelBuffers;
+use dropseed_core::plugin::ext::audio_ports::{
+    AudioPortInfo, MainPortsLayout, PluginAudioPortsExt,
+};
+use dropseed_core::plugin::ext::params::{ParamClearFlags, ParamRescanFlags};
+use dropseed_core::plugin::ext::params::{ParamID, ParamInfo, ParamInfoFlags};
+use dropseed_core::plugin::{
+    ext, EventBuffer, HostRequest, PluginActivatedInfo, PluginAudioThread, PluginInstanceID,
+    PluginMainThread, PluginPreset, ProcBuffers, ProcInfo, ProcessStatus,
+};
+
 use super::process::ClapProcess;
-use crate::plugin::audio_buffer::RawAudioChannelBuffers;
-use crate::plugin::ext::params::{ParamClearFlags, ParamRescanFlags};
-use crate::plugin::process_info::{ProcBuffers, ProcInfo, ProcessStatus};
-use crate::plugin::{ext, PluginActivatedInfo, PluginAudioThread, PluginMainThread, PluginPreset};
+
 use crate::utils::thread_id::SharedThreadIDs;
-use crate::{AudioPortInfo, EventBuffer, ParamID};
-use crate::{HostRequest, PluginAudioPortsExt, PluginInstanceID};
-use crate::{MainPortsLayout, ParamInfo, ParamInfoFlags};
 
 pub(crate) struct ClapPluginMainThread {
     instance: PluginInstance<ClapHost>,
@@ -340,7 +345,7 @@ impl PluginMainThread for ClapPluginMainThread {
                 min_value: info.min_value(),
                 max_value: info.max_value(),
                 default_value: info.default_value(),
-                cookie: info.cookie(),
+                _cookie: info.cookie(),
             })
         } else {
             Err(())
@@ -471,30 +476,30 @@ impl PluginAudioThread for ClapPluginAudioThread {
                     SmallVec::new();
 
                 for in_port in buffers.audio_in.iter() {
-                    match &in_port.raw_channels {
+                    match &in_port._raw_channels {
                         RawAudioChannelBuffers::F32(buffers) => {
                             for b in buffers.iter() {
-                                input_refs_f32.push(b.buffer.data.borrow());
+                                input_refs_f32.push(b.borrow());
                             }
                         }
                         RawAudioChannelBuffers::F64(buffers) => {
                             for b in buffers.iter() {
-                                input_refs_f64.push(b.buffer.data.borrow());
+                                input_refs_f64.push(b.borrow());
                             }
                         }
                     }
                 }
 
                 for out_port in buffers.audio_out.iter() {
-                    match &out_port.raw_channels {
+                    match &out_port._raw_channels {
                         RawAudioChannelBuffers::F32(buffers) => {
                             for b in buffers.iter() {
-                                output_refs_f32.push(b.buffer.data.borrow_mut());
+                                output_refs_f32.push(b.borrow_mut());
                             }
                         }
                         RawAudioChannelBuffers::F64(buffers) => {
                             for b in buffers.iter() {
-                                output_refs_f64.push(b.buffer.data.borrow_mut());
+                                output_refs_f64.push(b.borrow_mut());
                             }
                         }
                     }

@@ -11,18 +11,20 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 use thread_priority::ThreadPriority;
 
+use dropseed_core::plugin::PluginInstanceID;
+use dropseed_core::plugin_scanner::ScannedPluginKey;
+use dropseed_core::transport::TempoMap;
+
 use crate::engine::audio_thread::DSEngineAudioThread;
 use crate::engine::events::from_engine::{
     DSEngineEvent, EngineDeactivatedInfo, PluginScannerEvent,
 };
 use crate::engine::events::to_engine::DSEngineRequest;
-use crate::engine::plugin_scanner::{PluginScanner, ScannedPluginKey};
-use crate::graph::{
-    AudioGraph, AudioGraphSaveState, Edge, NewPluginRes, PluginEdges, PluginInstanceID, PortType,
-};
+use crate::engine::plugin_scanner::PluginScanner;
+use crate::graph::{AudioGraph, AudioGraphSaveState, Edge, NewPluginRes, PluginEdges, PortType};
 use crate::plugin::host_request::HostInfo;
 use crate::plugin::{PluginFactory, PluginSaveState};
-use crate::transport::{TempoMap, TransportHandle};
+use crate::transport::TransportHandle;
 use crate::utils::thread_id::SharedThreadIDs;
 
 static ENGINE_THREAD_UPDATE_INTERVAL: Duration = Duration::from_millis(10);

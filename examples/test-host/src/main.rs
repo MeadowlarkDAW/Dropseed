@@ -1,10 +1,10 @@
 use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::Stream;
 use crossbeam_channel::Receiver;
+use dropseed::plugin::{HostInfo, PluginInstanceID};
 use dropseed::{
     ActivateEngineSettings, DSEngineAudioThread, DSEngineEvent, DSEngineHandle, DSEngineRequest,
-    EngineDeactivatedInfo, HostInfo, PluginActivationStatus, PluginEvent, PluginInstanceID,
-    PluginScannerEvent, ScannedPlugin,
+    EngineDeactivatedInfo, PluginActivationStatus, PluginEvent, PluginScannerEvent, ScannedPlugin,
 };
 use eframe::egui;
 use meadowlark_core_types::SampleRate;
@@ -233,7 +233,7 @@ impl DSExampleGUI {
                         for new_plugin_res in res.new_plugins.drain(..) {
                             let mut found = None;
                             for (p, _) in self.plugin_list.iter() {
-                                if p.rdn() == new_plugin_res.plugin_id.rdn() {
+                                if p.rdn() == new_plugin_res.plugin_id.rdn().as_str() {
                                     found = Some(p.description.name.clone());
                                     break;
                                 }

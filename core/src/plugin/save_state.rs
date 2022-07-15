@@ -1,7 +1,8 @@
 use std::fmt::Debug;
 
+use super::ext::audio_ports::PluginAudioPortsExt;
 use super::ext::note_ports::PluginNotePortsExt;
-use crate::{engine::plugin_scanner::ScannedPluginKey, PluginAudioPortsExt};
+use crate::plugin_scanner::ScannedPluginKey;
 
 #[derive(Clone)]
 pub struct PluginPreset {

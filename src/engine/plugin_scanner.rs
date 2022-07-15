@@ -4,12 +4,12 @@ use std::str::FromStr;
 use std::{collections::HashMap, error::Error};
 use walkdir::WalkDir;
 
+use dropseed_core::plugin::{HostInfo, HostRequest, PluginInstanceID, PluginInstanceType};
+use dropseed_core::plugin_scanner::{PluginFormat, ScannedPluginKey};
+
 use crate::graph::plugin_host::PluginInstanceHost;
-use crate::graph::shared_pool::{PluginInstanceID, PluginInstanceType};
-use crate::plugin::host_request::HostRequest;
 use crate::plugin::{PluginDescriptor, PluginFactory, PluginSaveState};
 use crate::utils::thread_id::SharedThreadIDs;
-use crate::HostInfo;
 
 #[cfg(all(
     feature = "clap-host",
@@ -25,26 +25,6 @@ const DEFAULT_CLAP_SCAN_DIRECTORIES: [&'static str; 1] = ["/Library/Audio/Plug-I
 const DEFAULT_CLAP_SCAN_DIRECTORIES: [&'static str; 1] = ["C:/Program Files/Common Files/CLAP"];
 
 const MAX_SCAN_DEPTH: usize = 10;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum PluginFormat {
-    Internal,
-    Clap,
-}
-
-impl std::fmt::Display for PluginFormat {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PluginFormat::Internal => {
-                write!(f, "internal")
-            }
-            PluginFormat::Clap => {
-                write!(f, "CLAP")
-            }
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct ScannedPlugin {
@@ -68,12 +48,6 @@ struct ScannedPluginFactory {
     factory: Box<dyn PluginFactory>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ScannedPluginKey {
-    pub rdn: String,
-    pub format: PluginFormat,
-}
-
 pub(crate) struct PluginScanner {
     // TODO: Use a hashmap that performs better with strings that are around 10-30
     // characters long?
@@ -84,8 +58,6 @@ pub(crate) struct PluginScanner {
     clap_scan_directories: Vec<PathBuf>,
 
     host_info: Shared<HostInfo>,
-
-    unkown_rdn: Shared<String>,
 
     thread_ids: SharedThreadIDs,
 
@@ -108,8 +80,6 @@ impl PluginScanner {
             clap_scan_directories: Vec::new(),
 
             host_info,
-
-            unkown_rdn: Shared::new(&coll_handle, String::from("org.rustydaw.unkown")),
 
             thread_ids,
 
@@ -335,7 +305,7 @@ impl PluginScanner {
         fallback_to_other_formats: bool,
     ) -> CreatePluginResult {
         let check_for_invalid_host_callbacks = |host_request: &HostRequest, id: &String| {
-            let request_flags = host_request.load_requested_and_reset_all();
+            let request_flags = host_request._load_requested_and_reset_all();
 
             if !request_flags.is_empty() {
                 log::warn!("Plugin with ID {} attempted to call a host request during the PluginFactory::new() method. Requests were ignored.", id);
@@ -393,20 +363,14 @@ impl PluginScanner {
             }
         }
 
-        let mut id = PluginInstanceID {
-            node_ref,
-            unique_id: self.next_plug_unique_id,
-            format: PluginInstanceType::Unloaded,
-            rdn: Shared::clone(&self.unkown_rdn),
-        };
-        let host_request = HostRequest::new(Shared::clone(&self.host_info));
+        let mut format = PluginInstanceType::Unloaded;
+
+        let host_request = HostRequest::_new(Shared::clone(&self.host_info));
         let mut main_thread = None;
 
-        self.next_plug_unique_id += 1;
-
-        if let Some(factory) = factory {
-            id.format = factory.format.into();
-            id.rdn = factory.rdn.clone();
+        let id = if let Some(factory) = factory {
+            format = factory.format.into();
+            let rdn = factory.rdn.clone();
 
             plugin_version = Some(Shared::clone(&factory.plugin_version));
 
@@ -414,6 +378,10 @@ impl PluginScanner {
                 save_state.key =
                     ScannedPluginKey { rdn: save_state.key.rdn.clone(), format: factory.format };
             }
+
+            let id =
+                PluginInstanceID::_new(node_ref.as_usize(), self.next_plug_unique_id, format, rdn);
+            self.next_plug_unique_id += 1;
 
             match factory.factory.new(host_request.clone(), id.clone(), &self.coll_handle) {
                 Ok(mut plugin_main_thread) => {
@@ -426,7 +394,6 @@ impl PluginScanner {
                         ));
                     } else {
                         main_thread = Some(plugin_main_thread);
-                        id.format = factory.format.into();
                         status = Ok(());
                     }
                 }
@@ -439,13 +406,21 @@ impl PluginScanner {
                     ));
                 }
             };
+
+            id
         } else {
-            id.rdn = Shared::new(&self.coll_handle, save_state.key.rdn.clone());
+            let rdn = Shared::new(&self.coll_handle, save_state.key.rdn.clone());
+
+            let id =
+                PluginInstanceID::_new(node_ref.as_usize(), self.next_plug_unique_id, format, rdn);
+            self.next_plug_unique_id += 1;
 
             if status.is_ok() {
                 status = Err(NewPluginInstanceError::NotFound(save_state.key.rdn.clone()));
             }
-        }
+
+            id
+        };
 
         CreatePluginResult {
             plugin_host: PluginInstanceHost::new(

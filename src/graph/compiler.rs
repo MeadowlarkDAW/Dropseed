@@ -4,16 +4,17 @@ use basedrop::Shared;
 use smallvec::SmallVec;
 use std::error::Error;
 
+use dropseed_core::plugin::buffer::{AudioPortBuffer, AudioPortBufferMut, SharedBuffer};
+use dropseed_core::plugin::{ProcBuffers, ProcEvent};
+
 use crate::graph::shared_pool::{DelayCompKey, SharedDelayCompNode};
 use crate::plugin::ext::audio_ports::MainPortsLayout;
-use crate::plugin::process_info::ProcBuffers;
 use crate::transport::TransportTask;
-use crate::{AudioPortBuffer, AudioPortBufferMut, ProcEvent};
 
 use super::{
     schedule::sum::SumTask,
     schedule::task::{DeactivatedPluginTask, DelayCompTask, PluginTask, Task},
-    shared_pool::{SharedBuffer, SharedBufferPool, SharedPluginPool},
+    shared_pool::{SharedBufferPool, SharedPluginPool},
     verifier::{Verifier, VerifyScheduleError},
     PluginInstanceID, PortChannelID, PortType, Schedule,
 };
@@ -143,7 +144,7 @@ pub(crate) fn compile_graph(
 
                             let key = DelayCompKey {
                                 delay: delay_comp_info.delay as u32,
-                                src_node_ref: delay_comp_info.source_node.node_ref,
+                                src_node_ref: delay_comp_info.source_node._node_ref(),
                                 port_stable_id: port_channel_id.port_stable_id,
                                 port_channel_index: port_channel_id.port_channel,
                             };
@@ -397,7 +398,7 @@ pub(crate) fn compile_graph(
                 port_i += 1;
             }
 
-            audio_in.push(AudioPortBuffer::new(buffers, shared_buffer_pool.audio_buffer_size));
+            audio_in.push(AudioPortBuffer::_new(buffers, shared_buffer_pool.audio_buffer_size));
             // TODO: proper latency?
         }
         port_i = 0;
@@ -409,7 +410,7 @@ pub(crate) fn compile_graph(
                 port_i += 1;
             }
 
-            audio_out.push(AudioPortBufferMut::new(buffers, shared_buffer_pool.audio_buffer_size));
+            audio_out.push(AudioPortBufferMut::_new(buffers, shared_buffer_pool.audio_buffer_size));
             // TODO: proper latency?
         }
 

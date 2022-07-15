@@ -13,8 +13,7 @@ repository = "https://github.com/MeadowlarkDAW/dropseed"
 basedrop = "0.1"
 bincode = "1.3.3"
 clack-host = { git = "https://github.com/prokopyl/clack", rev = "6629394c664af6889b0396a2880cd1efcf847727" }
-dropseed = { path = ".." }
-dropseed-resource-loader = { path = "../resource-loader" }
+dropseed-core = { path = "../core" }
 log = "0.4"
 meadowlark-core-types = { git = "https://github.com/MeadowlarkDAW/meadowlark-core-types", branch = "main" }
 rtrb = "0.2"

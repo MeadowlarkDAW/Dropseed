@@ -1,253 +1,14 @@
-use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut};
-use audio_graph::NodeRef;
+use atomic_refcell::AtomicRefCell;
 use basedrop::Shared;
 use fnv::FnvHashMap;
 use std::hash::Hash;
-use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::engine::plugin_scanner::PluginFormat;
-use crate::ProcEvent;
+use dropseed_core::plugin::buffer::{DebugBufferID, DebugBufferType, SharedBuffer};
+use dropseed_core::plugin::{PluginInstanceID, ProcEvent};
 
 use super::plugin_host::{PluginInstanceHost, PluginInstanceHostAudioThread};
 use super::schedule::delay_comp_node::DelayCompNode;
 use super::PortChannelID;
-
-/// Used for debugging and verifying purposes.
-#[repr(u8)]
-#[allow(unused)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-enum DebugBufferType {
-    Audio32,
-    Audio64,
-    IntermediaryAudio32,
-    ParamAutomation,
-    NoteBuffer,
-}
-impl std::fmt::Debug for DebugBufferType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DebugBufferType::Audio32 => write!(f, "f"),
-            DebugBufferType::Audio64 => write!(f, "d"),
-            DebugBufferType::IntermediaryAudio32 => write!(f, "if"),
-            DebugBufferType::ParamAutomation => write!(f, "pa"),
-            DebugBufferType::NoteBuffer => write!(f, "n"),
-        }
-    }
-}
-
-/// Used for debugging and verifying purposes.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct DebugBufferID {
-    buffer_type: DebugBufferType,
-    index: u32,
-}
-
-impl std::fmt::Debug for DebugBufferID {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}({})", self.buffer_type, self.index)
-    }
-}
-
-pub(crate) struct Buffer<T: Clone + Copy + Send + Sync + 'static> {
-    pub data: AtomicRefCell<Vec<T>>,
-    pub is_constant: AtomicBool,
-    pub debug_id: DebugBufferID,
-}
-
-impl<T: Clone + Copy + Send + Sync + 'static> Buffer<T> {
-    pub fn new(max_frames: usize, debug_id: DebugBufferID) -> Self {
-        Self {
-            data: AtomicRefCell::new(Vec::with_capacity(max_frames)),
-            is_constant: AtomicBool::new(true),
-            debug_id,
-        }
-    }
-}
-
-impl Buffer<f32> {
-    pub fn new_f32(max_frames: usize, debug_id: DebugBufferID) -> Self {
-        Self {
-            data: AtomicRefCell::new(vec![0.0; max_frames]),
-            is_constant: AtomicBool::new(true),
-            debug_id,
-        }
-    }
-}
-
-impl Buffer<f64> {
-    #[allow(unused)]
-    // TODO: Support 64bit buffers in the audio graph.
-    pub fn new_f64(max_frames: usize, debug_id: DebugBufferID) -> Self {
-        Self {
-            data: AtomicRefCell::new(vec![0.0; max_frames]),
-            is_constant: AtomicBool::new(true),
-            debug_id,
-        }
-    }
-}
-
-pub(crate) struct SharedBuffer<T: Clone + Copy + Send + Sync + 'static> {
-    pub buffer: Shared<Buffer<T>>,
-}
-
-impl<T: Clone + Copy + Send + Sync + 'static> SharedBuffer<T> {
-    #[inline]
-    pub fn borrow(&self) -> AtomicRef<Vec<T>> {
-        self.buffer.data.borrow()
-    }
-
-    #[inline]
-    pub fn borrow_mut(&self) -> AtomicRefMut<Vec<T>> {
-        self.buffer.data.borrow_mut()
-    }
-
-    #[inline]
-    pub fn set_constant(&self, is_constant: bool) {
-        // TODO: Can we use relaxed ordering?
-        self.buffer.is_constant.store(is_constant, Ordering::SeqCst);
-    }
-
-    #[inline]
-    pub fn is_constant(&self) -> bool {
-        // TODO: Can we use relaxed ordering?
-        self.buffer.is_constant.load(Ordering::SeqCst)
-    }
-
-    pub fn id(&self) -> &DebugBufferID {
-        &self.buffer.debug_id
-    }
-}
-
-impl SharedBuffer<f32> {
-    pub fn clear_f32(&self, frames: usize) {
-        let mut buf_ref = self.borrow_mut();
-        let frames = frames.min(buf_ref.len());
-
-        let buf = &mut buf_ref[0..frames];
-
-        buf.fill(0.0);
-
-        self.set_constant(true);
-    }
-}
-
-impl SharedBuffer<f64> {
-    pub fn clear_f64(&self, frames: usize) {
-        let mut buf_ref = self.borrow_mut();
-        let frames = frames.min(buf_ref.len());
-
-        let buf = &mut buf_ref[0..frames];
-
-        buf.fill(0.0);
-
-        self.set_constant(true);
-    }
-}
-
-impl<T: Clone + Copy + Send + Sync + 'static> Clone for SharedBuffer<T> {
-    fn clone(&self) -> Self {
-        Self { buffer: Shared::clone(&self.buffer) }
-    }
-}
-
-/// Used for debugging and verifying purposes.
-#[repr(u32)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum PluginInstanceType {
-    Internal,
-    Clap,
-    Unloaded,
-    GraphInput,
-    GraphOutput,
-}
-
-impl std::fmt::Debug for PluginInstanceType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                PluginInstanceType::Internal => "INT",
-                PluginInstanceType::Clap => "CLAP",
-                PluginInstanceType::Unloaded => "UNLOADED",
-                PluginInstanceType::GraphInput => "GRAPH_IN",
-                PluginInstanceType::GraphOutput => "GRAPH_OUT",
-            }
-        )
-    }
-}
-
-impl From<PluginFormat> for PluginInstanceType {
-    fn from(f: PluginFormat) -> Self {
-        match f {
-            PluginFormat::Internal => PluginInstanceType::Internal,
-            PluginFormat::Clap => PluginInstanceType::Clap,
-        }
-    }
-}
-
-/// Used to uniquely identify a plugin instance and for debugging purposes.
-pub struct PluginInstanceID {
-    pub(crate) node_ref: audio_graph::NodeRef,
-    // To make sure that no two plugin instances ever have the same ID.
-    pub(crate) unique_id: u64,
-    pub(crate) format: PluginInstanceType,
-    pub(crate) rdn: Shared<String>,
-}
-
-impl PluginInstanceID {
-    pub fn rdn(&self) -> &str {
-        self.rdn.as_str()
-    }
-}
-
-impl std::fmt::Debug for PluginInstanceID {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.format {
-            PluginInstanceType::Internal => {
-                write!(f, "INT({})({})", &**self.rdn, self.unique_id)
-            }
-            PluginInstanceType::Clap => {
-                write!(f, "CLAP({})({})", &**self.rdn, self.unique_id)
-            }
-            PluginInstanceType::Unloaded => {
-                write!(f, "UNLOADED({})", self.unique_id)
-            }
-            PluginInstanceType::GraphInput => {
-                write!(f, "GRAPH_IN")
-            }
-            PluginInstanceType::GraphOutput => {
-                write!(f, "GRAPH_OUT")
-            }
-        }
-    }
-}
-
-impl Clone for PluginInstanceID {
-    fn clone(&self) -> Self {
-        Self {
-            node_ref: self.node_ref,
-            unique_id: self.unique_id,
-            format: self.format,
-            rdn: Shared::clone(&self.rdn),
-        }
-    }
-}
-
-impl PartialEq for PluginInstanceID {
-    fn eq(&self, other: &Self) -> bool {
-        self.node_ref.eq(&other.node_ref)
-    }
-}
-
-impl Eq for PluginInstanceID {}
-
-impl Hash for PluginInstanceID {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.node_ref.hash(state);
-        self.unique_id.hash(state);
-    }
-}
 
 pub(crate) struct SharedPluginHostAudioThread {
     pub plugin: Shared<AtomicRefCell<PluginInstanceHostAudioThread>>,
@@ -285,7 +46,7 @@ pub(crate) struct PluginInstanceHostEntry {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct DelayCompKey {
-    pub src_node_ref: NodeRef,
+    pub src_node_ref: usize,
     pub port_stable_id: u32,
     pub port_channel_index: u16,
     pub delay: u32,
@@ -381,18 +142,11 @@ impl SharedBufferPool {
         if let Some(b) = slot {
             b.clone()
         } else {
-            *slot = Some(SharedBuffer {
-                buffer: Shared::new(
-                    &self.coll_handle,
-                    Buffer::new_f32(
-                        self.audio_buffer_size as usize,
-                        DebugBufferID {
-                            buffer_type: DebugBufferType::Audio32,
-                            index: index as u32,
-                        },
-                    ),
-                ),
-            });
+            *slot = Some(SharedBuffer::_new_f32(
+                self.audio_buffer_size as usize,
+                DebugBufferID { buffer_type: DebugBufferType::Audio32, index: index as u32 },
+                &self.coll_handle,
+            ));
 
             slot.as_ref().unwrap().clone()
         }
@@ -443,18 +197,14 @@ impl SharedBufferPool {
         if let Some(b) = slot {
             b.clone()
         } else {
-            *slot = Some(SharedBuffer {
-                buffer: Shared::new(
-                    &self.coll_handle,
-                    Buffer::new_f32(
-                        self.audio_buffer_size as usize,
-                        DebugBufferID {
-                            buffer_type: DebugBufferType::IntermediaryAudio32,
-                            index: index as u32,
-                        },
-                    ),
-                ),
-            });
+            *slot = Some(SharedBuffer::_new_f32(
+                self.audio_buffer_size as usize,
+                DebugBufferID {
+                    buffer_type: DebugBufferType::IntermediaryAudio32,
+                    index: index as u32,
+                },
+                &self.coll_handle,
+            ));
 
             slot.as_ref().unwrap().clone()
         }
@@ -473,18 +223,11 @@ impl SharedBufferPool {
         if let Some(b) = slot {
             b.clone()
         } else {
-            *slot = Some(SharedBuffer {
-                buffer: Shared::new(
-                    &self.coll_handle,
-                    Buffer::new(
-                        self.note_buffer_size,
-                        DebugBufferID {
-                            buffer_type: DebugBufferType::NoteBuffer,
-                            index: index as u32,
-                        },
-                    ),
-                ),
-            });
+            *slot = Some(SharedBuffer::_new(
+                self.note_buffer_size,
+                DebugBufferID { buffer_type: DebugBufferType::NoteBuffer, index: index as u32 },
+                &self.coll_handle,
+            ));
 
             slot.as_ref().unwrap().clone()
         }
@@ -503,18 +246,14 @@ impl SharedBufferPool {
         if let Some(b) = slot {
             b.clone()
         } else {
-            *slot = Some(SharedBuffer {
-                buffer: Shared::new(
-                    &self.coll_handle,
-                    Buffer::new(
-                        self.automation_buffer_size,
-                        DebugBufferID {
-                            buffer_type: DebugBufferType::ParamAutomation,
-                            index: index as u32,
-                        },
-                    ),
-                ),
-            });
+            *slot = Some(SharedBuffer::_new(
+                self.automation_buffer_size,
+                DebugBufferID {
+                    buffer_type: DebugBufferType::ParamAutomation,
+                    index: index as u32,
+                },
+                &self.coll_handle,
+            ));
 
             slot.as_ref().unwrap().clone()
         }

@@ -1,6 +1,8 @@
+use dropseed::plugin::ext::params::ParamInfoFlags;
+use dropseed::plugin::{ParamID, PluginInstanceID};
 use dropseed::{
-    plugin::PluginSaveState, DSEngineHandle, EdgeReq, EdgeReqPortID, ModifyGraphRequest, ParamID,
-    ParamInfoFlags, ParamModifiedInfo, PluginHandle, PluginIDReq, PluginInstanceID, PortType,
+    plugin::PluginSaveState, DSEngineHandle, EdgeReq, EdgeReqPortID, ModifyGraphRequest,
+    ParamModifiedInfo, PluginHandle, PluginIDReq, PortType,
 };
 use eframe::egui;
 use fnv::FnvHashMap;

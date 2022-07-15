@@ -58,11 +58,7 @@ impl PluginAudioPortsExt {
         }
     }
 
-    pub(crate) fn in_channel_index(
-        &self,
-        port_stable_id: u32,
-        port_channel: u16,
-    ) -> Result<usize, ()> {
+    pub fn in_channel_index(&self, port_stable_id: u32, port_channel: u16) -> Result<usize, ()> {
         // TODO: Optimize this?
 
         let mut channel_i: u16 = 0;
@@ -82,11 +78,7 @@ impl PluginAudioPortsExt {
         Err(())
     }
 
-    pub(crate) fn out_channel_index(
-        &self,
-        port_stable_id: u32,
-        port_channel: u16,
-    ) -> Result<usize, ()> {
+    pub fn out_channel_index(&self, port_stable_id: u32, port_channel: u16) -> Result<usize, ()> {
         // TODO: Optimize this?
 
         let mut channel_i: u16 = 0;

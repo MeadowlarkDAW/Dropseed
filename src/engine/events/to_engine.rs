@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
+use dropseed_core::transport::TempoMap;
+
 use crate::engine::main_thread::{ActivateEngineSettings, ModifyGraphRequest};
 use crate::graph::AudioGraphSaveState;
-use crate::transport::TempoMap;
 
 #[derive(Debug, Clone)]
 /// A request to the engine.

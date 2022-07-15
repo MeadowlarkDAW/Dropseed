@@ -5,10 +5,9 @@ use clack_host::instance::processor::audio::{
 };
 use std::ops::{Deref, DerefMut};
 
-use crate::{
-    plugin::{audio_buffer::RawAudioChannelBuffers, process_info::ProcBuffers},
-    PluginAudioPortsExt,
-};
+use dropseed_core::plugin::buffer::RawAudioChannelBuffers;
+use dropseed_core::plugin::ext::audio_ports::PluginAudioPortsExt;
+use dropseed_core::plugin::ProcBuffers;
 
 // Deref coercion struggles to go from AtomicRefMut<Vec<T>> to [T]
 struct BorrowedBuffer<'a, T>(AtomicRefMut<'a, Vec<T>>);
@@ -54,16 +53,16 @@ impl ClapProcess {
 
         let inputs = buffers.audio_in.iter().map(|port| ClapAudioPortBuffer {
             latency: port.latency(),
-            channels: match &port.raw_channels {
+            channels: match &port._raw_channels {
                 RawAudioChannelBuffers::F32(channels) => {
                     AudioPortBufferType::F32(channels.iter().map(|channel| ChannelBuffer {
-                        data: BorrowedBuffer(channel.buffer.data.borrow_mut()),
+                        data: BorrowedBuffer(channel.borrow_mut()),
                         is_constant: channel.is_constant(),
                     }))
                 }
                 RawAudioChannelBuffers::F64(channels) => {
                     AudioPortBufferType::F64(channels.iter().map(|channel| ChannelBuffer {
-                        data: BorrowedBuffer(channel.buffer.data.borrow_mut()),
+                        data: BorrowedBuffer(channel.borrow_mut()),
                         is_constant: channel.is_constant(),
                     }))
                 }
@@ -72,16 +71,16 @@ impl ClapProcess {
 
         let outputs = buffers.audio_out.iter().map(|port| ClapAudioPortBuffer {
             latency: port.latency(),
-            channels: match &port.raw_channels {
+            channels: match &port._raw_channels {
                 RawAudioChannelBuffers::F32(channels) => {
                     AudioPortBufferType::F32(channels.iter().map(|channel| ChannelBuffer {
-                        data: BorrowedBuffer(channel.buffer.data.borrow_mut()),
+                        data: BorrowedBuffer(channel.borrow_mut()),
                         is_constant: channel.is_constant(),
                     }))
                 }
                 RawAudioChannelBuffers::F64(channels) => {
                     AudioPortBufferType::F64(channels.iter().map(|channel| ChannelBuffer {
-                        data: BorrowedBuffer(channel.buffer.data.borrow_mut()),
+                        data: BorrowedBuffer(channel.borrow_mut()),
                         is_constant: channel.is_constant(),
                     }))
                 }

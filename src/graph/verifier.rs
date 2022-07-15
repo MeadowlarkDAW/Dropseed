@@ -1,21 +1,19 @@
-use audio_graph::NodeRef;
 use fnv::FnvHashSet;
 use std::error::Error;
 
-use crate::plugin::audio_buffer::RawAudioChannelBuffers;
+use crate::plugin::buffer::{DebugBufferID, RawAudioChannelBuffers};
 
-use super::shared_pool::DebugBufferID;
 use super::PluginInstanceID;
 use super::{schedule::task::Task, Schedule};
 
 pub(crate) struct Verifier {
-    plugin_instances: FnvHashSet<NodeRef>,
+    plugin_instances: FnvHashSet<u64>,
     buffer_instances: FnvHashSet<DebugBufferID>,
 }
 
 impl Verifier {
     pub fn new() -> Self {
-        let mut plugin_instances: FnvHashSet<NodeRef> = FnvHashSet::default();
+        let mut plugin_instances: FnvHashSet<u64> = FnvHashSet::default();
         let mut buffer_instances: FnvHashSet<DebugBufferID> = FnvHashSet::default();
         plugin_instances.reserve(1024);
         buffer_instances.reserve(1024);
@@ -47,20 +45,20 @@ impl Verifier {
 
             match task {
                 Task::Plugin(t) => {
-                    if !self.plugin_instances.insert(t.plugin.id().node_ref) {
+                    if !self.plugin_instances.insert(t.plugin.id().unique_id()) {
                         return Err(VerifyScheduleError::PluginInstanceAppearsTwiceInSchedule {
                             plugin_id: t.plugin.id(),
                         });
                     }
 
                     for port_buffer in t.buffers.audio_in.iter() {
-                        match &port_buffer.raw_channels {
+                        match &port_buffer._raw_channels {
                             RawAudioChannelBuffers::F32(buffers) => {
                                 for b in buffers.iter() {
-                                    if !self.buffer_instances.insert(b.buffer.debug_id) {
+                                    if !self.buffer_instances.insert(b.id()) {
                                         return Err(
                                             VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                                                buffer_id: b.buffer.debug_id,
+                                                buffer_id: b.id(),
                                                 task_info: format!("{:?}", &task),
                                             },
                                         );
@@ -69,10 +67,10 @@ impl Verifier {
                             }
                             RawAudioChannelBuffers::F64(buffers) => {
                                 for b in buffers.iter() {
-                                    if !self.buffer_instances.insert(b.buffer.debug_id) {
+                                    if !self.buffer_instances.insert(b.id()) {
                                         return Err(
                                             VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                                                buffer_id: b.buffer.debug_id,
+                                                buffer_id: b.id(),
                                                 task_info: format!("{:?}", &task),
                                             },
                                         );
@@ -83,13 +81,13 @@ impl Verifier {
                     }
 
                     for port_buffer in t.buffers.audio_out.iter() {
-                        match &port_buffer.raw_channels {
+                        match &port_buffer._raw_channels {
                             RawAudioChannelBuffers::F32(buffers) => {
                                 for b in buffers.iter() {
-                                    if !self.buffer_instances.insert(b.buffer.debug_id) {
+                                    if !self.buffer_instances.insert(b.id()) {
                                         return Err(
                                             VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                                                buffer_id: b.buffer.debug_id,
+                                                buffer_id: b.id(),
                                                 task_info: format!("{:?}", &task),
                                             },
                                         );
@@ -98,10 +96,10 @@ impl Verifier {
                             }
                             RawAudioChannelBuffers::F64(buffers) => {
                                 for b in buffers.iter() {
-                                    if !self.buffer_instances.insert(b.buffer.debug_id) {
+                                    if !self.buffer_instances.insert(b.id()) {
                                         return Err(
                                             VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                                                buffer_id: b.buffer.debug_id,
+                                                buffer_id: b.id(),
                                                 task_info: format!("{:?}", &task),
                                             },
                                         );
@@ -112,9 +110,9 @@ impl Verifier {
                     }
                 }
                 Task::DelayComp(t) => {
-                    if t.audio_in.buffer.debug_id == t.audio_out.buffer.debug_id {
+                    if t.audio_in.id() == t.audio_out.id() {
                         return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                            buffer_id: t.audio_in.buffer.debug_id,
+                            buffer_id: t.audio_in.id(),
                             task_info: format!("{:?}", &task),
                         });
                     }
@@ -134,40 +132,40 @@ impl Verifier {
                     // Unless the compiler tries to copy some of those buffers and expects those
                     // buffers to not alias or something.
                     for b in t.audio_in.iter() {
-                        if !self.buffer_instances.insert(b.buffer.debug_id) {
+                        if !self.buffer_instances.insert(b.id()) {
                             return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                                buffer_id: b.buffer.debug_id,
+                                buffer_id: b.id(),
                                 task_info: format!("{:?}", &task),
                             });
                         }
                     }
-                    if !self.buffer_instances.insert(t.audio_out.buffer.debug_id) {
+                    if !self.buffer_instances.insert(t.audio_out.id()) {
                         return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                            buffer_id: t.audio_out.buffer.debug_id,
+                            buffer_id: t.audio_out.id(),
                             task_info: format!("{:?}", &task),
                         });
                     }
                 }
                 Task::DeactivatedPlugin(t) => {
                     for (b_in, b_out) in t.audio_through.iter() {
-                        if !self.buffer_instances.insert(b_in.buffer.debug_id) {
+                        if !self.buffer_instances.insert(b_in.id()) {
                             return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                                buffer_id: b_in.buffer.debug_id,
+                                buffer_id: b_in.id(),
                                 task_info: format!("{:?}", &task),
                             });
                         }
-                        if !self.buffer_instances.insert(b_out.buffer.debug_id) {
+                        if !self.buffer_instances.insert(b_out.id()) {
                             return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                                buffer_id: b_out.buffer.debug_id,
+                                buffer_id: b_out.id(),
                                 task_info: format!("{:?}", &task),
                             });
                         }
                     }
 
                     for b in t.extra_audio_out.iter() {
-                        if !self.buffer_instances.insert(b.buffer.debug_id) {
+                        if !self.buffer_instances.insert(b.id()) {
                             return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                                buffer_id: b.buffer.debug_id,
+                                buffer_id: b.id(),
                                 task_info: format!("{:?}", &task),
                             });
                         }

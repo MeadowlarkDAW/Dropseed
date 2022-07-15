@@ -10,6 +10,7 @@ documentation = "https://docs.rs/dropseed"
 repository = "https://github.com/MeadowlarkDAW/dropseed"
 
 [dependencies]
+dropseed-core = { path = "../core" }
 basedrop = "0.1"
 meadowlark-core-types = { git = "https://github.com/MeadowlarkDAW/meadowlark-core-types", branch = "main" }
 fnv = "1.0"

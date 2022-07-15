@@ -33,7 +33,7 @@ pub struct HostInfo {
     /// eg: "https://meadowlark.app"
     pub url: Option<String>,
 
-    pub(crate) clack_host_info: ClackHostInfo,
+    pub clack_host_info: ClackHostInfo,
 }
 
 impl HostInfo {
@@ -65,7 +65,7 @@ impl HostInfo {
 }
 
 bitflags! {
-    pub(crate) struct RequestFlags: u32 {
+    pub struct RequestFlags: u32 {
         /// Clears all possible references to a parameter
         const RESTART = 1 << 0;
 
@@ -88,25 +88,23 @@ bitflags! {
 /// Used to get info and request actions from the host.
 pub struct HostRequest {
     pub params: HostParamsExtMainThread,
-    pub(crate) info: Shared<HostInfo>,
-    request_flags: Arc<AtomicU32>,
+    pub info: Shared<HostInfo>,
+
+    /// Please do not use this! This is only intended to be used by
+    /// the dropseed crate.
+    pub _request_flags: Arc<AtomicU32>,
 }
 
 impl HostRequest {
-    pub(crate) fn new(info: Shared<HostInfo>) -> Self {
+    pub fn _new(info: Shared<HostInfo>) -> Self {
         Self {
             params: HostParamsExtMainThread::new(),
             info,
-            request_flags: Arc::new(AtomicU32::new(0)),
+            _request_flags: Arc::new(AtomicU32::new(0)),
         }
     }
 
-    /// Retrieve info about this host.
-    ///
-    /// `[thread-safe]`
-    pub fn info(&self) -> Shared<HostInfo> {
-        Shared::clone(&self.info)
-    }
+    // TODO: Move methods starting with `_` into the main dropseed crate.
 
     /// Request the host to deactivate and then reactivate the plugin.
     /// The operation may be delayed by the host.
@@ -114,7 +112,7 @@ impl HostRequest {
     /// `[thread-safe]`
     pub fn request_restart(&self) {
         // TODO: Are we able to use relaxed ordering here?
-        let _ = self.request_flags.fetch_or(RequestFlags::RESTART.bits(), Ordering::SeqCst);
+        let _ = self._request_flags.fetch_or(RequestFlags::RESTART.bits(), Ordering::SeqCst);
     }
 
     /// Request the host to activate and start processing the plugin.
@@ -123,7 +121,7 @@ impl HostRequest {
     /// `[thread-safe]`
     pub fn request_process(&self) {
         // TODO: Are we able to use relaxed ordering here?
-        let _ = self.request_flags.fetch_or(RequestFlags::PROCESS.bits(), Ordering::SeqCst);
+        let _ = self._request_flags.fetch_or(RequestFlags::PROCESS.bits(), Ordering::SeqCst);
     }
 
     /// Request the host to schedule a call to `PluginMainThread::on_main_thread()` on the main thread.
@@ -131,7 +129,7 @@ impl HostRequest {
     /// `[thread-safe]`
     pub fn request_callback(&self) {
         // TODO: Are we able to use relaxed ordering here?
-        let _ = self.request_flags.fetch_or(RequestFlags::CALLBACK.bits(), Ordering::SeqCst);
+        let _ = self._request_flags.fetch_or(RequestFlags::CALLBACK.bits(), Ordering::SeqCst);
     }
 
     /// Checks if the host allows a plugin to change a given aspect of the audio ports definition.
@@ -172,79 +170,80 @@ impl HostRequest {
     /// [main-thread]
     pub fn mark_state_dirty(&self) {
         // TODO: Are we able to use relaxed ordering here?
-        let _ = self.request_flags.fetch_or(RequestFlags::STATE_DIRTY.bits(), Ordering::SeqCst);
+        let _ = self._request_flags.fetch_or(RequestFlags::STATE_DIRTY.bits(), Ordering::SeqCst);
     }
 
     /// Request the host to schedule a call to `PluginMainThread::on_main_thread()` on the main thread.
     ///
     /// `[thread-safe]`
-    pub(crate) fn request_deactivate(&self) {
+    pub fn _request_deactivate(&self) {
         // TODO: Are we able to use relaxed ordering here?
-        let _ = self.request_flags.fetch_or(RequestFlags::DEACTIVATE.bits(), Ordering::SeqCst);
+        let _ = self._request_flags.fetch_or(RequestFlags::DEACTIVATE.bits(), Ordering::SeqCst);
     }
 
-    pub(crate) fn load_requested(&self) -> RequestFlags {
+    pub fn _load_requested(&self) -> RequestFlags {
         // TODO: Are we able to use relaxed ordering here?
 
-        RequestFlags::from_bits_truncate(self.request_flags.load(Ordering::SeqCst))
+        RequestFlags::from_bits_truncate(self._request_flags.load(Ordering::SeqCst))
     }
 
-    pub(crate) fn load_requested_and_reset_all(&self) -> RequestFlags {
+    pub fn _load_requested_and_reset_all(&self) -> RequestFlags {
         // TODO: Are we able to use relaxed ordering here?
-        let flags = self.request_flags.fetch_and(0, Ordering::SeqCst);
+        let flags = self._request_flags.fetch_and(0, Ordering::SeqCst);
 
         RequestFlags::from_bits_truncate(flags)
     }
 
     /// Returns true if the previous value had the `RequestFlags::RESTART` flag set.
-    pub(crate) fn reset_restart(&self) -> bool {
+    pub fn _reset_restart(&self) -> bool {
         // TODO: Are we able to use relaxed ordering here?
-        let flags = self.request_flags.fetch_and(!RequestFlags::RESTART.bits(), Ordering::SeqCst);
+        let flags = self._request_flags.fetch_and(!RequestFlags::RESTART.bits(), Ordering::SeqCst);
 
         RequestFlags::from_bits_truncate(flags).contains(RequestFlags::RESTART)
     }
 
-    pub(crate) fn reset_process(&self) {
+    pub fn _reset_process(&self) {
         // TODO: Are we able to use relaxed ordering here?
-        let _ = self.request_flags.fetch_and(!RequestFlags::PROCESS.bits(), Ordering::SeqCst);
+        let _ = self._request_flags.fetch_and(!RequestFlags::PROCESS.bits(), Ordering::SeqCst);
     }
 
     /// Returns the value of the flags before the callback flag was reset.
-    pub(crate) fn load_requests_and_reset_callback(&self) -> RequestFlags {
+    pub fn _load_requests_and_reset_callback(&self) -> RequestFlags {
         // TODO: Are we able to use relaxed ordering here?
 
         RequestFlags::from_bits_truncate(
-            self.request_flags.fetch_and(!RequestFlags::CALLBACK.bits(), Ordering::SeqCst),
+            self._request_flags.fetch_and(!RequestFlags::CALLBACK.bits(), Ordering::SeqCst),
         )
     }
 
-    pub(crate) fn reset_deactivate(&self) {
+    pub fn _reset_deactivate(&self) {
         // TODO: Are we able to use relaxed ordering here?
-        let _ = self.request_flags.fetch_and(!RequestFlags::DEACTIVATE.bits(), Ordering::SeqCst);
+        let _ = self._request_flags.fetch_and(!RequestFlags::DEACTIVATE.bits(), Ordering::SeqCst);
     }
 
     #[allow(unused)]
     // TODO: Use this.
-    pub(crate) fn reset_rescan_audio_ports(&self) {
+    pub fn _reset_rescan_audio_ports(&self) {
         // TODO: Are we able to use relaxed ordering here?
         let _ = self
-            .request_flags
+            ._request_flags
             .fetch_and(!RequestFlags::RESCAN_AUDIO_PORTS.bits(), Ordering::SeqCst);
     }
 
     #[allow(unused)]
     // TODO: Use this.
-    pub(crate) fn reset_rescan_note_ports(&self) {
+    pub fn _reset_rescan_note_ports(&self) {
         // TODO: Are we able to use relaxed ordering here?
-        let _ =
-            self.request_flags.fetch_and(!RequestFlags::RESCAN_NOTE_PORTS.bits(), Ordering::SeqCst);
+        let _ = self
+            ._request_flags
+            .fetch_and(!RequestFlags::RESCAN_NOTE_PORTS.bits(), Ordering::SeqCst);
     }
 
-    pub(crate) fn state_marked_dirty_and_reset_dirty(&self) -> bool {
+    pub fn _state_marked_dirty_and_reset_dirty(&self) -> bool {
         // TODO: Are we able to use relaxed ordering here?
 
         RequestFlags::from_bits_truncate(
-            self.request_flags.fetch_and(!RequestFlags::STATE_DIRTY.bits(), Ordering::SeqCst),
+            self._request_flags.fetch_and(!RequestFlags::STATE_DIRTY.bits(), Ordering::SeqCst),
         )
         .contains(RequestFlags::STATE_DIRTY)
     }
@@ -255,7 +254,7 @@ impl Clone for HostRequest {
         Self {
             params: self.params.clone(),
             info: Shared::clone(&self.info),
-            request_flags: Arc::clone(&self.request_flags),
+            _request_flags: Arc::clone(&self._request_flags),
         }
     }
 }

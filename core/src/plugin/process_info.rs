@@ -1,11 +1,10 @@
 use smallvec::SmallVec;
 
-use crate::TransportInfo;
+use crate::transport::TransportInfo;
 
-use super::audio_buffer::{AudioPortBuffer, AudioPortBufferMut};
+use super::buffer::{AudioPortBuffer, AudioPortBufferMut};
 
 /// The status of a call to a plugin's `process()` method.
-#[non_exhaustive]
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub enum ProcessStatus {
@@ -51,18 +50,18 @@ pub struct ProcBuffers {
 }
 
 impl ProcBuffers {
-    pub fn audio_inputs_silent(&self, frames: usize) -> bool {
+    pub fn audio_inputs_silent(&self, use_slow_check: bool, frames: usize) -> bool {
         for buf in self.audio_in.iter() {
-            if !buf.is_silent(frames) {
+            if !buf.is_silent(use_slow_check, frames) {
                 return false;
             }
         }
         true
     }
 
-    pub fn audio_outputs_silent(&self, frames: usize) -> bool {
+    pub fn audio_outputs_silent(&self, use_slow_check: bool, frames: usize) -> bool {
         for buf in self.audio_out.iter() {
-            if !buf.is_silent(frames) {
+            if !buf.is_silent(use_slow_check, frames) {
                 return false;
             }
         }
