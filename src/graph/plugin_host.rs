@@ -176,7 +176,7 @@ pub(crate) struct PluginInstanceHost {
     pub num_audio_in_channels: usize,
     pub num_audio_out_channels: usize,
 
-    main_thread: Option<Box<dyn PluginMainThread>>,
+    pub main_thread: Option<Box<dyn PluginMainThread>>,
     pub audio_thread: Option<SharedPluginHostAudioThread>,
 
     state: Arc<SharedPluginState>,

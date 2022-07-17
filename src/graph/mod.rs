@@ -76,7 +76,8 @@ pub struct PortChannelID {
 }
 
 pub(crate) struct AudioGraph {
-    shared_plugin_pool: SharedPluginPool,
+    // TODO: make a proper accessor
+    pub(crate) shared_plugin_pool: SharedPluginPool,
     shared_buffer_pool: SharedBufferPool,
     host_info: Shared<HostInfo>,
     verifier: Verifier,
@@ -228,6 +229,9 @@ impl AudioGraph {
             }
         }
 
+        let supports_gui =
+            res.plugin_host.main_thread.as_ref().map(|m| m.supports_gui()).unwrap_or(false);
+
         let entry = PluginInstanceHostEntry {
             plugin_host: res.plugin_host,
             port_channels_refs: FnvHashMap::default(),
@@ -249,7 +253,7 @@ impl AudioGraph {
             PluginActivationStatus::Inactive
         };
 
-        NewPluginRes { plugin_id, status: activation_status }
+        NewPluginRes { plugin_id, status: activation_status, supports_gui }
     }
 
     pub fn activate_plugin_instance(
@@ -1252,6 +1256,7 @@ pub struct NewPluginRes {
     pub plugin_id: PluginInstanceID,
 
     pub status: PluginActivationStatus,
+    pub supports_gui: bool, // TODO: probably doesn't belong here
 }
 
 #[derive(Debug, Clone, PartialEq)]

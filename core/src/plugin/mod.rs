@@ -1,4 +1,5 @@
 use basedrop::Shared;
+use clack_extensions::gui::GuiError;
 use meadowlark_core_types::time::SampleRate;
 
 pub mod ext;
@@ -289,6 +290,26 @@ pub trait PluginMainThread {
     fn has_automation_out_port(&self) -> bool {
         false
     }
+
+    // --- GUI ---------------------------------------------------------------------------------
+
+    /// Returns whether or not this plugin instance supports opening a floating GUI window.
+    fn supports_gui(&self) -> bool {
+        false
+    }
+
+    fn is_gui_open(&self) -> bool {
+        false
+    }
+
+    /// Initializes and opens the plugin's GUI
+    // TODO: better error type
+    fn open_gui(&mut self, _suggested_title: Option<&str>) -> Result<(), GuiError> {
+        Err(GuiError::CreateError)
+    }
+
+    /// Closes and destroys the currently active GUI
+    fn close_gui(&mut self) {}
 }
 
 /// The methods of an audio plugin instance which run in the "audio" thread.

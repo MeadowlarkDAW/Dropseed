@@ -1,60 +1,33 @@
-use basedrop::Shared;
-use clack_extensions::audio_ports::{
-    AudioPortFlags, AudioPortInfoBuffer, HostAudioPorts, HostAudioPortsImplementation,
-    PluginAudioPorts, RescanType,
-};
-use clack_extensions::log::implementation::HostLog;
-use clack_extensions::log::{Log, LogSeverity};
-use clack_extensions::params::{
-    HostParams, HostParamsImplementation, HostParamsImplementationMainThread,
-    ParamClearFlags as ClackParamClearFlags, ParamRescanFlags as ClackParamRescanFlags,
-    PluginParams,
-};
-use clack_extensions::state::PluginState;
-use clack_extensions::thread_check::host::ThreadCheckImplementation;
-use clack_extensions::thread_check::ThreadCheck;
-use clack_host::events::io::{InputEvents, OutputEvents};
-use clack_host::extensions::HostExtensions;
-use clack_host::host::{Host, HostAudioProcessor, HostMainThread, HostShared};
-use meadowlark_core_types::time::SampleRate;
-use std::ffi::CString;
-use std::io::Cursor;
-use std::mem::MaybeUninit;
+use super::*;
 
 use atomic_refcell::{AtomicRef, AtomicRefMut};
-use smallvec::SmallVec;
-
+use clack_extensions::audio_ports::{AudioPortFlags, AudioPortInfoBuffer, PluginAudioPorts};
+use clack_extensions::gui::{GuiApiType, GuiError};
+use clack_host::events::io::{InputEvents, OutputEvents};
 use clack_host::instance::processor::PluginAudioProcessor;
 use clack_host::instance::{PluginAudioConfiguration, PluginInstance};
-use clack_host::plugin::{PluginAudioProcessorHandle, PluginMainThreadHandle, PluginSharedHandle};
-
 use dropseed_core::plugin::buffer::RawAudioChannelBuffers;
 use dropseed_core::plugin::ext::audio_ports::{
     AudioPortInfo, MainPortsLayout, PluginAudioPortsExt,
 };
-use dropseed_core::plugin::ext::params::{ParamClearFlags, ParamRescanFlags};
 use dropseed_core::plugin::ext::params::{ParamID, ParamInfo, ParamInfoFlags};
 use dropseed_core::plugin::{
-    ext, EventBuffer, HostRequest, PluginActivatedInfo, PluginAudioThread, PluginInstanceID,
-    PluginMainThread, PluginPreset, ProcBuffers, ProcInfo, ProcessStatus,
+    ext, EventBuffer, PluginActivatedInfo, PluginAudioThread, PluginMainThread, PluginPreset,
+    ProcBuffers, ProcInfo, ProcessStatus,
 };
+use meadowlark_core_types::time::SampleRate;
+use smallvec::SmallVec;
+use std::ffi::CString;
+use std::io::Cursor;
+use std::mem::MaybeUninit;
 
 use super::process::ClapProcess;
-
-use crate::utils::thread_id::SharedThreadIDs;
-
-pub(crate) struct ClapPluginMainThread {
-    instance: PluginInstance<ClapHost>,
-    audio_ports_ext: PluginAudioPortsExt,
-}
 
 impl ClapPluginMainThread {
     pub(crate) fn new(instance: PluginInstance<ClapHost>) -> Result<Self, String> {
         Ok(Self { audio_ports_ext: Self::parse_audio_ports_extension(&instance)?, instance })
     }
-}
 
-impl ClapPluginMainThread {
     #[inline]
     fn id(&self) -> &str {
         &*self.instance.shared_host_data().id
@@ -167,15 +140,6 @@ impl ClapPluginMainThread {
 }
 
 impl PluginMainThread for ClapPluginMainThread {
-    /// Activate the plugin, and return the `PluginAudioThread` counterpart.
-    ///
-    /// In this call the plugin may allocate memory and prepare everything needed for the process
-    /// call. The process's sample rate will be constant and process's frame count will included in
-    /// the `[min, max]` range, which is bounded by `[1, INT32_MAX]`.
-    ///
-    /// Once activated the latency and port configuration must remain constant, until deactivation.
-    ///
-    /// `[main-thread & !active_state]`
     fn activate(
         &mut self,
         sample_rate: SampleRate,
@@ -189,10 +153,10 @@ impl PluginMainThread for ClapPluginMainThread {
         };
 
         log::trace!("clap plugin instance activate {}", self.id());
-        let audio_processor = match self
-            .instance
-            .activate(|plugin, shared, _| ClapHostAudioProcessor { plugin, shared }, configuration)
-        {
+        let audio_processor = match self.instance.activate(
+            |plugin, shared, _| ClapHostAudioProcessor::new(plugin, shared),
+            configuration,
+        ) {
             Ok(p) => p,
             Err(e) => return Err(format!("{}", e)),
         };
@@ -206,31 +170,10 @@ impl PluginMainThread for ClapPluginMainThread {
         })
     }
 
-    /// Flushes a set of parameter changes.
-    ///
-    /// This will only be called while the plugin is inactive.
-    ///
-    /// This will never be called if `PluginMainThread::num_params()` returned 0.
-    ///
-    /// This method will not be called concurrently to clap_plugin->process().
-    ///
-    /// This method will not be used while the plugin is processing.
-    ///
-    /// By default this does nothing.
-    ///
-    /// [!active : main-thread]
     /*fn param_flush(&mut self, in_events: &EventQueue, out_events: &mut EventQueue) {
         self.instance.main_thread_host_data_mut().param_flush(in_events, out_events)
     }*/
 
-    /// Collect the save state of this plugin as raw bytes (use serde and bincode).
-    ///
-    /// If `Ok(None)` is returned, then it means that the plugin does not have a
-    /// state it needs to save.
-    ///
-    /// By default this returns `None`.
-    ///
-    /// `[main-thread]`
     fn collect_save_state(&mut self) -> Result<Option<Vec<u8>>, String> {
         if let Some(state_ext) = self.instance.shared_host_data().state_ext {
             let mut buffer = Vec::new();
@@ -248,11 +191,6 @@ impl PluginMainThread for ClapPluginMainThread {
         }
     }
 
-    /// Load the given preset (use serde and bincode).
-    ///
-    /// By default this does nothing.
-    ///
-    /// `[main-thread]`
     fn load_state(&mut self, preset: &PluginPreset) -> Result<(), String> {
         if let Some(state_ext) = self.instance.shared_host_data().state_ext {
             let mut reader = Cursor::new(&preset.bytes);
@@ -282,37 +220,16 @@ impl PluginMainThread for ClapPluginMainThread {
 
     // --- Parameters ---------------------------------------------------------------------------------
 
-    /// Called by the host on the main thread in response to a previous call to `host.request_callback()`.
-    ///
-    /// By default this does nothing.
-    ///
-    /// [main-thread]
-    #[allow(unused)]
     fn on_main_thread(&mut self) {
         log::trace!("clap plugin instance on_main_thread {}", self.id());
 
         self.instance.call_on_main_thread_callback();
     }
 
-    /// An optional extension that describes the configuration of audio ports on this plugin instance.
-    ///
-    /// This will only be called while the plugin is inactive.
-    ///
-    /// The default configuration is a main stereo input port and a main stereo output port.
-    ///
-    /// [main-thread & !active_state]
     fn audio_ports_ext(&mut self) -> Result<PluginAudioPortsExt, String> {
         Ok(self.audio_ports_ext.clone())
     }
 
-    /// Get the total number of parameters in this plugin.
-    ///
-    /// You may return 0 if this plugins has no parameters.
-    ///
-    /// By default this returns 0.
-    ///
-    /// [main-thread]
-    #[allow(unused)]
     fn num_params(&mut self) -> u32 {
         if let Some(params_ext) = self.instance.shared_host_data().params_ext {
             params_ext.count(&self.instance)
@@ -321,14 +238,6 @@ impl PluginMainThread for ClapPluginMainThread {
         }
     }
 
-    /// Get the info of the given parameter.
-    ///
-    /// This will never be called if `PluginMainThread::num_params()` returned 0.
-    ///
-    /// By default this returns an Err(()).
-    ///
-    /// [main-thread]
-    #[allow(unused)]
     fn param_info(&mut self, param_index: usize) -> Result<ext::params::ParamInfo, ()> {
         if let Some(params_ext) = self.instance.shared_host_data().params_ext {
             let mut data = MaybeUninit::uninit();
@@ -352,14 +261,6 @@ impl PluginMainThread for ClapPluginMainThread {
         }
     }
 
-    /// Get the plain value of the parameter.
-    ///
-    /// This will never be called if `PluginMainThread::num_params()` returned 0.
-    ///
-    /// By default this returns `Err(())`
-    ///
-    /// [main-thread]
-    #[allow(unused)]
     fn param_value(&self, param_id: ParamID) -> Result<f64, ()> {
         if let Some(params_ext) = self.instance.shared_host_data().params_ext {
             params_ext.get_value(&self.instance, param_id.0).ok_or(())
@@ -368,14 +269,6 @@ impl PluginMainThread for ClapPluginMainThread {
         }
     }
 
-    /// Formats the display text for the given parameter value.
-    ///
-    /// This will never be called if `PluginMainThread::num_params()` returned 0.
-    ///
-    /// By default this returns `Err(())`
-    ///
-    /// [main-thread]
-    #[allow(unused)]
     fn param_value_to_text(&self, param_id: ParamID, value: f64) -> Result<String, ()> {
         if let Some(params_ext) = self.instance.shared_host_data().params_ext {
             let mut char_buf = [MaybeUninit::uninit(); 256];
@@ -390,14 +283,6 @@ impl PluginMainThread for ClapPluginMainThread {
         }
     }
 
-    /// Converts the display text to a parameter value.
-    ///
-    /// This will never be called if `PluginMainThread::num_params()` returned 0.
-    ///
-    /// By default this returns `Err(())`
-    ///
-    /// [main-thread]
-    #[allow(unused)]
     fn param_text_to_value(&self, param_id: ParamID, display: &str) -> Result<f64, ()> {
         if let Some(params_ext) = self.instance.shared_host_data().params_ext {
             let c_string = CString::new(display).map_err(|_| ())?;
@@ -407,23 +292,49 @@ impl PluginMainThread for ClapPluginMainThread {
             Err(())
         }
     }
+
+    fn supports_gui(&self) -> bool {
+        if let (Some(gui), Some(api)) =
+            (self.instance.shared_host_data().gui_ext, GuiApiType::default_for_current_platform())
+        {
+            gui.is_api_supported(&self.instance.main_thread_plugin_data(), api, true)
+        } else {
+            false
+        }
+    }
+
+    fn open_gui(&mut self, suggested_title: Option<&str>) -> Result<(), GuiError> {
+        let host = self.instance.main_thread_host_data_mut();
+        let api_type = GuiApiType::default_for_current_platform().unwrap();
+
+        let gui_ext = host.shared.gui_ext.ok_or(GuiError::CreateError)?;
+        let instance = host.instance.as_mut().unwrap(); // TODO: unwrap
+
+        gui_ext.create(instance, api_type, true)?;
+        gui_ext.show(instance)?;
+
+        host.gui_visible = true;
+
+        Ok(())
+    }
+
+    fn close_gui(&mut self) {
+        let host = self.instance.main_thread_host_data_mut();
+        let gui_ext = host.shared.gui_ext.ok_or(GuiError::CreateError).unwrap();
+        let instance = host.instance.as_mut().unwrap(); // TODO: unwrap
+
+        // TODO: unwrap
+        gui_ext.hide(instance).unwrap();
+        gui_ext.destroy(instance);
+    }
 }
 
-pub(crate) struct ClapPluginAudioThread {
+struct ClapPluginAudioThread {
     audio_processor: PluginAudioProcessor<ClapHost>,
     process: ClapProcess,
 }
 
 impl PluginAudioThread for ClapPluginAudioThread {
-    /// This will be called when the plugin should start processing after just activing/
-    /// waking up from sleep.
-    ///
-    /// Return an error if the plugin failed to start processing. In this case the host will not
-    /// call `process()` and return the plugin to sleep.
-    ///
-    /// By default this just returns `Ok(())`.
-    ///
-    /// `[audio-thread & active_state & !processing_state]`
     fn start_processing(&mut self) -> Result<(), ()> {
         log::trace!(
             "clap plugin instance start_processing {}",
@@ -433,11 +344,6 @@ impl PluginAudioThread for ClapPluginAudioThread {
         self.audio_processor.start_processing().map_err(|_| ())
     }
 
-    /// This will be called when the host puts the plugin to sleep.
-    ///
-    /// By default this trait method does nothing.
-    ///
-    /// `[audio-thread & active_state & processing_state]`
     fn stop_processing(&mut self) {
         log::trace!(
             "clap plugin instance stop_processing {}",
@@ -447,9 +353,6 @@ impl PluginAudioThread for ClapPluginAudioThread {
         self.audio_processor.stop_processing().unwrap() // TODO: handle errors
     }
 
-    /// Process audio and events.
-    ///
-    /// `[audio-thread & active_state & processing_state]`
     fn process(
         &mut self,
         proc_info: &ProcInfo,
@@ -544,234 +447,8 @@ impl PluginAudioThread for ClapPluginAudioThread {
         }
     }
 
-    /// Flushes a set of parameter changes.
-    ///
-    /// This will only be called while the plugin is inactive.
-    ///
-    /// This will never be called if `PluginMainThread::num_params()` returned 0.
-    ///
-    /// This method will not be called concurrently to clap_plugin->process().
-    ///
-    /// This method will not be used while the plugin is processing.
-    ///
-    /// By default this does nothing.
-    ///
-    /// [active && !processing : audio-thread]
     #[allow(unused)]
     fn param_flush(&mut self, in_events: &EventBuffer, out_events: &mut EventBuffer) {
         self.audio_processor.audio_processor_host_data_mut().param_flush(in_events, out_events)
-    }
-}
-
-pub(crate) struct ClapHost;
-
-impl<'plugin> Host<'plugin> for ClapHost {
-    type AudioProcessor = ClapHostAudioProcessor<'plugin>;
-    type Shared = ClapHostShared<'plugin>;
-    type MainThread = ClapHostMainThread<'plugin>;
-
-    fn declare_extensions(builder: &mut HostExtensions<Self>, _shared: &Self::Shared) {
-        builder
-            .register::<Log>()
-            .register::<ThreadCheck>()
-            .register::<HostAudioPorts>()
-            .register::<HostParams>();
-    }
-}
-
-pub(crate) struct ClapHostMainThread<'plugin> {
-    pub(crate) shared: &'plugin ClapHostShared<'plugin>,
-    pub(crate) instance: Option<PluginMainThreadHandle<'plugin>>,
-}
-
-impl<'plugin> ClapHostMainThread<'plugin> {
-    #[allow(unused)]
-    fn param_flush(&mut self, in_events: &EventBuffer, out_events: &mut EventBuffer) {
-        let params_ext = match self.shared.params_ext {
-            None => return,
-            Some(p) => p,
-        };
-
-        let clap_in_events = InputEvents::from_buffer(in_events);
-        let mut clap_out_events = OutputEvents::from_buffer(out_events);
-
-        params_ext.flush(self.instance.as_mut().unwrap(), &clap_in_events, &mut clap_out_events);
-    }
-}
-
-impl<'plugin> HostMainThread<'plugin> for ClapHostMainThread<'plugin> {
-    fn instantiated(&mut self, instance: PluginMainThreadHandle<'plugin>) {
-        self.instance = Some(instance)
-    }
-}
-
-pub(crate) struct ClapHostAudioProcessor<'plugin> {
-    shared: &'plugin ClapHostShared<'plugin>,
-    plugin: PluginAudioProcessorHandle<'plugin>,
-}
-
-impl<'plugin> HostAudioProcessor<'plugin> for ClapHostAudioProcessor<'plugin> {}
-
-impl<'plugin> ClapHostAudioProcessor<'plugin> {
-    fn param_flush(&mut self, in_events: &EventBuffer, out_events: &mut EventBuffer) {
-        let params_ext = match self.shared.params_ext {
-            None => return,
-            Some(p) => p,
-        };
-
-        let clap_in_events = InputEvents::from_buffer(in_events);
-        let mut clap_out_events = OutputEvents::from_buffer(out_events);
-
-        params_ext.flush_active(&mut self.plugin, &clap_in_events, &mut clap_out_events);
-    }
-}
-
-pub(crate) struct ClapHostShared<'plugin> {
-    pub id: Shared<String>,
-
-    params_ext: Option<&'plugin PluginParams>,
-    state_ext: Option<&'plugin PluginState>,
-
-    host_request: HostRequest,
-    plugin_log_name: Shared<String>,
-    thread_ids: SharedThreadIDs,
-}
-
-impl<'plugin> ClapHostShared<'plugin> {
-    pub(crate) fn new(
-        id: Shared<String>,
-        host_request: HostRequest,
-        thread_ids: SharedThreadIDs,
-        plugin_id: PluginInstanceID,
-        coll_handle: &basedrop::Handle,
-    ) -> Self {
-        let plugin_log_name = Shared::new(coll_handle, format!("{:?}", &plugin_id));
-
-        Self { id, host_request, params_ext: None, state_ext: None, plugin_log_name, thread_ids }
-    }
-}
-
-impl<'a> HostShared<'a> for ClapHostShared<'a> {
-    fn instantiated(&mut self, instance: PluginSharedHandle<'a>) {
-        self.params_ext = instance.get_extension();
-        self.state_ext = instance.get_extension();
-    }
-
-    fn request_restart(&self) {
-        self.host_request.request_restart()
-    }
-
-    fn request_process(&self) {
-        self.host_request.request_process()
-    }
-
-    fn request_callback(&self) {
-        self.host_request.request_callback()
-    }
-}
-
-// TODO: Make sure that the log and print methods don't allocate on the current thread.
-// If they do, then we need to come up with a realtime-safe way to print to the terminal.
-impl<'a> HostLog for ClapHostShared<'a> {
-    fn log(&self, severity: LogSeverity, message: &str) {
-        let level = match severity {
-            LogSeverity::Debug => log::Level::Debug,
-            LogSeverity::Info => log::Level::Info,
-            LogSeverity::Warning => log::Level::Warn,
-            LogSeverity::Error => log::Level::Error,
-            LogSeverity::Fatal => log::Level::Error,
-            LogSeverity::HostMisbehaving => log::Level::Error,
-            LogSeverity::PluginMisbehaving => log::Level::Error,
-        };
-
-        log::log!(level, "{}", self.plugin_log_name.as_str());
-        log::log!(level, "{}", message);
-    }
-}
-
-impl<'a> ThreadCheckImplementation for ClapHostShared<'a> {
-    fn is_main_thread(&self) -> bool {
-        if let Some(thread_id) = self.thread_ids.external_main_thread_id() {
-            std::thread::current().id() == thread_id
-        } else {
-            log::error!("external_main_thread_id is None");
-            false
-        }
-    }
-
-    fn is_audio_thread(&self) -> bool {
-        if let Some(thread_id) = self.thread_ids.external_audio_thread_id() {
-            std::thread::current().id() == thread_id
-        } else {
-            log::error!("external_audio_thread_id is None");
-            false
-        }
-    }
-}
-
-impl<'a> HostAudioPortsImplementation for ClapHostMainThread<'a> {
-    fn is_rescan_flag_supported(&self, mut flag: RescanType) -> bool {
-        if !self.shared.thread_ids.is_external_main_thread() {
-            log::warn!("Plugin called clap_host_audio_ports->is_rescan_flag_supported() not in the main thread");
-            return false;
-        }
-
-        let supported = RescanType::FLAGS
-            | RescanType::CHANNEL_COUNT
-            | RescanType::PORT_TYPE
-            | RescanType::IN_PLACE_PAIR
-            | RescanType::LIST;
-        // | RescanType::NAMES // TODO: support this
-
-        flag.remove(supported);
-        flag.is_empty()
-    }
-
-    fn rescan(&mut self, mut flags: RescanType) {
-        if !self.shared.thread_ids.is_external_main_thread() {
-            log::warn!("Plugin called clap_host_audio_ports->rescan() not in the main thread");
-            return;
-        }
-
-        if flags.contains(RescanType::NAMES) {
-            // TODO: support this
-            log::warn!("clap plugin {:?} set CLAP_AUDIO_PORTS_RESCAN_NAMES flag in call to clap_host_audio_ports->rescan()", &*self.shared.plugin_log_name);
-
-            flags.remove(RescanType::NAMES);
-        }
-
-        if !flags.is_empty() {
-            self.shared.host_request.request_restart();
-        }
-    }
-}
-
-impl<'a> HostParamsImplementation for ClapHostShared<'a> {
-    fn request_flush(&self) {
-        self.host_request.params.request_flush();
-    }
-}
-
-impl<'a> HostParamsImplementationMainThread for ClapHostMainThread<'a> {
-    fn rescan(&mut self, flags: ClackParamRescanFlags) {
-        if !self.shared.thread_ids.is_external_main_thread() {
-            log::warn!("Plugin called clap_host_params->rescan() not in the main thread");
-            return;
-        }
-
-        let flags = ParamRescanFlags::from_bits_truncate(flags.bits());
-
-        self.shared.host_request.params.rescan(flags);
-    }
-
-    fn clear(&mut self, param_id: u32, flags: ClackParamClearFlags) {
-        if !self.shared.thread_ids.is_external_main_thread() {
-            log::warn!("Plugin called clap_host_params->clear() not in the main thread");
-            return;
-        }
-
-        let flags = ParamClearFlags::from_bits_truncate(flags.bits());
-
-        self.shared.host_request.params.clear(ParamID(param_id), flags);
     }
 }

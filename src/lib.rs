@@ -18,7 +18,7 @@ pub use engine::audio_thread::DSEngineAudioThread;
 pub use engine::events::from_engine::{
     DSEngineEvent, EngineDeactivatedInfo, PluginEvent, PluginScannerEvent,
 };
-pub use engine::events::to_engine::DSEngineRequest;
+pub use engine::events::to_engine::{DSEngineRequest, PluginRequest};
 pub use engine::handle::DSEngineHandle;
 pub use engine::main_thread::{
     ActivateEngineSettings, EdgeReq, EdgeReqPortID, EngineActivatedInfo, ModifyGraphRequest,

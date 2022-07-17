@@ -6,6 +6,8 @@ use std::sync::{
     Arc,
 };
 
+pub use clack_extensions::params::{ParamClearFlags, ParamRescanFlags};
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ParamID(pub u32);
@@ -165,65 +167,6 @@ impl ParamInfo {
             default_value,
             _cookie: Cookie::empty(),
         }
-    }
-}
-
-bitflags! {
-    pub struct ParamRescanFlags: u32 {
-        /// The parameter values did change (eg. after loading a preset).
-        ///
-        /// The host will scan all the parameters value.
-        ///
-        /// The host will not record those changes as automation points.
-        ///
-        /// New values takes effect immediately.
-        const RESCAN_VALUES = 1 << 0;
-
-        /// The value to text conversion changed, and the text needs to be rendered again.
-        const RESCAN_TEXT = 1 << 1;
-
-        /// The parameter info did change, use this flag for:
-        /// - name change
-        /// - module change
-        /// - is_periodic (flag)
-        /// - is_hidden (flag)
-        ///
-        /// New info takes effect immediately.
-        const RESCAN_INFO = 1 << 2;
-
-        /// Invalidates everything the host knows about parameters.
-        ///
-        /// It can only be used while the plugin is deactivated.
-        ///
-        /// If the plugin is activated use clap_host->restart() and delay any change until the host calls
-        /// clap_plugin->deactivate().
-        ///
-        /// You must use this flag if:
-        /// - some parameters were added or removed.
-        /// - some parameters had critical changes:
-        ///   - is_per_note (flag)
-        ///  - is_per_channel (flag)
-        ///   - is_readonly (flag)
-        ///   - is_bypass (flag)
-        ///   - is_stepped (flag)
-        ///   - is_modulatable (flag)
-        ///   - min_value
-        ///   - max_value
-        ///   - cookie
-        const RESCAN_ALL = 1 << 3;
-    }
-}
-
-bitflags! {
-    pub struct ParamClearFlags: u32 {
-        /// Clears all possible references to a parameter
-        const CLEAR_ALL = 1 << 0;
-
-        /// Clears all automations to a parameter
-        const CLEAR_AUTOMATIONS = 1 << 1;
-
-        /// Clears all modulations to a parameter
-        const CLEAR_MODULATIONS = 1 << 2;
     }
 }
 

@@ -1,8 +1,8 @@
 use dropseed::plugin::ext::params::ParamInfoFlags;
 use dropseed::plugin::{ParamID, PluginInstanceID};
 use dropseed::{
-    plugin::PluginSaveState, DSEngineHandle, EdgeReq, EdgeReqPortID, ModifyGraphRequest,
-    ParamModifiedInfo, PluginHandle, PluginIDReq, PortType,
+    plugin::PluginSaveState, DSEngineHandle, DSEngineRequest, EdgeReq, EdgeReqPortID,
+    ModifyGraphRequest, ParamModifiedInfo, PluginHandle, PluginIDReq, PluginRequest, PortType,
 };
 use eframe::egui;
 use fnv::FnvHashMap;
@@ -93,6 +93,7 @@ impl EffectRackPluginActiveState {
 pub struct EffectRackPluginState {
     pub plugin_name: String,
     pub plugin_id: PluginInstanceID,
+    pub supports_gui: bool,
 
     pub active_state: Option<EffectRackPluginActiveState>,
 }
@@ -284,6 +285,13 @@ pub(crate) fn show_effect_rack_plugin(
                         };
 
                         engine_handle.send(request.into());
+                    }
+
+                    if ui.small_button("ui").clicked() {
+                        engine_handle.send(DSEngineRequest::Plugin(
+                            plugin.plugin_id.clone(),
+                            PluginRequest::ShowGui,
+                        ));
                     }
 
                     // TODO: Let the user activate/deactive the plugin in this GUI.

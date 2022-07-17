@@ -1,4 +1,5 @@
-use crate::clap::plugin::{ClapHostMainThread, ClapHostShared, ClapPluginMainThread};
+use super::*;
+
 use crate::plugin::{PluginDescriptor, PluginFactory, PluginMainThread};
 use crate::utils::thread_id::SharedThreadIDs;
 use basedrop::Shared;
@@ -54,7 +55,7 @@ impl PluginFactory for ClapPluginFactory {
                     main_thread_coll_handle,
                 )
             },
-            |shared| ClapHostMainThread { shared, instance: None },
+            |shared| ClapHostMainThread { shared, instance: None, gui_visible: false },
             &self.bundle,
             self.id.as_bytes(),
             &host,
