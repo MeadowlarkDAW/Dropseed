@@ -1,16 +1,15 @@
 use fnv::FnvHashMap;
 use smallvec::SmallVec;
-use std::error::Error;
 use std::path::PathBuf;
+
+use dropseed_core::plugin::{ParamID, PluginInstanceID};
 
 use crate::{
     engine::main_thread::{EngineActivatedInfo, ModifyGraphRes},
     engine::plugin_scanner::RescanPluginDirectoriesRes,
     graph::{
-        plugin_host::{PluginHandle, PluginParamsExt},
-        ActivatePluginError, AudioGraphSaveState, ParamModifiedInfo, PluginInstanceID,
+        plugin_host::PluginHandle, ActivatePluginError, AudioGraphSaveState, ParamModifiedInfo,
     },
-    ParamID, PluginAudioPortsExt,
 };
 
 #[derive(Debug)]
@@ -76,10 +75,7 @@ pub enum EngineDeactivatedInfo {
     /// `DSEngineRequest::DeactivateEngine` request.
     DeactivatedGracefully { recovered_save_state: AudioGraphSaveState },
     /// The engine has crashed.
-    EngineCrashed {
-        error_msg: Box<dyn Error + Send>,
-        recovered_save_state: Option<AudioGraphSaveState>,
-    },
+    EngineCrashed { error_msg: String, recovered_save_state: Option<AudioGraphSaveState> },
 }
 
 #[derive(Debug)]

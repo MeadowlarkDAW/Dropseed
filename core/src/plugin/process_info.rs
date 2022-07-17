@@ -1,9 +1,10 @@
 use smallvec::SmallVec;
 
-use super::audio_buffer::{AudioPortBuffer, AudioPortBufferMut};
+use crate::transport::TransportInfo;
+
+use super::buffer::{AudioPortBuffer, AudioPortBufferMut};
 
 /// The status of a call to a plugin's `process()` method.
-#[non_exhaustive]
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub enum ProcessStatus {
@@ -39,38 +40,37 @@ pub struct ProcInfo {
     /// The number of frames to process. All buffers in this struct are gauranteed to be
     /// at-least this length.
     pub frames: usize,
+
+    pub transport: TransportInfo,
 }
 
 pub struct ProcBuffers {
     pub audio_in: SmallVec<[AudioPortBuffer; 2]>,
     pub audio_out: SmallVec<[AudioPortBufferMut; 2]>,
-
-    /// Used to let external plugins know when it should update its list of buffers.
-    pub(crate) task_version: u64,
 }
 
 impl ProcBuffers {
-    pub fn audio_inputs_silent(&self, frames: usize) -> bool {
+    pub fn audio_inputs_silent(&self, use_slow_check: bool, frames: usize) -> bool {
         for buf in self.audio_in.iter() {
-            if !buf.is_silent(frames) {
+            if !buf.is_silent(use_slow_check, frames) {
                 return false;
             }
         }
         true
     }
 
-    pub fn audio_outputs_silent(&self, frames: usize) -> bool {
+    pub fn audio_outputs_silent(&self, use_slow_check: bool, frames: usize) -> bool {
         for buf in self.audio_out.iter() {
-            if !buf.is_silent(frames) {
+            if !buf.is_silent(use_slow_check, frames) {
                 return false;
             }
         }
         true
     }
 
-    pub unsafe fn clear_all_outputs_unchecked(&mut self, frames: usize) {
+    pub fn clear_all_outputs(&mut self, frames: usize) {
         for buf in self.audio_out.iter_mut() {
-            buf.clear_all_unchecked(frames);
+            buf.clear_all(frames);
         }
     }
 }

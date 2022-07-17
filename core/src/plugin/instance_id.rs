@@ -1,0 +1,123 @@
+use crate::plugin_scanner::PluginFormat;
+use basedrop::Shared;
+use std::hash::Hash;
+
+/// Used for debugging and verifying purposes.
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PluginInstanceType {
+    Internal,
+    Clap,
+    Unloaded,
+    GraphInput,
+    GraphOutput,
+}
+
+impl std::fmt::Debug for PluginInstanceType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                PluginInstanceType::Internal => "INT",
+                PluginInstanceType::Clap => "CLAP",
+                PluginInstanceType::Unloaded => "UNLOADED",
+                PluginInstanceType::GraphInput => "GRAPH_IN",
+                PluginInstanceType::GraphOutput => "GRAPH_OUT",
+            }
+        )
+    }
+}
+
+impl From<PluginFormat> for PluginInstanceType {
+    fn from(f: PluginFormat) -> Self {
+        match f {
+            PluginFormat::Internal => PluginInstanceType::Internal,
+            PluginFormat::Clap => PluginInstanceType::Clap,
+        }
+    }
+}
+
+/// Used to uniquely identify a plugin instance and for debugging purposes.
+pub struct PluginInstanceID {
+    node_ref: usize,
+    // To make sure that no two plugin instances ever have the same ID.
+    unique_id: u64,
+    format: PluginInstanceType,
+    rdn: Shared<String>,
+}
+
+impl PluginInstanceID {
+    pub fn _new(
+        node_ref: usize,
+        unique_id: u64,
+        format: PluginInstanceType,
+        rdn: Shared<String>,
+    ) -> Self {
+        Self { node_ref, unique_id, format, rdn }
+    }
+
+    pub fn rdn(&self) -> &Shared<String> {
+        &self.rdn
+    }
+
+    pub fn unique_id(&self) -> u64 {
+        self.unique_id
+    }
+
+    pub fn format(&self) -> PluginInstanceType {
+        self.format
+    }
+
+    pub fn _node_ref(&self) -> usize {
+        self.node_ref
+    }
+}
+
+impl std::fmt::Debug for PluginInstanceID {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.format {
+            PluginInstanceType::Internal => {
+                write!(f, "INT({})({})", &**self.rdn, self.unique_id)
+            }
+            PluginInstanceType::Clap => {
+                write!(f, "CLAP({})({})", &**self.rdn, self.unique_id)
+            }
+            PluginInstanceType::Unloaded => {
+                write!(f, "UNLOADED({})", self.unique_id)
+            }
+            PluginInstanceType::GraphInput => {
+                write!(f, "GRAPH_IN")
+            }
+            PluginInstanceType::GraphOutput => {
+                write!(f, "GRAPH_OUT")
+            }
+        }
+    }
+}
+
+impl Clone for PluginInstanceID {
+    fn clone(&self) -> Self {
+        Self {
+            node_ref: self.node_ref,
+            unique_id: self.unique_id,
+            format: self.format,
+            rdn: Shared::clone(&self.rdn),
+        }
+    }
+}
+
+impl PartialEq for PluginInstanceID {
+    fn eq(&self, other: &Self) -> bool {
+        self.node_ref.eq(&other.node_ref)
+    }
+}
+
+impl Eq for PluginInstanceID {}
+
+impl Hash for PluginInstanceID {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.node_ref.hash(state);
+        self.unique_id.hash(state);
+    }
+}

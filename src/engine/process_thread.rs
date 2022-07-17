@@ -1,24 +1,17 @@
 use basedrop::Owned;
-use rtrb_basedrop::{Consumer, Producer};
-use std::time::Duration;
-use std::{
-    mem::MaybeUninit,
-    sync::{
-        atomic::{AtomicBool, AtomicU32, Ordering},
-        Arc,
-    },
+use rtrb::{Consumer, Producer};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU32, Ordering},
+    Arc,
 };
 
 use crate::graph::schedule::SharedSchedule;
 
-/// [0; 100]
-pub(crate) static PROCESS_THREAD_PRIORITY: u8 = 90;
-
-static PROCESS_THREAD_POLL_INTERVAL: Duration = Duration::from_micros(5);
+use super::audio_thread::AUDIO_THREAD_POLL_INTERVAL;
 
 pub(crate) struct DSEngineProcessThread {
-    to_audio_thread_audio_out_tx: Producer<f32>,
-    from_audio_thread_audio_in_rx: Consumer<f32>,
+    to_audio_thread_audio_out_tx: Owned<Producer<f32>>,
+    from_audio_thread_audio_in_rx: Owned<Consumer<f32>>,
 
     /// In case there are no inputs, use this to let the engine know when there
     /// are frames to render.
@@ -35,8 +28,8 @@ pub(crate) struct DSEngineProcessThread {
 
 impl DSEngineProcessThread {
     pub fn new(
-        to_audio_thread_audio_out_tx: Producer<f32>,
-        from_audio_thread_audio_in_rx: Consumer<f32>,
+        to_audio_thread_audio_out_tx: Owned<Producer<f32>>,
+        from_audio_thread_audio_in_rx: Owned<Consumer<f32>>,
         num_frames_wanted: Option<Arc<AtomicU32>>,
         in_temp_buffer: Owned<Vec<f32>>,
         out_temp_buffer: Owned<Vec<f32>>,
@@ -57,12 +50,20 @@ impl DSEngineProcessThread {
     }
 
     pub fn run(&mut self, run: Arc<AtomicBool>) {
+        #[cfg(target_os = "windows")]
+        let spin_sleeper = spin_sleep::SpinSleeper::default();
+
         while run.load(Ordering::Relaxed) {
             let num_frames = if let Some(num_frames_wanted) = &self.num_frames_wanted {
                 let num_frames = num_frames_wanted.load(Ordering::SeqCst);
 
                 if num_frames == 0 {
-                    std::thread::sleep(PROCESS_THREAD_POLL_INTERVAL);
+                    #[cfg(not(target_os = "windows"))]
+                    std::thread::sleep(AUDIO_THREAD_POLL_INTERVAL);
+
+                    #[cfg(target_os = "windows")]
+                    spin_sleeper.sleep(AUDIO_THREAD_POLL_INTERVAL);
+
                     continue;
                 }
 
@@ -71,7 +72,12 @@ impl DSEngineProcessThread {
                 let num_samples = self.from_audio_thread_audio_in_rx.slots();
 
                 if num_samples == 0 {
-                    std::thread::sleep(PROCESS_THREAD_POLL_INTERVAL);
+                    #[cfg(not(target_os = "windows"))]
+                    std::thread::sleep(AUDIO_THREAD_POLL_INTERVAL);
+
+                    #[cfg(target_os = "windows")]
+                    spin_sleeper.sleep(AUDIO_THREAD_POLL_INTERVAL);
+
                     continue;
                 }
 
@@ -89,15 +95,7 @@ impl DSEngineProcessThread {
             };
 
             self.out_temp_buffer.clear();
-
-            // This is safe because:
-            // - self.out_temp_buffer has an allocated length of
-            //   (ALLOCATED_FRAMES_PER_CHANNEL * self.out_channels), and `num_frames` will
-            //   never be larger than ALLOCATED_FRAMES_PER_CHANNEL
-            // - The schedule will always completely fill the buffer.
-            unsafe {
-                self.out_temp_buffer.set_len(num_frames * self.out_channels);
-            }
+            self.out_temp_buffer.resize(num_frames * self.out_channels, 0.0);
 
             self.schedule.process_interleaved(
                 &*self.in_temp_buffer,
@@ -106,27 +104,18 @@ impl DSEngineProcessThread {
                 self.out_channels,
             );
 
-            match self
-                .to_audio_thread_audio_out_tx
-                .write_chunk_uninit(num_frames * self.in_channels)
-            {
+            match self.to_audio_thread_audio_out_tx.write_chunk(num_frames * self.out_channels) {
                 Ok(mut chunk) => {
                     let (slice_1, slice_2) = chunk.as_mut_slices();
 
                     let out_part = &self.out_temp_buffer[0..slice_1.len()];
-                    for i in 0..slice_1.len() {
-                        slice_1[i] = MaybeUninit::new(out_part[i]);
-                    }
+                    slice_1.copy_from_slice(&out_part[..slice_1.len()]);
 
                     let out_part =
                         &self.out_temp_buffer[slice_1.len()..slice_1.len() + slice_2.len()];
-                    for i in 0..slice_2.len() {
-                        slice_2[i] = MaybeUninit::new(out_part[i]);
-                    }
+                    slice_2.copy_from_slice(&out_part[..slice_2.len()]);
 
-                    unsafe {
-                        chunk.commit_all();
-                    }
+                    chunk.commit_all();
                 }
                 Err(_) => {
                     log::error!("Ran out of space in engine_to_audio_thread_audio_out buffer");

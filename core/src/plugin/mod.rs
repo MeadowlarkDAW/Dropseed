@@ -1,17 +1,29 @@
-use meadowlark_core_types::SampleRate;
-use std::error::Error;
+use basedrop::Shared;
+use meadowlark_core_types::time::SampleRate;
 
-pub mod audio_buffer;
-pub mod events;
 pub mod ext;
+
+pub mod buffer;
 pub mod host_request;
-pub(crate) mod process_info;
+
+mod event;
+mod instance_id;
+mod process_info;
 mod save_state;
 
-use crate::{EventQueue, ParamID, PluginInstanceID};
-use host_request::HostRequest;
-use process_info::{ProcBuffers, ProcInfo, ProcessStatus};
-pub use save_state::PluginSaveState;
+use crate::transport::TempoMap;
+
+pub use clack_host::events::io::EventBuffer;
+
+pub use buffer::{
+    AudioPortBuffer, AudioPortBufferMut, MonoBuffer, MonoBufferMut, StereoBuffer, StereoBufferMut,
+};
+pub use event::ProcEvent;
+pub use ext::params::ParamID;
+pub use host_request::{HostInfo, HostRequest};
+pub use instance_id::*;
+pub use process_info::{ProcBuffers, ProcInfo, ProcessStatus};
+pub use save_state::{PluginPreset, PluginSaveState};
 
 /// The description of a plugin.
 #[derive(Debug, Clone)]
@@ -41,7 +53,6 @@ pub struct PluginDescriptor {
     /// eg: "Create flaming-hot sounds!"
     pub description: String,
 
-    /* TODO
     /// Arbitrary list of keywords, separated by `;'.
     ///
     /// They can be matched by the host search engine and used to classify the plugin.
@@ -58,8 +69,8 @@ pub struct PluginDescriptor {
     /// - "equalizer;analyzer;stereo;mono"
     /// - "compressor;analog;character;mono"
     /// - "reverb;plate;stereo"
-    pub features: Option<String>,
-    */
+    pub features: String,
+
     /// The url to the product page of this plugin.
     pub url: String,
 
@@ -85,10 +96,15 @@ pub trait PluginFactory: Send {
     /// `[main-thread]`
     fn new(
         &mut self,
-        host: HostRequest,
+        host_request: HostRequest,
         plugin_id: PluginInstanceID,
         coll_handle: &basedrop::Handle,
-    ) -> Result<Box<dyn PluginMainThread>, Box<dyn Error + Send>>;
+    ) -> Result<Box<dyn PluginMainThread>, String>;
+}
+
+pub struct PluginActivatedInfo {
+    pub audio_thread: Box<dyn PluginAudioThread>,
+    pub internal_handle: Option<Box<dyn std::any::Any + Send + 'static>>,
 }
 
 /// The methods of an audio plugin instance which run in the "main" thread.
@@ -106,11 +122,7 @@ pub trait PluginMainThread {
     ///
     /// `[main-thread & !active_state]`
     #[allow(unused)]
-    fn init(
-        &mut self,
-        _preset: (),
-        coll_handle: &basedrop::Handle,
-    ) -> Result<(), Box<dyn Error + Send>> {
+    fn init(&mut self, coll_handle: &basedrop::Handle) -> Result<(), String> {
         Ok(())
     }
 
@@ -131,13 +143,35 @@ pub trait PluginMainThread {
         min_frames: u32,
         max_frames: u32,
         coll_handle: &basedrop::Handle,
-    ) -> Result<Box<dyn PluginAudioThread>, Box<dyn Error + Send>>;
+    ) -> Result<PluginActivatedInfo, String>;
+
+    /// Collect the save state of this plugin as raw bytes (use serde and bincode).
+    ///
+    /// If `Ok(None)` is returned, then it means that the plugin does not have a
+    /// state it needs to save.
+    ///
+    /// By default this returns `None`.
+    ///
+    /// `[main-thread]`
+    fn collect_save_state(&mut self) -> Result<Option<Vec<u8>>, String> {
+        Ok(None)
+    }
+
+    /// Load the given preset (use serde and bincode).
+    ///
+    /// By default this does nothing.
+    ///
+    /// `[main-thread]`
+    #[allow(unused)]
+    fn load_state(&mut self, preset: &PluginPreset) -> Result<(), String> {
+        Ok(())
+    }
 
     /// Deactivate the plugin. When this is called it also means that the `PluginAudioThread`
-    /// counterpart has/will be dropped.
+    /// counterpart will already have been dropped.
     ///
     /// `[main-thread & active_state]`
-    fn deactivate(&mut self);
+    fn deactivate(&mut self) {}
 
     /// Called by the host on the main thread in response to a previous call to `host.request_callback()`.
     ///
@@ -155,10 +189,20 @@ pub trait PluginMainThread {
     ///
     /// [main-thread & !active_state]
     #[allow(unused)]
-    fn audio_ports_ext(
-        &mut self,
-    ) -> Result<ext::audio_ports::PluginAudioPortsExt, Box<dyn Error + Send>> {
+    fn audio_ports_ext(&mut self) -> Result<ext::audio_ports::PluginAudioPortsExt, String> {
         Ok(ext::audio_ports::EMPTY_AUDIO_PORTS_CONFIG.clone())
+    }
+
+    /// An optional extension that describes the configuration of note ports on this plugin instance.
+    ///
+    /// This will only be called while the plugin is inactive.
+    ///
+    /// The default configuration is one with no note ports.
+    ///
+    /// [main-thread & !active_state]
+    #[allow(unused)]
+    fn note_ports_ext(&mut self) -> Result<ext::note_ports::PluginNotePortsExt, String> {
+        Ok(ext::note_ports::EMPTY_NOTE_PORTS_CONFIG.clone())
     }
 
     // --- Parameters ---------------------------------------------------------------------------------
@@ -225,25 +269,30 @@ pub trait PluginMainThread {
         Err(())
     }
 
-    /// Flushes a set of parameter changes.
-    ///
-    /// This will only be called while the plugin is inactive.
-    ///
-    /// This will never be called if `PluginMainThread::num_params()` returned 0.
-    ///
-    /// This method will not be called concurrently to clap_plugin->process().
-    ///
-    /// This method will not be used while the plugin is processing.
+    /// Called when the tempo map is updated.
     ///
     /// By default this does nothing.
     ///
-    /// [!active : main-thread]
+    /// [main-thread]
     #[allow(unused)]
-    fn param_flush(&mut self, in_events: &EventQueue, out_events: &mut EventQueue) {}
+    fn update_tempo_map(&mut self, new_tempo_map: &Shared<TempoMap>) {}
+
+    /// Whether or not this plugin has an automation out port (seperate from audio and note
+    /// out ports).
+    ///
+    /// Only return `true` for internal plugins which output parameter automation events for
+    /// other plugins.
+    ///
+    /// By default this returns `false`.
+    ///
+    /// [main-thread]
+    fn has_automation_out_port(&self) -> bool {
+        false
+    }
 }
 
 /// The methods of an audio plugin instance which run in the "audio" thread.
-pub trait PluginAudioThread: Send + Sync + 'static {
+pub trait PluginAudioThread: Send + 'static {
     /// This will be called when the plugin should start processing after just activing/
     /// waking up from sleep.
     ///
@@ -273,8 +322,8 @@ pub trait PluginAudioThread: Send + Sync + 'static {
         &mut self,
         proc_info: &ProcInfo,
         buffers: &mut ProcBuffers,
-        in_events: &EventQueue,
-        out_events: &mut EventQueue,
+        in_events: &EventBuffer,
+        out_events: &mut EventBuffer,
     ) -> ProcessStatus;
 
     /// Flushes a set of parameter changes.
@@ -291,5 +340,5 @@ pub trait PluginAudioThread: Send + Sync + 'static {
     ///
     /// [active && !processing : audio-thread]
     #[allow(unused)]
-    fn param_flush(&mut self, in_events: &EventQueue, out_events: &mut EventQueue) {}
+    fn param_flush(&mut self, in_events: &EventBuffer, out_events: &mut EventBuffer) {}
 }

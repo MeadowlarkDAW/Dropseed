@@ -40,7 +40,7 @@ pub trait ReducFnvValue: Send + 'static {
 
 pub struct ReducingFnvQueue<K: Hash + Eq + Send + 'static, V: ReducFnvValue> {
     // TODO: Once we feel sound about the correctness of this algorithm, we can
-    // change this to use the `MaybeAtomicRefCell` type instead.
+    // change this to use the `AtomicRefCell` type instead.
     queues: [AtomicRefCell<FnvHashMap<K, V>>; 2],
 
     free: AtomicUsize,
@@ -87,7 +87,7 @@ impl<K: Hash + Eq + Send + 'static, V: ReducFnvValue> ReducFnvProducer<K, V> {
             panic!("ReducingFnvQueue::set(): producer pointer is invalid");
         }
 
-        let mut producer = unsafe { self.shared.queues.get_unchecked(producer_i).borrow_mut() };
+        let mut producer = self.shared.queues[producer_i].borrow_mut();
 
         let _ = producer.insert(key, value);
     }
@@ -99,7 +99,7 @@ impl<K: Hash + Eq + Send + 'static, V: ReducFnvValue> ReducFnvProducer<K, V> {
             panic!("ReducingFnvQueue::set_or_update(): producer pointer is invalid");
         }
 
-        let mut producer = unsafe { self.shared.queues.get_unchecked(producer_i).borrow_mut() };
+        let mut producer = self.shared.queues[producer_i].borrow_mut();
 
         match producer.entry(key) {
             Entry::Occupied(mut old_value) => old_value.get_mut().update(&value),
@@ -137,7 +137,7 @@ impl<K: Hash + Eq + Send + 'static, V: ReducFnvValue> ReducFnvProducer<K, V> {
         }
 
         {
-            let producer = unsafe { self.shared.queues.get_unchecked(producer_i).borrow_mut() };
+            let producer = self.shared.queues[producer_i].borrow_mut();
 
             (p)(ReducFnvProducerRefMut { producer });
         }
@@ -191,7 +191,7 @@ impl<K: Hash + Eq + Send + 'static, V: ReducFnvValue> ReducFnvConsumer<K, V> {
         }
 
         {
-            let mut consumer = unsafe { self.shared.queues.get_unchecked(consumer_i).borrow_mut() };
+            let mut consumer = self.shared.queues[consumer_i].borrow_mut();
 
             for (key, value) in consumer.iter() {
                 (c)(key, value);

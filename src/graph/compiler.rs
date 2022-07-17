@@ -1,24 +1,29 @@
+use atomic_refcell::AtomicRefCell;
 use audio_graph::{Graph, ScheduledNode};
+use basedrop::Shared;
 use smallvec::SmallVec;
 use std::error::Error;
 
+use dropseed_core::plugin::buffer::{AudioPortBuffer, AudioPortBufferMut, SharedBuffer};
+use dropseed_core::plugin::{ProcBuffers, ProcEvent};
+
 use crate::graph::shared_pool::{DelayCompKey, SharedDelayCompNode};
 use crate::plugin::ext::audio_ports::MainPortsLayout;
-use crate::plugin::process_info::ProcBuffers;
-use crate::{AudioPortBuffer, AudioPortBufferMut};
+use crate::transport::TransportTask;
 
 use super::{
     schedule::sum::SumTask,
     schedule::task::{DeactivatedPluginTask, DelayCompTask, PluginTask, Task},
-    shared_pool::{SharedBuffer, SharedBufferPool, SharedPluginPool},
+    shared_pool::{SharedBufferPool, SharedPluginPool},
     verifier::{Verifier, VerifyScheduleError},
-    DefaultPortType, PluginInstanceID, PortID, Schedule,
+    PluginInstanceID, PortChannelID, PortType, Schedule,
 };
 
 pub(crate) fn compile_graph(
     shared_plugin_pool: &mut SharedPluginPool,
     shared_buffer_pool: &mut SharedBufferPool,
-    abstract_graph: &mut Graph<PluginInstanceID, PortID, DefaultPortType>,
+    abstract_graph: &mut Graph<PluginInstanceID, PortChannelID, PortType>,
+    shared_transport_task: &Shared<AtomicRefCell<TransportTask>>,
     graph_in_node_id: &PluginInstanceID,
     graph_out_node_id: &PluginInstanceID,
     verifier: &mut Verifier,
@@ -33,6 +38,8 @@ pub(crate) fn compile_graph(
 
     let mut total_intermediary_buffers = 0;
     let mut max_graph_audio_buffer_index = 0;
+    let mut max_graph_note_buffer_index = 0;
+    let mut max_graph_automation_buffer_index = 0;
 
     for node in shared_plugin_pool.delay_comp_nodes.values_mut() {
         node.active = false;
@@ -40,159 +47,290 @@ pub(crate) fn compile_graph(
 
     let abstract_tasks = abstract_graph.compile();
     for abstract_task in abstract_tasks.iter() {
-        let (num_input_channels, num_output_channels, plugin_audio_thread, audio_ports_ext) =
-            if let Some(entry) = shared_plugin_pool.plugins.get(&abstract_task.node) {
-                (
-                    entry.audio_in_channel_refs.len(),
-                    entry.audio_out_channel_refs.len(),
-                    entry.audio_thread.as_ref(),
-                    entry.plugin_host.audio_ports.as_ref(),
-                )
-            } else {
-                return Err(GraphCompilerError::UnexpectedError(format!(
+        let (
+            num_audio_in_channels,
+            num_audio_out_channels,
+            plugin_audio_thread,
+            audio_ports_ext,
+            note_ports_ext,
+        ) = if let Some(entry) = shared_plugin_pool.plugins.get(&abstract_task.node) {
+            (
+                entry.plugin_host.num_audio_in_channels,
+                entry.plugin_host.num_audio_out_channels,
+                entry.plugin_host.audio_thread.as_ref(),
+                entry.plugin_host.audio_ports_ext(),
+                entry.plugin_host.note_ports_ext(),
+            )
+        } else {
+            return Err(GraphCompilerError::UnexpectedError(format!(
                 "Abstract schedule refers to a plugin instance {:?} that does not exist in the plugin pool",
                 abstract_task.node
             ), abstract_tasks.to_vec()));
-            };
+        };
 
         let mut intermediary_buffer_i = 0;
 
         let mut plugin_in_channel_buffers: SmallVec<[Option<SharedBuffer<f32>>; 4]> =
-            SmallVec::with_capacity(num_input_channels);
+            SmallVec::with_capacity(num_audio_in_channels);
         let mut plugin_out_channel_buffers: SmallVec<[Option<SharedBuffer<f32>>; 4]> =
-            SmallVec::with_capacity(num_output_channels);
-        for _ in 0..num_input_channels {
+            SmallVec::with_capacity(num_audio_out_channels);
+        for _ in 0..num_audio_in_channels {
             plugin_in_channel_buffers.push(None);
         }
-        for _ in 0..num_output_channels {
+        for _ in 0..num_audio_out_channels {
             plugin_out_channel_buffers.push(None);
         }
 
-        for (channel, buffers) in abstract_task.inputs.iter() {
-            let channel_index = channel.as_index();
-            if channel_index >= num_input_channels {
-                return Err(GraphCompilerError::UnexpectedError(format!(
-                    "Abstract schedule refers to an input channel at index {} in the plugin {:?} which only has {} input channels",
-                    channel_index,
-                    abstract_task.node,
-                    num_input_channels
-                ), abstract_tasks.to_vec()));
-            }
-
-            let mut channel_buffers: SmallVec<[SharedBuffer<f32>; 4]> = SmallVec::new();
-            for (buffer, delay_comp_info) in buffers.iter() {
-                max_graph_audio_buffer_index = max_graph_audio_buffer_index.max(buffer.buffer_id);
-
-                let graph_buffer = shared_buffer_pool.audio_f32(buffer.buffer_id);
-
-                let channel_buffer = if let Some(delay_comp_info) = &delay_comp_info {
-                    // Add an intermediate buffer for the delay compensation task.
-                    let intermediary_buffer =
-                        shared_buffer_pool.intermediary_audio_f32(intermediary_buffer_i);
-
-                    intermediary_buffer_i += 1;
-                    total_intermediary_buffers =
-                        total_intermediary_buffers.max(intermediary_buffer_i);
-
-                    let key = DelayCompKey {
-                        delay: delay_comp_info.delay as u32,
-                        src_node_ref: delay_comp_info.source_node.node_ref,
-                        port_i: delay_comp_info.source_port.as_index() as u16,
-                    };
-
-                    let delay_comp_node = if let Some(delay_node) =
-                        shared_plugin_pool.delay_comp_nodes.get_mut(&key)
-                    {
-                        delay_node.active = true;
-                        delay_node.clone()
-                    } else {
-                        let new_delay_node =
-                            SharedDelayCompNode::new(delay_comp_info.delay as u32, coll_handle);
-                        let _ =
-                            shared_plugin_pool.delay_comp_nodes.insert(key, new_delay_node.clone());
-                        new_delay_node
-                    };
-
-                    tasks.push(Task::DelayComp(DelayCompTask {
-                        delay_comp_node,
-                        audio_in: graph_buffer,
-                        audio_out: intermediary_buffer.clone(),
-                    }));
-
-                    intermediary_buffer
-                } else {
-                    graph_buffer
-                };
-
-                channel_buffers.push(channel_buffer);
-            }
-
-            if channel_buffers.is_empty() {
-                return Err(GraphCompilerError::UnexpectedError(format!(
-                    "Abstract schedule gave no buffer for input channel {} on the plugin instance {:?}",
-                    channel_index,
-                    abstract_task.node,
-                ), abstract_tasks.to_vec()));
-            }
-
-            let channel_buffer = if channel_buffers.len() == 1 {
-                channel_buffers[0].clone()
-            } else {
-                // Add an intermediate buffer for the sum task.
-                let intermediary_buffer =
-                    shared_buffer_pool.intermediary_audio_f32(intermediary_buffer_i);
-                intermediary_buffer_i += 1;
-                total_intermediary_buffers = total_intermediary_buffers.max(intermediary_buffer_i);
-
-                tasks.push(Task::Sum(SumTask {
-                    audio_in: channel_buffers,
-                    audio_out: intermediary_buffer.clone(),
-                }));
-
-                intermediary_buffer
-            };
-
-            plugin_in_channel_buffers[channel_index] = Some(channel_buffer);
+        let (num_note_in_ports, num_note_out_ports) = if let Some(note_ports_ext) = note_ports_ext {
+            (note_ports_ext.inputs.len(), note_ports_ext.outputs.len())
+        } else {
+            (0, 0)
+        };
+        let mut note_in_buffers: SmallVec<[Option<SmallVec<[SharedBuffer<ProcEvent>; 2]>>; 2]> =
+            SmallVec::with_capacity(num_note_in_ports);
+        let mut note_out_buffers: SmallVec<[Option<SharedBuffer<ProcEvent>>; 2]> =
+            SmallVec::with_capacity(num_note_out_ports);
+        for _ in 0..num_note_in_ports {
+            note_in_buffers.push(None);
+        }
+        for _ in 0..num_note_out_ports {
+            note_out_buffers.push(None);
         }
 
-        for (channel, buffer) in abstract_task.outputs.iter() {
-            max_graph_audio_buffer_index = max_graph_audio_buffer_index.max(buffer.buffer_id);
+        let mut automation_in_buffers: Option<SmallVec<[SharedBuffer<ProcEvent>; 2]>> = None;
+        let mut automation_out_buffer: Option<SharedBuffer<ProcEvent>> = None;
 
-            let channel_index = channel.as_index();
-            if channel_index >= num_output_channels {
-                return Err(GraphCompilerError::UnexpectedError(format!(
-                    "Abstract schedule refers to an output channel at index {} in the plugin {:?} which only has {} output channels",
-                    channel_index,
-                    abstract_task.node,
-                    num_output_channels
-                ), abstract_tasks.to_vec()));
+        let mut next_audio_in_channel_index = 0;
+        let mut next_audio_out_channel_index = 0;
+
+        for (port_channel_id, buffers) in abstract_task.inputs.iter() {
+            match port_channel_id.port_type {
+                PortType::Audio => {
+                    let channel_index = if let Some(audio_ports_ext) = audio_ports_ext {
+                        match audio_ports_ext.in_channel_index(
+                            port_channel_id.port_stable_id,
+                            port_channel_id.port_channel,
+                        ) {
+                            Ok(index) => index,
+                            Err(()) => {
+                                return Err(GraphCompilerError::UnexpectedError(format!(
+                                    "Abstract schedule refers to an input port with ID {} and channel {} in the plugin {:?} that doesn't exist",
+                                    port_channel_id.port_stable_id,
+                                    port_channel_id.port_channel,
+                                    abstract_task.node,
+                                ), abstract_tasks.to_vec()));
+                            }
+                        }
+                    } else {
+                        next_audio_in_channel_index += 1;
+                        next_audio_in_channel_index - 1
+                    };
+
+                    let mut channel_buffers: SmallVec<[SharedBuffer<f32>; 4]> = SmallVec::new();
+                    for (buffer, delay_comp_info) in buffers.iter() {
+                        max_graph_audio_buffer_index =
+                            max_graph_audio_buffer_index.max(buffer.buffer_id);
+
+                        let graph_buffer = shared_buffer_pool.audio_f32(buffer.buffer_id);
+
+                        let channel_buffer = if let Some(delay_comp_info) = &delay_comp_info {
+                            // Add an intermediate buffer for the delay compensation task.
+                            let intermediary_buffer =
+                                shared_buffer_pool.intermediary_audio_f32(intermediary_buffer_i);
+
+                            intermediary_buffer_i += 1;
+                            total_intermediary_buffers =
+                                total_intermediary_buffers.max(intermediary_buffer_i);
+
+                            let key = DelayCompKey {
+                                delay: delay_comp_info.delay as u32,
+                                src_node_ref: delay_comp_info.source_node._node_ref(),
+                                port_stable_id: port_channel_id.port_stable_id,
+                                port_channel_index: port_channel_id.port_channel,
+                            };
+
+                            let delay_comp_node = if let Some(delay_node) =
+                                shared_plugin_pool.delay_comp_nodes.get_mut(&key)
+                            {
+                                delay_node.active = true;
+                                delay_node.clone()
+                            } else {
+                                let new_delay_node = SharedDelayCompNode::new(
+                                    delay_comp_info.delay as u32,
+                                    coll_handle,
+                                );
+                                let _ = shared_plugin_pool
+                                    .delay_comp_nodes
+                                    .insert(key, new_delay_node.clone());
+                                new_delay_node
+                            };
+
+                            tasks.push(Task::DelayComp(DelayCompTask {
+                                delay_comp_node,
+                                audio_in: graph_buffer,
+                                audio_out: intermediary_buffer.clone(),
+                            }));
+
+                            intermediary_buffer
+                        } else {
+                            graph_buffer
+                        };
+
+                        channel_buffers.push(channel_buffer);
+                    }
+
+                    if channel_buffers.is_empty() {
+                        return Err(GraphCompilerError::UnexpectedError(format!(
+                            "Abstract schedule gave no buffer for input channel {} on the plugin instance {:?}",
+                            channel_index,
+                            abstract_task.node,
+                        ), abstract_tasks.to_vec()));
+                    }
+
+                    let channel_buffer = if channel_buffers.len() == 1 {
+                        channel_buffers[0].clone()
+                    } else {
+                        // Add an intermediate buffer for the sum task.
+                        let intermediary_buffer =
+                            shared_buffer_pool.intermediary_audio_f32(intermediary_buffer_i);
+                        intermediary_buffer_i += 1;
+                        total_intermediary_buffers =
+                            total_intermediary_buffers.max(intermediary_buffer_i);
+
+                        tasks.push(Task::Sum(SumTask {
+                            audio_in: channel_buffers,
+                            audio_out: intermediary_buffer.clone(),
+                        }));
+
+                        intermediary_buffer
+                    };
+
+                    plugin_in_channel_buffers[channel_index] = Some(channel_buffer);
+                }
+                PortType::ParamAutomation => {
+                    let mut bufs: SmallVec<[SharedBuffer<ProcEvent>; 2]> =
+                        SmallVec::with_capacity(buffers.len());
+
+                    for (buffer, _delay_comp_info) in buffers.iter() {
+                        // TODO: Use delay compensation?
+
+                        max_graph_automation_buffer_index =
+                            max_graph_automation_buffer_index.max(buffer.buffer_id);
+
+                        let buffer = shared_buffer_pool.automation_buffer(buffer.buffer_id);
+
+                        bufs.push(buffer);
+                    }
+
+                    automation_in_buffers = Some(bufs);
+                }
+                PortType::Note => {
+                    if let Some(note_ports_ext) = note_ports_ext {
+                        // TODO: Optimize this?
+                        for (port_i, port) in note_ports_ext.inputs.iter().enumerate() {
+                            if port_channel_id.port_stable_id == port.stable_id {
+                                let mut bufs: SmallVec<[SharedBuffer<ProcEvent>; 2]> =
+                                    SmallVec::with_capacity(buffers.len());
+
+                                for (buffer, _delay_comp_info) in buffers.iter() {
+                                    // TODO: Use delay compensation?
+
+                                    max_graph_note_buffer_index =
+                                        max_graph_note_buffer_index.max(buffer.buffer_id);
+
+                                    let buffer = shared_buffer_pool.note_buffer(buffer.buffer_id);
+
+                                    bufs.push(buffer);
+                                }
+
+                                note_in_buffers[port_i] = Some(bufs);
+
+                                break;
+                            }
+                        }
+                    }
+                }
             }
+        }
 
-            let graph_buffer = shared_buffer_pool.audio_f32(buffer.buffer_id);
-            plugin_out_channel_buffers[channel_index] = Some(graph_buffer);
+        for (port_channel_id, buffer) in abstract_task.outputs.iter() {
+            match port_channel_id.port_type {
+                PortType::Audio => {
+                    max_graph_audio_buffer_index =
+                        max_graph_audio_buffer_index.max(buffer.buffer_id);
+
+                    let channel_index = if let Some(audio_ports_ext) = audio_ports_ext {
+                        match audio_ports_ext.out_channel_index(
+                            port_channel_id.port_stable_id,
+                            port_channel_id.port_channel,
+                        ) {
+                            Ok(index) => index,
+                            Err(()) => {
+                                return Err(GraphCompilerError::UnexpectedError(format!(
+                                    "Abstract schedule refers to an output port with ID {} and channel {} in the plugin {:?} that doesn't exist",
+                                    port_channel_id.port_stable_id,
+                                    port_channel_id.port_channel,
+                                    abstract_task.node,
+                                ), abstract_tasks.to_vec()));
+                            }
+                        }
+                    } else {
+                        next_audio_out_channel_index += 1;
+                        next_audio_out_channel_index - 1
+                    };
+
+                    let graph_buffer = shared_buffer_pool.audio_f32(buffer.buffer_id);
+                    plugin_out_channel_buffers[channel_index] = Some(graph_buffer);
+                }
+                PortType::ParamAutomation => {
+                    max_graph_automation_buffer_index =
+                        max_graph_automation_buffer_index.max(buffer.buffer_id);
+
+                    let buffer = shared_buffer_pool.automation_buffer(buffer.buffer_id);
+
+                    automation_out_buffer = Some(buffer);
+                }
+                PortType::Note => {
+                    if let Some(note_ports_ext) = note_ports_ext {
+                        // TODO: Optimize this?
+                        for (port_i, port) in note_ports_ext.outputs.iter().enumerate() {
+                            if port_channel_id.port_stable_id == port.stable_id {
+                                max_graph_note_buffer_index =
+                                    max_graph_note_buffer_index.max(buffer.buffer_id);
+
+                                let buffer = shared_buffer_pool.note_buffer(buffer.buffer_id);
+
+                                note_out_buffers[port_i] = Some(buffer);
+
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         let mut audio_in_channel_buffers: SmallVec<[SharedBuffer<f32>; 4]> =
-            SmallVec::with_capacity(num_input_channels);
+            SmallVec::with_capacity(num_audio_in_channels);
         let mut audio_out_channel_buffers: SmallVec<[SharedBuffer<f32>; 4]> =
-            SmallVec::with_capacity(num_output_channels);
-        for i in 0..num_input_channels {
+            SmallVec::with_capacity(num_audio_out_channels);
+        for i in 0..num_audio_in_channels {
             if let Some(buffer) = plugin_in_channel_buffers[i].take() {
                 audio_in_channel_buffers.push(buffer);
             } else {
                 return Err(GraphCompilerError::UnexpectedError(format!(
-                    "Abstract schedule did not assign buffer for input channel at index {} for the plugin {:?}",
+                    "Abstract schedule did not assign buffer for input audio channel at index {} for the plugin {:?}",
                     i,
                     abstract_task.node,
                 ), abstract_tasks.to_vec()));
             }
         }
-        for i in 0..num_output_channels {
+        for i in 0..num_audio_out_channels {
             if let Some(buffer) = plugin_out_channel_buffers[i].take() {
                 audio_out_channel_buffers.push(buffer);
             } else {
                 return Err(GraphCompilerError::UnexpectedError(format!(
-                    "Abstract schedule did not assign buffer for output channel at index {} for the plugin {:?}",
+                    "Abstract schedule did not assign buffer for output audio channel at index {} for the plugin {:?}",
                     i,
                     abstract_task.node,
                 ), abstract_tasks.to_vec()));
@@ -238,6 +376,8 @@ pub(crate) fn compile_graph(
             tasks.push(Task::DeactivatedPlugin(DeactivatedPluginTask {
                 audio_through,
                 extra_audio_out,
+                automation_out_buffer,
+                note_out_buffers,
             }));
 
             continue;
@@ -252,35 +392,37 @@ pub(crate) fn compile_graph(
         let mut port_i = 0;
         for in_port in audio_ports_ext.inputs.iter() {
             let mut buffers: SmallVec<[SharedBuffer<f32>; 2]> =
-                SmallVec::with_capacity(in_port.channels);
+                SmallVec::with_capacity(usize::from(in_port.channels));
             for _ in 0..in_port.channels {
                 buffers.push(audio_in_channel_buffers[port_i].clone());
                 port_i += 1;
             }
 
-            audio_in.push(AudioPortBuffer::new(buffers, shared_buffer_pool.buffer_size as u32));
+            audio_in.push(AudioPortBuffer::_new(buffers, shared_buffer_pool.audio_buffer_size));
             // TODO: proper latency?
         }
         port_i = 0;
         for out_port in audio_ports_ext.outputs.iter() {
             let mut buffers: SmallVec<[SharedBuffer<f32>; 2]> =
-                SmallVec::with_capacity(out_port.channels);
+                SmallVec::with_capacity(usize::from(out_port.channels));
             for _ in 0..out_port.channels {
                 buffers.push(audio_out_channel_buffers[port_i].clone());
                 port_i += 1;
             }
 
-            audio_out.push(AudioPortBufferMut::new(buffers, shared_buffer_pool.buffer_size as u32));
+            audio_out.push(AudioPortBufferMut::_new(buffers, shared_buffer_pool.audio_buffer_size));
             // TODO: proper latency?
         }
 
         let plugin_audio_thread = plugin_audio_thread.clone();
 
-        let task_version = plugin_audio_thread.task_version;
-
         tasks.push(Task::Plugin(PluginTask {
             plugin: plugin_audio_thread,
-            buffers: ProcBuffers { audio_in, audio_out, task_version },
+            buffers: ProcBuffers { audio_in, audio_out },
+            automation_in_buffers,
+            automation_out_buffer,
+            note_in_buffers,
+            note_out_buffers,
         }));
     }
 
@@ -288,7 +430,8 @@ pub(crate) fn compile_graph(
         tasks,
         graph_audio_in,
         graph_audio_out,
-        max_block_size: shared_buffer_pool.buffer_size,
+        max_block_size: shared_buffer_pool.audio_buffer_size as usize,
+        shared_transport_task: Shared::clone(shared_transport_task),
     };
 
     // This is probably expensive, but I would like to keep this check here until we are very
@@ -305,8 +448,12 @@ pub(crate) fn compile_graph(
         return Err(GraphCompilerError::VerifierError(e, abstract_tasks.to_vec(), new_schedule));
     }
 
-    shared_buffer_pool
-        .remove_excess_audio_buffers(max_graph_audio_buffer_index, total_intermediary_buffers);
+    shared_buffer_pool.remove_excess_buffers(
+        max_graph_audio_buffer_index,
+        total_intermediary_buffers,
+        max_graph_note_buffer_index,
+        max_graph_automation_buffer_index,
+    );
 
     // TODO: Optimize this?
     //
@@ -322,10 +469,10 @@ pub(crate) fn compile_graph(
 pub enum GraphCompilerError {
     VerifierError(
         VerifyScheduleError,
-        Vec<ScheduledNode<PluginInstanceID, PortID, DefaultPortType>>,
+        Vec<ScheduledNode<PluginInstanceID, PortChannelID, PortType>>,
         Schedule,
     ),
-    UnexpectedError(String, Vec<ScheduledNode<PluginInstanceID, PortID, DefaultPortType>>),
+    UnexpectedError(String, Vec<ScheduledNode<PluginInstanceID, PortChannelID, PortType>>),
 }
 
 impl Error for GraphCompilerError {}

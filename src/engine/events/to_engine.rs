@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use dropseed_core::transport::TempoMap;
+
 use crate::engine::main_thread::{ActivateEngineSettings, ModifyGraphRequest};
 use crate::graph::AudioGraphSaveState;
 
@@ -35,6 +37,8 @@ pub enum DSEngineRequest {
 
     /// Rescan all plugin directories.
     RescanPluginDirectories,
+
+    UpdateTempoMap(Box<TempoMap>),
 }
 
 impl From<ModifyGraphRequest> for DSEngineRequest {

@@ -1,0 +1,19 @@
+[package]
+name = "test-host"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+dropseed = { path = "../../" }
+#noise-generator-dropseed = { git = "https://github.com/MeadowlarkDAW/meadowlark-plugins", package = "noise-generator-dropseed", branch = "main" }
+#noise-generator-dropseed = { path = "../meadowlark-plugins/noise-generator/noise-generator-dropseed" }
+meadowlark-core-types = "0.3"
+eframe = "0.18"
+cpal = "0.13"
+crossbeam-channel = "0.5"
+ringbuf = "0.2"
+fnv = "1.0"
+fast_log = "1.5.16"
+log = "0.4"
+basedrop = "0.1"

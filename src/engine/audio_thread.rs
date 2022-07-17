@@ -1,6 +1,6 @@
 use basedrop::Owned;
-use meadowlark_core_types::SampleRate;
-use rtrb_basedrop::{Consumer, Producer, RingBuffer};
+use meadowlark_core_types::time::SampleRate;
+use rtrb::{Consumer, Producer, RingBuffer};
 use std::fmt::Debug;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
@@ -14,15 +14,25 @@ use crate::graph::schedule::SharedSchedule;
 // Allocate enough for at-least 3 seconds of buffer time.
 static ALLOCATED_FRAMES_PER_CHANNEL: usize = 192_000 * 3;
 
-static AUDIO_THREAD_POLL_INTERVAL: Duration = Duration::from_micros(5);
-
 /// Make sure we have a bit of time to copy the engine's output buffer to the
 /// audio thread's output buffer.
-static COPY_OUT_TIME_WINDOW: Duration = Duration::from_micros(60);
+static COPY_OUT_TIME_WINDOW: f64 = 0.95;
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) static AUDIO_THREAD_POLL_INTERVAL: Duration = Duration::from_micros(100);
+#[cfg(not(target_os = "windows"))]
+// Handle worst-case scenario for thread sleep.
+pub(crate) static AUDIO_THREAD_POLL_INTERVAL_BUFFERED: Duration = Duration::from_micros(140);
+#[cfg(target_os = "windows")]
+// The best we can do on Windows is around 1ms.
+pub(crate) static AUDIO_THREAD_POLL_INTERVAL: Duration = Duration::from_micros(1200);
+#[cfg(target_os = "windows")]
+// Handle worst-case scenario for Windows thread sleep.
+pub(crate) static AUDIO_THREAD_POLL_INTERVAL_BUFFERED: Duration = Duration::from_micros(1500);
 
 pub struct DSEngineAudioThread {
-    to_engine_audio_in_tx: Producer<f32>,
-    from_engine_audio_out_rx: Consumer<f32>,
+    to_engine_audio_in_tx: Owned<Producer<f32>>,
+    from_engine_audio_out_rx: Owned<Consumer<f32>>,
 
     in_channels: usize,
     out_channels: usize,
@@ -57,9 +67,14 @@ impl DSEngineAudioThread {
         sample_rate: SampleRate,
     ) -> (Self, DSEngineProcessThread) {
         let (to_engine_audio_in_tx, from_audio_thread_audio_in_rx) =
-            RingBuffer::<f32>::new(in_channels * ALLOCATED_FRAMES_PER_CHANNEL, coll_handle);
+            RingBuffer::<f32>::new(in_channels * ALLOCATED_FRAMES_PER_CHANNEL);
         let (to_audio_thread_audio_out_tx, from_engine_audio_out_rx) =
-            RingBuffer::<f32>::new(out_channels * ALLOCATED_FRAMES_PER_CHANNEL, coll_handle);
+            RingBuffer::<f32>::new(out_channels * ALLOCATED_FRAMES_PER_CHANNEL);
+
+        let to_engine_audio_in_tx = Owned::new(coll_handle, to_engine_audio_in_tx);
+        let from_audio_thread_audio_in_rx = Owned::new(coll_handle, from_audio_thread_audio_in_rx);
+        let to_audio_thread_audio_out_tx = Owned::new(coll_handle, to_audio_thread_audio_out_tx);
+        let from_engine_audio_out_rx = Owned::new(coll_handle, from_engine_audio_out_rx);
 
         let in_temp_buffer =
             Owned::new(coll_handle, vec![0.0; in_channels * ALLOCATED_FRAMES_PER_CHANNEL]);
@@ -69,7 +84,7 @@ impl DSEngineAudioThread {
         let num_frames_wanted =
             if in_channels == 0 { Some(Arc::new(AtomicU32::new(0))) } else { None };
 
-        let num_frames_wanted_clone = num_frames_wanted.as_ref().map(|n| Arc::clone(n));
+        let num_frames_wanted_clone = num_frames_wanted.as_ref().map(Arc::clone);
 
         let sample_rate_recip = 1.0 / sample_rate.as_f64();
 
@@ -119,10 +134,9 @@ impl DSEngineAudioThread {
 
         // Discard any output from previous cycles that failed to render on time.
         if !self.from_engine_audio_out_rx.is_empty() {
-            let chunks = self
-                .from_engine_audio_out_rx
-                .read_chunk(self.from_engine_audio_out_rx.slots())
-                .unwrap();
+            let num_slots = self.from_engine_audio_out_rx.slots();
+
+            let chunks = self.from_engine_audio_out_rx.read_chunk(num_slots).unwrap();
             chunks.commit_all();
         }
 
@@ -130,8 +144,11 @@ impl DSEngineAudioThread {
             num_frames_wanted.store(total_frames as u32, Ordering::SeqCst);
         } else {
             match self.to_engine_audio_in_tx.write_chunk(total_frames * self.in_channels) {
-                Ok(chunk) => {
-                    // By default this just clears the chunk to all zeros.
+                Ok(mut chunk) => {
+                    let (slice_1, slice_2) = chunk.as_mut_slices();
+                    slice_1.fill(0.0);
+                    slice_2.fill(0.0);
+
                     chunk.commit_all();
                 }
                 Err(_) => {
@@ -147,13 +164,14 @@ impl DSEngineAudioThread {
             return;
         }
 
-        let mut max_proc_time =
-            Duration::from_secs_f64(total_frames as f64 * self.sample_rate_recip);
-        if max_proc_time > COPY_OUT_TIME_WINDOW {
-            max_proc_time -= COPY_OUT_TIME_WINDOW;
-        }
+        let max_proc_time = Duration::from_secs_f64(
+            total_frames as f64 * self.sample_rate_recip * COPY_OUT_TIME_WINDOW,
+        );
 
-        while proc_start_time.elapsed() < max_proc_time {
+        #[cfg(target_os = "windows")]
+        let spin_sleeper = spin_sleep::SpinSleeper::default();
+
+        loop {
             if let Ok(chunk) = self.from_engine_audio_out_rx.read_chunk(num_out_samples) {
                 if cpal_out_channels == self.out_channels {
                     // We can simply just convert the interlaced buffer over.
@@ -180,42 +198,14 @@ impl DSEngineAudioThread {
                                 let s = if i2 < slice_1.len() {
                                     slice_1[i2]
                                 } else {
-                                    #[cfg(debug_assertions)]
-                                    {
-                                        slice_2[i2 - slice_1.len()]
-                                    }
-
-                                    #[cfg(not(debug_assertions))]
-                                    unsafe {
-                                        *slice_2.get_unchecked(i2 - slice_1.len())
-                                    }
+                                    slice_2[i2 - slice_1.len()]
                                 };
 
-                                #[cfg(debug_assertions)]
-                                {
-                                    out[(i * cpal_out_channels) + ch_i] = T::from(&s);
-                                }
-
-                                #[cfg(not(debug_assertions))]
-                                unsafe {
-                                    *out.get_unchecked_mut((i * cpal_out_channels) + ch_i) =
-                                        T::from(&s);
-                                }
+                                out[(i * cpal_out_channels) + ch_i] = T::from(&s);
                             }
                         } else {
-                            #[cfg(debug_assertions)]
-                            {
-                                for i in 0..total_frames {
-                                    out[(i * cpal_out_channels) + ch_i] = T::from(&0.0);
-                                }
-                            }
-
-                            #[cfg(not(debug_assertions))]
-                            unsafe {
-                                for i in 0..total_frames {
-                                    *out.get_unchecked_mut((i * cpal_out_channels) + ch_i) =
-                                        T::from(&0.0);
-                                }
+                            for i in 0..total_frames {
+                                out[(i * cpal_out_channels) + ch_i] = T::from(&0.0);
                             }
                         }
                     }
@@ -225,7 +215,15 @@ impl DSEngineAudioThread {
                 return;
             }
 
+            if proc_start_time.elapsed() + AUDIO_THREAD_POLL_INTERVAL_BUFFERED >= max_proc_time {
+                break;
+            }
+
+            #[cfg(not(target_os = "windows"))]
             std::thread::sleep(AUDIO_THREAD_POLL_INTERVAL);
+
+            #[cfg(target_os = "windows")]
+            spin_sleeper.sleep(AUDIO_THREAD_POLL_INTERVAL);
         }
 
         log::trace!("underrun");

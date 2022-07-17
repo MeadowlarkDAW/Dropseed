@@ -1,5 +1,5 @@
 use bitflags::bitflags;
-use std::ffi::c_void;
+use clack_host::utils::Cookie;
 use std::hash::Hash;
 use std::sync::{
     atomic::{AtomicBool, AtomicU32, Ordering},
@@ -8,7 +8,7 @@ use std::sync::{
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ParamID(pub(crate) u32);
+pub struct ParamID(pub u32);
 
 impl ParamID {
     pub const fn new(stable_id: u32) -> Self {
@@ -131,11 +131,8 @@ pub struct ParamInfo {
 
     /// Reserved for CLAP plugins.
     #[allow(unused)]
-    pub(crate) cookie: *const c_void,
+    pub _cookie: Cookie,
 }
-
-unsafe impl Send for ParamInfo {}
-unsafe impl Sync for ParamInfo {}
 
 impl ParamInfo {
     /// Create info for a parameter.
@@ -166,7 +163,7 @@ impl ParamInfo {
             min_value,
             max_value,
             default_value,
-            cookie: std::ptr::null(),
+            _cookie: Cookie::empty(),
         }
     }
 }
@@ -268,13 +265,16 @@ impl HostParamsExtMainThread {
     /// Clears references to a parameter.
     ///
     /// [main-thread]
+    #[allow(unused)]
     pub fn clear(&self, param_id: ParamID, clear_flags: ParamClearFlags) {
         // TODO
+        /*
         log::info!(
             "got request to clear param with id {:?} and flags: {:?}",
             param_id,
             clear_flags
         );
+        */
     }
 
     /// Request the host to call clap_plugin_params->fush().
@@ -310,4 +310,18 @@ impl HostParamsExtAudioThread {
     pub fn request_flush(&self) {
         self.flush_requested.store(true, Ordering::SeqCst);
     }
+}
+
+pub fn default_db_value_to_text(value: f64) -> String {
+    format!("{:.2} dB", value)
+}
+
+pub fn parse_text_to_f64(text: &str) -> Result<f64, ()> {
+    let val: f64 = if let Ok(val) = text.parse() {
+        val
+    } else {
+        return Err(());
+    };
+
+    Ok(val)
 }

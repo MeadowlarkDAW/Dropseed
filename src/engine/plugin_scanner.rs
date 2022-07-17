@@ -2,38 +2,29 @@ use basedrop::Shared;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::{collections::HashMap, error::Error};
+use walkdir::WalkDir;
+
+use dropseed_core::plugin::{HostInfo, HostRequest, PluginInstanceID, PluginInstanceType};
+use dropseed_core::plugin_scanner::{PluginFormat, ScannedPluginKey};
 
 use crate::graph::plugin_host::PluginInstanceHost;
-use crate::graph::shared_pool::{PluginInstanceID, PluginInstanceType};
-use crate::plugin::host_request::HostRequest;
 use crate::plugin::{PluginDescriptor, PluginFactory, PluginSaveState};
 use crate::utils::thread_id::SharedThreadIDs;
-use crate::HostInfo;
 
-#[cfg(feature = "clap-host")]
-const DEFAULT_CLAP_SCAN_DIRECTORIES: [&'static str; 2] = ["/usr/lib/clap", "/usr/local/lib/clap"];
+#[cfg(all(
+    feature = "clap-host",
+    any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd")
+))]
+const DEFAULT_CLAP_SCAN_DIRECTORIES: [&str; 2] = ["/usr/lib/clap", "/usr/local/lib/clap"];
+
+#[cfg(all(feature = "clap-host", target_os = "macos"))]
+const DEFAULT_CLAP_SCAN_DIRECTORIES: [&'static str; 1] = ["/Library/Audio/Plug-Ins/CLAP"];
+
+#[cfg(all(feature = "clap-host", target_os = "windows"))]
+// TODO: Find the proper "Common Files" folder at runtime.
+const DEFAULT_CLAP_SCAN_DIRECTORIES: [&'static str; 1] = ["C:/Program Files/Common Files/CLAP"];
 
 const MAX_SCAN_DEPTH: usize = 10;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum PluginFormat {
-    Internal,
-    Clap,
-}
-
-impl std::fmt::Display for PluginFormat {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PluginFormat::Internal => {
-                write!(f, "internal")
-            }
-            PluginFormat::Clap => {
-                write!(f, "CLAP")
-            }
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct ScannedPlugin {
@@ -52,14 +43,9 @@ impl ScannedPlugin {
 struct ScannedPluginFactory {
     pub rdn: Shared<String>,
     pub format: PluginFormat,
+    pub plugin_version: Shared<String>,
 
     factory: Box<dyn PluginFactory>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ScannedPluginKey {
-    pub rdn: String,
-    pub format: PluginFormat,
 }
 
 pub(crate) struct PluginScanner {
@@ -73,9 +59,9 @@ pub(crate) struct PluginScanner {
 
     host_info: Shared<HostInfo>,
 
-    unkown_rdn: Shared<String>,
-
     thread_ids: SharedThreadIDs,
+
+    next_plug_unique_id: u64,
 
     coll_handle: basedrop::Handle,
 }
@@ -95,9 +81,11 @@ impl PluginScanner {
 
             host_info,
 
-            unkown_rdn: Shared::new(&coll_handle, String::from("org.rustydaw.unkown")),
-
             thread_ids,
+
+            // IDs 0 and 1 are used exclusively by the graph_in_node and graph_out_node
+            // respectively.
+            next_plug_unique_id: 2,
 
             coll_handle,
         }
@@ -107,7 +95,7 @@ impl PluginScanner {
     pub fn add_clap_scan_directory(&mut self, path: PathBuf) -> bool {
         // Check if the path is already a default path.
         for p in DEFAULT_CLAP_SCAN_DIRECTORIES.iter() {
-            if &path == &PathBuf::from_str(p).unwrap() {
+            if path == PathBuf::from_str(p).unwrap() {
                 log::warn!("Path is already a default scan directory {:?}", &path);
                 return false;
             }
@@ -163,7 +151,7 @@ impl PluginScanner {
 
         self.scanned_external_plugins.clear();
         let mut scanned_plugins: Vec<ScannedPlugin> = Vec::new();
-        let mut failed_plugins: Vec<(PathBuf, Box<dyn Error + Send>)> = Vec::new();
+        let mut failed_plugins: Vec<(PathBuf, String)> = Vec::new();
 
         for (key, f) in self.scanned_internal_plugins.iter() {
             scanned_plugins.push(ScannedPlugin {
@@ -178,14 +166,6 @@ impl PluginScanner {
         {
             let mut found_binaries: Vec<PathBuf> = Vec::new();
 
-            #[cfg(any(
-                target_os = "linux",
-                target_os = "freebsd",
-                target_os = "openbsd",
-                target_os = "netbsd"
-            ))]
-            const CLAP_SEARCH_EXT: [&'static str; 1] = ["*.{clap,so}"];
-
             let mut scan_directories: Vec<PathBuf> = DEFAULT_CLAP_SCAN_DIRECTORIES
                 .iter()
                 .map(|s| PathBuf::from_str(s).unwrap())
@@ -199,36 +179,33 @@ impl PluginScanner {
             }
 
             for dir in scan_directories.iter().chain(self.clap_scan_directories.iter()) {
-                match globwalk::GlobWalkerBuilder::from_patterns(dir, &CLAP_SEARCH_EXT)
-                    .max_depth(MAX_SCAN_DEPTH)
-                    .follow_links(true)
-                    .build()
-                {
-                    Ok(walker) => {
-                        for item in walker.into_iter() {
-                            match item {
-                                Ok(binary) => {
-                                    let binary_path = binary.into_path();
-                                    log::trace!("Found CLAP binary: {:?}", &binary_path);
-                                    found_binaries.push(binary_path);
-                                }
-                                Err(e) => {
-                                    log::warn!(
-                                        "Failed to scan binary for potential CLAP plugin: {}",
-                                        e
-                                    );
-                                }
+                let walker = WalkDir::new(dir).max_depth(MAX_SCAN_DEPTH).follow_links(true);
+
+                for item in walker {
+                    match item {
+                        Ok(binary) => {
+                            if !binary.file_type().is_file() {
+                                continue;
                             }
+
+                            match binary.path().extension().and_then(|e| e.to_str()) {
+                                Some(ext) if ext == "clap" => {}
+                                _ => continue,
+                            };
+
+                            let binary_path = binary.into_path();
+                            log::trace!("Found CLAP binary: {:?}", &binary_path);
+                            found_binaries.push(binary_path);
                         }
-                    }
-                    Err(e) => {
-                        log::error!("Failed to walk directory {:?} for CLAP plugins: {}", dir, e);
+                        Err(e) => {
+                            log::warn!("Failed to scan binary for potential CLAP plugin: {}", e);
+                        }
                     }
                 }
             }
 
             for binary_path in found_binaries.iter() {
-                match crate::clap::plugin::entry_init(
+                match crate::clap::factory::entry_init(
                     binary_path,
                     self.thread_ids.clone(),
                     &self.coll_handle,
@@ -239,7 +216,7 @@ impl PluginScanner {
                             let v = f.clap_version;
                             let format_version = format!("{}.{}.{}", v.major, v.minor, v.revision);
 
-                            log::info!(
+                            log::debug!(
                                 "Successfully scanned CLAP plugin with ID: {}, version {}, and CLAP version {}",
                                 &id,
                                 &f.description().version,
@@ -250,21 +227,31 @@ impl PluginScanner {
                             let key =
                                 ScannedPluginKey { rdn: id.clone(), format: PluginFormat::Clap };
 
+                            let description = f.description();
+
+                            let plugin_version =
+                                Shared::new(&self.coll_handle, description.version.clone());
+
                             scanned_plugins.push(ScannedPlugin {
-                                description: f.description().clone(),
+                                description,
                                 format: PluginFormat::Clap,
                                 format_version,
                                 key: key.clone(),
                             });
 
-                            if let Some(_) = self.scanned_external_plugins.insert(
-                                key,
-                                ScannedPluginFactory {
-                                    rdn: Shared::new(&self.coll_handle, id.clone()),
-                                    format: PluginFormat::Clap,
-                                    factory: Box::new(f),
-                                },
-                            ) {
+                            if self
+                                .scanned_external_plugins
+                                .insert(
+                                    key,
+                                    ScannedPluginFactory {
+                                        rdn: Shared::new(&self.coll_handle, id.clone()),
+                                        format: PluginFormat::Clap,
+                                        plugin_version,
+                                        factory: Box::new(f),
+                                    },
+                                )
+                                .is_some()
+                            {
                                 // TODO: Handle this better
                                 log::warn!("Found duplicate CLAP plugins with ID: {}", &id);
                                 let _ = scanned_plugins.pop();
@@ -289,7 +276,7 @@ impl PluginScanner {
     pub fn scan_internal_plugin(
         &mut self,
         factory: Box<dyn PluginFactory>,
-    ) -> Result<ScannedPluginKey, Box<dyn Error + Send>> {
+    ) -> Result<ScannedPluginKey, String> {
         let description = factory.description();
 
         let key =
@@ -302,6 +289,7 @@ impl PluginScanner {
         let scanned_plugin = ScannedPluginFactory {
             factory,
             rdn: Shared::new(&self.coll_handle, key.rdn.clone()),
+            plugin_version: Shared::new(&self.coll_handle, description.version),
             format: PluginFormat::Internal,
         };
 
@@ -317,7 +305,7 @@ impl PluginScanner {
         fallback_to_other_formats: bool,
     ) -> CreatePluginResult {
         let check_for_invalid_host_callbacks = |host_request: &HostRequest, id: &String| {
-            let request_flags = host_request.load_requested_and_reset_all();
+            let request_flags = host_request._load_requested_and_reset_all();
 
             if !request_flags.is_empty() {
                 log::warn!("Plugin with ID {} attempted to call a host request during the PluginFactory::new() method. Requests were ignored.", id);
@@ -326,6 +314,7 @@ impl PluginScanner {
 
         let mut factory = None;
         let mut status = Ok(());
+        let mut plugin_version = None;
 
         // Always try to use internal plugins when available.
         if save_state.key.format == PluginFormat::Internal || fallback_to_other_formats {
@@ -374,37 +363,37 @@ impl PluginScanner {
             }
         }
 
-        let mut id = PluginInstanceID {
-            node_ref,
-            format: PluginInstanceType::Unloaded,
-            rdn: Shared::clone(&self.unkown_rdn),
-        };
-        let host_request = HostRequest::new(Shared::clone(&self.host_info));
+        let mut format = PluginInstanceType::Unloaded;
+
+        let host_request = HostRequest::_new(Shared::clone(&self.host_info));
         let mut main_thread = None;
 
-        if let Some(factory) = factory {
-            id.format = factory.format.into();
-            id.rdn = factory.rdn.clone();
+        let id = if let Some(factory) = factory {
+            format = factory.format.into();
+            let rdn = factory.rdn.clone();
+
+            plugin_version = Some(Shared::clone(&factory.plugin_version));
 
             if save_state.key.format != factory.format {
                 save_state.key =
                     ScannedPluginKey { rdn: save_state.key.rdn.clone(), format: factory.format };
             }
 
+            let id =
+                PluginInstanceID::_new(node_ref.as_usize(), self.next_plug_unique_id, format, rdn);
+            self.next_plug_unique_id += 1;
+
             match factory.factory.new(host_request.clone(), id.clone(), &self.coll_handle) {
                 Ok(mut plugin_main_thread) => {
                     check_for_invalid_host_callbacks(&host_request, &factory.rdn);
 
-                    if let Err(e) =
-                        plugin_main_thread.init(save_state._preset.clone(), &self.coll_handle)
-                    {
+                    if let Err(e) = plugin_main_thread.init(&self.coll_handle) {
                         status = Err(NewPluginInstanceError::PluginFailedToInit(
                             (*factory.rdn).clone(),
                             e,
                         ));
                     } else {
                         main_thread = Some(plugin_main_thread);
-                        id.format = factory.format.into();
                         status = Ok(());
                     }
                 }
@@ -417,16 +406,30 @@ impl PluginScanner {
                     ));
                 }
             };
+
+            id
         } else {
-            id.rdn = Shared::new(&self.coll_handle, save_state.key.rdn.clone());
+            let rdn = Shared::new(&self.coll_handle, save_state.key.rdn.clone());
+
+            let id =
+                PluginInstanceID::_new(node_ref.as_usize(), self.next_plug_unique_id, format, rdn);
+            self.next_plug_unique_id += 1;
 
             if status.is_ok() {
                 status = Err(NewPluginInstanceError::NotFound(save_state.key.rdn.clone()));
             }
-        }
+
+            id
+        };
 
         CreatePluginResult {
-            plugin_host: PluginInstanceHost::new(id, Some(save_state), main_thread, host_request),
+            plugin_host: PluginInstanceHost::new(
+                id,
+                save_state,
+                main_thread,
+                host_request,
+                plugin_version,
+            ),
             status,
         }
     }
@@ -440,13 +443,13 @@ pub(crate) struct CreatePluginResult {
 #[derive(Debug)]
 pub struct RescanPluginDirectoriesRes {
     pub scanned_plugins: Vec<ScannedPlugin>,
-    pub failed_plugins: Vec<(PathBuf, Box<dyn Error + Send>)>,
+    pub failed_plugins: Vec<(PathBuf, String)>,
 }
 
 #[derive(Debug)]
 pub enum NewPluginInstanceError {
-    FactoryFailedToCreateNewInstance(String, Box<dyn Error + Send>),
-    PluginFailedToInit(String, Box<dyn Error + Send>),
+    FactoryFailedToCreateNewInstance(String, String),
+    PluginFailedToInit(String, String),
     NotFound(String),
     FormatNotFound(String, PluginFormat),
 }

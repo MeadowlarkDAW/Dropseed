@@ -1,9 +1,7 @@
-use audio_graph::DefaultPortType;
-use basedrop::{Collector, Shared};
-use crossbeam::channel::{Receiver, Sender};
+use basedrop::{Collector, Shared, SharedCell};
+use crossbeam_channel::{Receiver, Sender};
 use fnv::FnvHashSet;
-use meadowlark_core_types::SampleRate;
-use std::error::Error;
+use meadowlark_core_types::time::SampleRate;
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -13,20 +11,21 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 use thread_priority::ThreadPriority;
 
+use dropseed_core::plugin::PluginInstanceID;
+use dropseed_core::plugin_scanner::ScannedPluginKey;
+use dropseed_core::transport::TempoMap;
+
 use crate::engine::audio_thread::DSEngineAudioThread;
 use crate::engine::events::from_engine::{
     DSEngineEvent, EngineDeactivatedInfo, PluginScannerEvent,
 };
 use crate::engine::events::to_engine::DSEngineRequest;
-use crate::engine::plugin_scanner::{PluginScanner, ScannedPluginKey};
-use crate::graph::{
-    AudioGraph, AudioGraphSaveState, Edge, NewPluginRes, PluginEdges, PluginInstanceID,
-};
+use crate::engine::plugin_scanner::PluginScanner;
+use crate::graph::{AudioGraph, AudioGraphSaveState, Edge, NewPluginRes, PluginEdges, PortType};
 use crate::plugin::host_request::HostInfo;
 use crate::plugin::{PluginFactory, PluginSaveState};
+use crate::transport::TransportHandle;
 use crate::utils::thread_id::SharedThreadIDs;
-
-use super::process_thread::PROCESS_THREAD_PRIORITY;
 
 static ENGINE_THREAD_UPDATE_INTERVAL: Duration = Duration::from_millis(10);
 
@@ -40,6 +39,7 @@ pub(crate) struct DSEngineMainThread {
     host_info: Shared<HostInfo>,
     run_process_thread: Option<Arc<AtomicBool>>,
     process_thread_handle: Option<JoinHandle<()>>,
+    tempo_map_shared: Option<Shared<SharedCell<(Shared<TempoMap>, u64)>>>,
 }
 
 impl DSEngineMainThread {
@@ -48,7 +48,7 @@ impl DSEngineMainThread {
         mut internal_plugins: Vec<Box<dyn PluginFactory>>,
         handle_to_engine_rx: Receiver<DSEngineRequest>,
         event_tx: Sender<DSEngineEvent>,
-    ) -> (Self, Vec<Result<ScannedPluginKey, Box<dyn Error + Send>>>) {
+    ) -> (Self, Vec<Result<ScannedPluginKey, String>>) {
         // Set up and run garbage collector wich collects and safely drops garbage from
         // the audio thread.
         let collector = Collector::new();
@@ -61,7 +61,7 @@ impl DSEngineMainThread {
             PluginScanner::new(collector.handle(), Shared::clone(&host_info), thread_ids.clone());
 
         // Scan the user's internal plugins.
-        let internal_plugins_res: Vec<Result<ScannedPluginKey, Box<dyn Error + Send>>> =
+        let internal_plugins_res: Vec<Result<ScannedPluginKey, String>> =
             internal_plugins.drain(..).map(|p| plugin_scanner.scan_internal_plugin(p)).collect();
 
         (
@@ -78,6 +78,7 @@ impl DSEngineMainThread {
                 host_info,
                 run_process_thread: None,
                 process_thread_handle: None,
+                tempo_map_shared: None,
             },
             internal_plugins_res,
         )
@@ -91,7 +92,7 @@ impl DSEngineMainThread {
             while let Ok(msg) = self.handle_to_engine_rx.try_recv() {
                 match msg {
                     DSEngineRequest::ModifyGraph(req) => self.modify_graph(req),
-                    DSEngineRequest::ActivateEngine(settings) => self.activate_engine(settings),
+                    DSEngineRequest::ActivateEngine(settings) => self.activate_engine(&settings),
                     DSEngineRequest::DeactivateEngine => self.deactivate_engine(),
                     DSEngineRequest::RestoreFromSaveState(save_state) => {
                         self.restore_audio_graph_from_save_state(&save_state)
@@ -109,6 +110,24 @@ impl DSEngineMainThread {
                     }
 
                     DSEngineRequest::RescanPluginDirectories => self.rescan_plugin_directories(),
+
+                    DSEngineRequest::UpdateTempoMap(new_tempo_map) => {
+                        if let Some(tempo_map_shared) = &self.tempo_map_shared {
+                            let tempo_map_version = tempo_map_shared.get().1;
+
+                            let new_tempo_map_shared =
+                                Shared::new(&self.collector.handle(), *new_tempo_map);
+
+                            tempo_map_shared.set(Shared::new(
+                                &self.collector.handle(),
+                                (Shared::clone(&new_tempo_map_shared), tempo_map_version + 1),
+                            ));
+
+                            if let Some(audio_graph) = &mut self.audio_graph {
+                                audio_graph.update_tempo_map(new_tempo_map_shared);
+                            }
+                        }
+                    }
                 }
             }
 
@@ -147,7 +166,7 @@ impl DSEngineMainThread {
         self.event_tx.send(PluginScannerEvent::RescanFinished(res).into()).unwrap();
     }
 
-    fn activate_engine(&mut self, settings: Box<ActivateEngineSettings>) {
+    fn activate_engine(&mut self, settings: &ActivateEngineSettings) {
         if self.audio_graph.is_some() {
             log::warn!("Ignored request to activate RustyDAW engine: Engine is already activated");
             return;
@@ -160,8 +179,10 @@ impl DSEngineMainThread {
         let min_frames = settings.min_frames;
         let max_frames = settings.max_frames;
         let sample_rate = settings.sample_rate;
+        let note_buffer_size = settings.note_buffer_size;
+        let event_buffer_size = settings.event_buffer_size;
 
-        let (mut audio_graph, shared_schedule) = AudioGraph::new(
+        let (mut audio_graph, shared_schedule, transport_handle) = AudioGraph::new(
             self.collector.handle(),
             Shared::clone(&self.host_info),
             num_audio_in_channels,
@@ -169,27 +190,46 @@ impl DSEngineMainThread {
             sample_rate,
             min_frames,
             max_frames,
+            note_buffer_size,
+            event_buffer_size,
             self.thread_ids.clone(),
         );
 
+        let graph_in_node_id = audio_graph.graph_in_node_id().clone();
+        let graph_out_node_id = audio_graph.graph_out_node_id().clone();
+
         // TODO: Remove this once compiler is fixed.
         audio_graph
-            .connect_edge(&Edge {
-                edge_type: DefaultPortType::Audio,
-                src_plugin_id: audio_graph.graph_in_node_id().clone(),
-                dst_plugin_id: audio_graph.graph_out_node_id().clone(),
-                src_channel: 0,
-                dst_channel: 0,
-            })
+            .connect_edge(
+                &EdgeReq {
+                    edge_type: PortType::Audio,
+                    src_plugin_id: PluginIDReq::Added(0),
+                    dst_plugin_id: PluginIDReq::Added(0),
+                    src_port_id: EdgeReqPortID::Main,
+                    src_port_channel: 0,
+                    dst_port_id: EdgeReqPortID::Main,
+                    dst_port_channel: 0,
+                    log_error_on_fail: true,
+                },
+                &graph_in_node_id,
+                &graph_out_node_id,
+            )
             .unwrap();
         audio_graph
-            .connect_edge(&Edge {
-                edge_type: DefaultPortType::Audio,
-                src_plugin_id: audio_graph.graph_in_node_id().clone(),
-                dst_plugin_id: audio_graph.graph_out_node_id().clone(),
-                src_channel: 1,
-                dst_channel: 1,
-            })
+            .connect_edge(
+                &EdgeReq {
+                    edge_type: PortType::Audio,
+                    src_plugin_id: PluginIDReq::Added(0),
+                    dst_plugin_id: PluginIDReq::Added(0),
+                    src_port_id: EdgeReqPortID::Main,
+                    src_port_channel: 1,
+                    dst_port_id: EdgeReqPortID::Main,
+                    dst_port_channel: 1,
+                    log_error_on_fail: true,
+                },
+                &graph_in_node_id,
+                &graph_out_node_id,
+            )
             .unwrap();
 
         self.audio_graph = Some(audio_graph);
@@ -217,20 +257,20 @@ impl DSEngineMainThread {
             }
             self.run_process_thread = Some(run_process_thread);
 
-            let process_thread_handle = thread_priority::spawn(
-                ThreadPriority::Crossplatform(PROCESS_THREAD_PRIORITY.try_into().unwrap()),
-                move |priority_res| {
+            let process_thread_handle =
+                thread_priority::spawn(ThreadPriority::Max, move |priority_res| {
                     if let Err(e) = priority_res {
-                        log::error!("Failed to set process thread priority to 90 (in the range [0, 100]): {:?}", e);
+                        log::error!("Failed to set process thread priority to max: {:?}", e);
                     } else {
-                        log::info!("Successfully set process thread priority to 90 (in the range [0, 100])");
+                        log::info!("Successfully set process thread priority to max");
                     }
 
                     process_thread.run(run_process_thread_clone);
-                },
-            );
+                });
 
             self.process_thread_handle = Some(process_thread_handle);
+
+            self.tempo_map_shared = Some(transport_handle.tempo_map_shared());
 
             let info = EngineActivatedInfo {
                 audio_thread,
@@ -239,6 +279,7 @@ impl DSEngineMainThread {
                 sample_rate,
                 min_frames,
                 max_frames,
+                transport_handle,
                 num_audio_in_channels,
                 num_audio_out_channels,
             };
@@ -267,36 +308,8 @@ impl DSEngineMainThread {
             let new_plugins_res: Vec<NewPluginRes> = req
                 .add_plugin_instances
                 .drain(..)
-                .map(|(key, preset)| {
-                    if let Some(preset) = preset {
-                        let save_state = PluginSaveState {
-                            key: key.clone(),
-                            _preset: preset.clone(),
-                            activation_requested: true,
-                            audio_in_out_channels: (0, 0),
-                        };
-
-                        audio_graph.add_new_plugin_instance(
-                            save_state,
-                            &mut self.plugin_scanner,
-                            true,
-                            true,
-                        )
-                    } else {
-                        let save_state = PluginSaveState {
-                            key: key.clone(),
-                            _preset: (), // TODO: Get default preset.
-                            activation_requested: true,
-                            audio_in_out_channels: (0, 0),
-                        };
-
-                        audio_graph.add_new_plugin_instance(
-                            save_state,
-                            &mut self.plugin_scanner,
-                            true,
-                            true,
-                        )
-                    }
+                .map(|save_state| {
+                    audio_graph.add_new_plugin_instance(save_state, &mut self.plugin_scanner, true)
                 })
                 .collect();
 
@@ -310,10 +323,9 @@ impl DSEngineMainThread {
 
             for edge in req.connect_new_edges.iter() {
                 let src_plugin_id = match &edge.src_plugin_id {
-                    PluginIDReq::Existing(id) => id.clone(),
                     PluginIDReq::Added(index) => {
                         if let Some(new_plugin_id) = new_plugin_ids.get(*index) {
-                            new_plugin_id.clone()
+                            new_plugin_id
                         } else {
                             log::error!(
                                 "Could not connect edge {:?}: Source plugin index out of bounds",
@@ -322,33 +334,39 @@ impl DSEngineMainThread {
                             continue;
                         }
                     }
+                    PluginIDReq::Existing(id) => id,
                 };
 
                 let dst_plugin_id = match &edge.dst_plugin_id {
-                    PluginIDReq::Existing(id) => id.clone(),
                     PluginIDReq::Added(index) => {
                         if let Some(new_plugin_id) = new_plugin_ids.get(*index) {
-                            new_plugin_id.clone()
+                            new_plugin_id
                         } else {
-                            log::error!("Could not connect edge {:?}: Destination plugin index out of bounds", edge);
+                            log::error!(
+                                "Could not connect edge {:?}: Destination plugin index out of bounds",
+                                edge
+                            );
                             continue;
                         }
                     }
+                    PluginIDReq::Existing(id) => id,
                 };
 
-                let new_edge = Edge {
-                    edge_type: edge.edge_type,
-                    src_plugin_id,
-                    dst_plugin_id,
-                    src_channel: edge.src_channel,
-                    dst_channel: edge.dst_channel,
-                };
-
-                if let Err(e) = audio_graph.connect_edge(&new_edge) {
-                    log::error!("Could not connect edge {:?}: {}", edge, e);
+                if let Err(e) = audio_graph.connect_edge(edge, src_plugin_id, dst_plugin_id) {
+                    if edge.log_error_on_fail {
+                        log::error!("Could not connect edge: {}", e);
+                    } else {
+                        #[cfg(debug_assertions)]
+                        log::debug!("Could not connect edge: {}", e);
+                    }
                 } else {
-                    let _ = affected_plugins.insert(new_edge.src_plugin_id.clone());
-                    let _ = affected_plugins.insert(new_edge.dst_plugin_id.clone());
+                    // These will always be true.
+                    if let PluginIDReq::Existing(id) = &edge.src_plugin_id {
+                        let _ = affected_plugins.insert(id.clone());
+                    }
+                    if let PluginIDReq::Existing(id) = &edge.dst_plugin_id {
+                        let _ = affected_plugins.insert(id.clone());
+                    }
                 }
             }
 
@@ -397,6 +415,8 @@ impl DSEngineMainThread {
             run_process_thread.store(false, Ordering::Relaxed);
         }
         self.process_thread_handle = None;
+
+        self.tempo_map_shared = None;
 
         self.event_tx
             .send(DSEngineEvent::EngineDeactivated(EngineDeactivatedInfo::DeactivatedGracefully {
@@ -478,7 +498,7 @@ impl DSEngineMainThread {
                     self.event_tx
                         .send(DSEngineEvent::EngineDeactivated(
                             EngineDeactivatedInfo::EngineCrashed {
-                                error_msg: Box::new(e),
+                                error_msg: format!("{}", e),
                                 recovered_save_state: None,
                             },
                         ))
@@ -519,6 +539,8 @@ pub struct ActivateEngineSettings {
     pub max_frames: u32,
     pub num_audio_in_channels: u16,
     pub num_audio_out_channels: u16,
+    pub note_buffer_size: usize,
+    pub event_buffer_size: usize,
 }
 
 impl Default for ActivateEngineSettings {
@@ -529,6 +551,8 @@ impl Default for ActivateEngineSettings {
             max_frames: 512,
             num_audio_in_channels: 2,
             num_audio_out_channels: 2,
+            note_buffer_size: 256,
+            event_buffer_size: 256,
         }
     }
 }
@@ -543,22 +567,44 @@ pub enum PluginIDReq {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum EdgeReqPortID {
+    /// Use the main port.
+    ///
+    /// This can be useful if you don't know the layout of the plugin's ports yet
+    /// (because the plugin hasn't been added to the graph yet and activated).
+    Main,
+    /// Use the port with this specific stable ID.
+    StableID(u32),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct EdgeReq {
-    pub edge_type: DefaultPortType,
+    pub edge_type: PortType,
 
     pub src_plugin_id: PluginIDReq,
     pub dst_plugin_id: PluginIDReq,
 
-    pub src_channel: u16,
-    pub dst_channel: u16,
+    pub src_port_id: EdgeReqPortID,
+    pub src_port_channel: u16,
+
+    pub dst_port_id: EdgeReqPortID,
+    pub dst_port_channel: u16,
+
+    /// If true, then the engine should log the error if it failed to connect this edge
+    /// for any reason.
+    ///
+    /// If false, then the engine should not log the error if it failed to connect this
+    /// edge for any reason. This can be useful in the common case where when adding a
+    /// new plugin to the graph, and you don't know the layout of the plugin's ports yet
+    /// (because it hasn't been added to the graph yet and activated), yet you still want
+    /// to try and connect any main stereo inputs/outputs to the graph.
+    pub log_error_on_fail: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct ModifyGraphRequest {
     /// Any new plugin instances to add.
-    ///
-    /// `(plugin key, plugin preset (None for default preset))`
-    pub add_plugin_instances: Vec<(ScannedPluginKey, Option<()>)>,
+    pub add_plugin_instances: Vec<PluginSaveState>,
 
     /// Any plugins to remove.
     pub remove_plugin_instances: Vec<PluginInstanceID>,
@@ -599,6 +645,8 @@ pub struct EngineActivatedInfo {
     /// The ID for the output to the audio graph. Use this to connect any
     /// plugins to system outputs.
     pub graph_out_node_id: PluginInstanceID,
+
+    pub transport_handle: TransportHandle,
 
     pub sample_rate: SampleRate,
     pub min_frames: u32,

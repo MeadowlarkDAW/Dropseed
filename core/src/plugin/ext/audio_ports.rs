@@ -1,7 +1,7 @@
-pub const PORT_TYPE_MONO: &'static str = "mono";
-pub const PORT_TYPE_STEREO: &'static str = "stereo";
+pub const PORT_TYPE_MONO: &str = "mono";
+pub const PORT_TYPE_STEREO: &str = "stereo";
 
-pub const PORT_NAME_SIDECHAIN: &'static str = "sidechain";
+pub const PORT_NAME_SIDECHAIN: &str = "sidechain";
 
 pub(crate) static EMPTY_AUDIO_PORTS_CONFIG: PluginAudioPortsExt = PluginAudioPortsExt::empty();
 
@@ -33,7 +33,7 @@ impl PluginAudioPortsExt {
         for input in self.inputs.iter() {
             num_inputs += input.channels;
         }
-        num_inputs
+        num_inputs as usize
     }
 
     pub fn total_out_channels(&self) -> usize {
@@ -41,21 +41,61 @@ impl PluginAudioPortsExt {
         for output in self.outputs.iter() {
             num_outputs += output.channels;
         }
-        num_outputs
+        num_outputs as usize
     }
 
     pub fn main_in_channels(&self) -> usize {
         match self.main_ports_layout {
-            MainPortsLayout::InOut | MainPortsLayout::InOnly => self.inputs[0].channels,
+            MainPortsLayout::InOut | MainPortsLayout::InOnly => self.inputs[0].channels as usize,
             _ => 0,
         }
     }
 
     pub fn main_out_channels(&self) -> usize {
         match self.main_ports_layout {
-            MainPortsLayout::InOut | MainPortsLayout::OutOnly => self.outputs[0].channels,
+            MainPortsLayout::InOut | MainPortsLayout::OutOnly => self.outputs[0].channels as usize,
             _ => 0,
         }
+    }
+
+    pub fn in_channel_index(&self, port_stable_id: u32, port_channel: u16) -> Result<usize, ()> {
+        // TODO: Optimize this?
+
+        let mut channel_i: u16 = 0;
+
+        for p in self.inputs.iter() {
+            if p.stable_id == port_stable_id {
+                if port_channel < p.channels {
+                    return Ok((channel_i + port_channel) as usize);
+                } else {
+                    return Err(());
+                }
+            } else {
+                channel_i += p.channels;
+            }
+        }
+
+        Err(())
+    }
+
+    pub fn out_channel_index(&self, port_stable_id: u32, port_channel: u16) -> Result<usize, ()> {
+        // TODO: Optimize this?
+
+        let mut channel_i: u16 = 0;
+
+        for p in self.outputs.iter() {
+            if p.stable_id == port_stable_id {
+                if port_channel < p.channels {
+                    return Ok((channel_i + port_channel) as usize);
+                } else {
+                    return Err(());
+                }
+            } else {
+                channel_i += p.channels;
+            }
+        }
+
+        Err(())
     }
 
     pub const fn empty() -> Self {
@@ -276,7 +316,7 @@ pub struct AudioPortInfo {
     /// The number of channels in this port.
     ///
     /// This cannot be `0`.
-    pub channels: usize,
+    pub channels: u16,
 
     /// If `None` or empty then it is unspecified (arbitrary audio).
     ///
