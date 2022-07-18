@@ -18,10 +18,10 @@ use dropseed_core::plugin::buffer::SharedBuffer;
 use dropseed_core::plugin::ext::audio_ports::PluginAudioPortsExt;
 use dropseed_core::plugin::ext::note_ports::PluginNotePortsExt;
 use dropseed_core::plugin::ext::params::{ParamID, ParamInfo, ParamInfoFlags};
-use dropseed_core::plugin::host_request::RequestFlags;
 use dropseed_core::plugin::{
-    HostRequest, PluginAudioThread, PluginInstanceID, PluginMainThread, PluginPreset,
-    PluginSaveState, ProcBuffers, ProcEvent, ProcInfo, ProcessStatus,
+    HostRequestChannelReceiver, HostRequestFlags, PluginAudioThread, PluginInstanceID,
+    PluginMainThread, PluginPreset, PluginSaveState, ProcBuffers, ProcEvent, ProcInfo,
+    ProcessStatus,
 };
 use dropseed_core::plugin_scanner::{PluginFormat, ScannedPluginKey};
 use dropseed_core::transport::TempoMap;
@@ -176,7 +176,9 @@ pub(crate) struct PluginInstanceHost {
     pub num_audio_in_channels: usize,
     pub num_audio_out_channels: usize,
 
+    // TODO: main thread shouldn't be optional
     pub main_thread: Option<Box<dyn PluginMainThread>>,
+    // TODO: this shouldn't be accessible to the main thread
     pub audio_thread: Option<SharedPluginHostAudioThread>,
 
     state: Arc<SharedPluginState>,
@@ -187,8 +189,10 @@ pub(crate) struct PluginInstanceHost {
     param_queues: Option<ParamQueuesMainThread>,
     gesturing_params: FnvHashMap<ParamID, bool>,
 
-    host_request: HostRequest,
+    host_request: HostRequestChannelReceiver,
     remove_requested: bool,
+    save_state_dirty: bool,
+    restarting: bool,
 }
 
 impl PluginInstanceHost {
@@ -196,7 +200,7 @@ impl PluginInstanceHost {
         id: PluginInstanceID,
         save_state: PluginSaveState,
         mut main_thread: Option<Box<dyn PluginMainThread>>,
-        host_request: HostRequest,
+        host_request: HostRequestChannelReceiver,
         plugin_version: Option<Shared<String>>,
     ) -> Self {
         let state = Arc::new(SharedPluginState::new());
@@ -240,12 +244,14 @@ impl PluginInstanceHost {
             gesturing_params: FnvHashMap::default(),
             host_request,
             remove_requested: false,
+            save_state_dirty: false,
+            restarting: false,
         }
     }
 
     pub fn new_graph_in(
         id: PluginInstanceID,
-        host_request: HostRequest,
+        host_request: HostRequestChannelReceiver,
         num_audio_out_channels: usize,
     ) -> Self {
         let state = Arc::new(SharedPluginState::new());
@@ -259,7 +265,7 @@ impl PluginInstanceHost {
                 rdn: "app.meadowlark.dropseed-graph-in".into(),
                 format: PluginFormat::Internal,
             },
-            activation_requested: false,
+            is_active: false,
             backup_audio_ports: None,
             backup_note_ports: None,
             preset: None,
@@ -280,12 +286,14 @@ impl PluginInstanceHost {
             gesturing_params: FnvHashMap::default(),
             host_request,
             remove_requested: false,
+            save_state_dirty: false,
+            restarting: false,
         }
     }
 
     pub fn new_graph_out(
         id: PluginInstanceID,
-        host_request: HostRequest,
+        host_request: HostRequestChannelReceiver,
         num_audio_in_channels: usize,
     ) -> Self {
         let state = Arc::new(SharedPluginState::new());
@@ -299,7 +307,7 @@ impl PluginInstanceHost {
                 rdn: "app.meadowlark.dropseed-graph-out".into(),
                 format: PluginFormat::Internal,
             },
-            activation_requested: false,
+            is_active: false,
             backup_audio_ports: None,
             backup_note_ports: None,
             preset: None,
@@ -320,11 +328,13 @@ impl PluginInstanceHost {
             gesturing_params: FnvHashMap::default(),
             host_request,
             remove_requested: false,
+            save_state_dirty: false,
+            restarting: false,
         }
     }
 
     pub fn collect_save_state(&mut self) -> PluginSaveState {
-        if self.host_request._state_marked_dirty_and_reset_dirty() {
+        if self.save_state_dirty {
             if let Some(main_thread) = &mut self.main_thread {
                 let preset = match main_thread.collect_save_state() {
                     Ok(preset) => preset.map(|bytes| PluginPreset {
@@ -356,9 +366,6 @@ impl PluginInstanceHost {
         if self.state.get().is_active() {
             return Err(ActivatePluginError::AlreadyActive);
         }
-        if self.host_request._load_requested().contains(RequestFlags::RESTART) {
-            return Err(ActivatePluginError::RestartScheduled);
-        }
         Ok(())
     }
 
@@ -372,8 +379,6 @@ impl PluginInstanceHost {
         self.can_activate()?;
 
         let plugin_main_thread = self.main_thread.as_mut().unwrap();
-
-        self.save_state.activation_requested = true;
 
         let audio_ports = match plugin_main_thread.audio_ports_ext() {
             Ok(audio_ports) => {
@@ -440,9 +445,6 @@ impl PluginInstanceHost {
 
         match plugin_main_thread.activate(sample_rate, min_frames, max_frames, coll_handle) {
             Ok(info) => {
-                self.host_request._reset_deactivate();
-                self.host_request.request_process();
-
                 self.state.set(PluginState::ActiveAndSleeping);
 
                 let mut params_ext = PluginParamsExt {
@@ -490,7 +492,6 @@ impl PluginInstanceHost {
                         in_events: EventBuffer::with_capacity(num_params * 3),
                         out_events: EventBuffer::with_capacity(num_params * 3),
                         is_adjusting_parameter,
-                        host_request: self.host_request.clone(),
                     },
                     coll_handle,
                 ));
@@ -515,8 +516,6 @@ impl PluginInstanceHost {
     }
 
     pub fn schedule_deactivate(&mut self) {
-        self.save_state.activation_requested = false;
-
         if !self.state.get().is_active() {
             return;
         }
@@ -527,7 +526,7 @@ impl PluginInstanceHost {
 
         // Wait for the audio thread part to go to sleep before
         // deactivating.
-        self.host_request._request_deactivate();
+        self.state.set(PluginState::WaitingToDrop);
     }
 
     pub fn schedule_remove(&mut self) {
@@ -584,51 +583,44 @@ impl PluginInstanceHost {
 
         let plugin_main_thread = self.main_thread.as_mut().unwrap();
 
-        let request_flags = self.host_request._load_requests_and_reset_callback();
+        let request_flags = self.host_request.fetch_requests();
         let state = self.state.get();
 
-        /*
-        if self.remove_requested && !state.is_active() {
-            return (OnIdleResult::PluginReadyToRemove, modified_params);
-        }
-        */
-
-        if request_flags.contains(RequestFlags::CALLBACK) {
+        if request_flags.contains(HostRequestFlags::CALLBACK) {
             plugin_main_thread.on_main_thread();
         }
 
-        if request_flags.contains(RequestFlags::DEACTIVATE) {
-            if state == PluginState::DroppedAndReadyToDeactivate {
-                // Safe to deactive now.
-
-                plugin_main_thread.deactivate();
-
-                self.state.set(PluginState::Inactive);
-                self.host_request._reset_deactivate();
-
-                self.param_queues = None;
-
-                if !self.remove_requested {
-                    let mut res = OnIdleResult::PluginDeactivated;
-
-                    if self.host_request._reset_restart() {
-                        match self.activate(sample_rate, min_frames, max_frames, coll_handle) {
-                            Ok((ui_handle, param_values)) => {
-                                res = OnIdleResult::PluginActivated(ui_handle, param_values)
-                            }
-                            Err(e) => res = OnIdleResult::PluginFailedToActivate(e),
-                        }
-                    }
-
-                    return (res, modified_params);
-                } else {
-                    return (OnIdleResult::PluginReadyToRemove, modified_params);
-                }
+        if request_flags.contains(HostRequestFlags::RESTART) && !self.remove_requested {
+            self.restarting = true;
+            if state != PluginState::DroppedAndReadyToDeactivate {
+                self.state.set(PluginState::WaitingToDrop);
             }
-        } else if request_flags.contains(RequestFlags::RESTART) && !self.remove_requested {
-            // Wait for the audio thread part to go to sleep before
-            // deactivating.
-            self.host_request._request_deactivate();
+        }
+
+        if state == PluginState::DroppedAndReadyToDeactivate {
+            // Safe to deactivate now.
+            plugin_main_thread.deactivate();
+
+            self.state.set(PluginState::Inactive);
+
+            self.param_queues = None;
+
+            if !self.remove_requested {
+                let mut res = OnIdleResult::PluginDeactivated;
+
+                if self.restarting {
+                    match self.activate(sample_rate, min_frames, max_frames, coll_handle) {
+                        Ok((ui_handle, param_values)) => {
+                            res = OnIdleResult::PluginActivated(ui_handle, param_values)
+                        }
+                        Err(e) => res = OnIdleResult::PluginFailedToActivate(e),
+                    }
+                }
+
+                return (res, modified_params);
+            } else {
+                return (OnIdleResult::PluginReadyToRemove, modified_params);
+            }
         }
 
         if let Some(params_queue) = &mut self.param_queues {
@@ -678,8 +670,6 @@ pub(crate) struct PluginInstanceHostAudioThread {
     out_events: EventBuffer,
 
     is_adjusting_parameter: FnvHashMap<ParamID, bool>,
-
-    host_request: HostRequest,
 }
 
 impl PluginInstanceHostAudioThread {
@@ -719,10 +709,8 @@ impl PluginInstanceHostAudioThread {
             return;
         }
 
-        let request_flags = self.host_request._load_requested();
-
         // Do we want to deactivate the plugin?
-        if request_flags.contains(RequestFlags::DEACTIVATE) {
+        if state == PluginState::WaitingToDrop {
             if state.is_processing() {
                 self.plugin.stop_processing();
             }
@@ -867,8 +855,11 @@ impl PluginInstanceHostAudioThread {
             }
         }
 
+        // TODO: sleep state should be local to the audio-thread
         if state.is_sleeping() {
-            if !request_flags.contains(RequestFlags::PROCESS) && !has_note_in_event {
+            if
+            /* !request_flags.contains(RequestFlags::PROCESS) && TODO */
+            !has_note_in_event {
                 // The plugin is sleeping, there is no request to wake it up, and there
                 // are no events to process.
                 clear_outputs(proc_info, buffers);
@@ -880,8 +871,6 @@ impl PluginInstanceHostAudioThread {
                 self.in_events.clear();
                 return;
             }
-
-            self.host_request._reset_process();
 
             if self.plugin.start_processing().is_err() {
                 // The plugin failed to start processing.
@@ -1241,7 +1230,6 @@ impl SharedPluginState {
 
     #[inline]
     pub fn get(&self) -> PluginState {
-        // TODO: Are we able to use relaxed ordering here?
         let s = self.0.load(Ordering::SeqCst);
 
         s.into()
@@ -1249,7 +1237,6 @@ impl SharedPluginState {
 
     #[inline]
     pub fn set(&self, state: PluginState) {
-        // TODO: Are we able to use relaxed ordering here?
         self.0.store(state as u32, Ordering::SeqCst);
     }
 }

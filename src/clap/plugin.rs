@@ -311,6 +311,10 @@ impl PluginMainThread for ClapPluginMainThread {
         let instance = host.instance.as_mut().unwrap(); // TODO: unwrap
 
         gui_ext.create(instance, api_type, true)?;
+        if let Some(title) = suggested_title {
+            let title = CString::new(title.to_string()).unwrap(); // TODO: unwrap
+            gui_ext.suggest_title(instance, &title);
+        }
         gui_ext.show(instance)?;
 
         host.gui_visible = true;

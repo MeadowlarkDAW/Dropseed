@@ -23,7 +23,7 @@ use crate::engine::events::from_engine::{
 use crate::engine::events::to_engine::{DSEngineRequest, PluginRequest};
 use crate::engine::plugin_scanner::PluginScanner;
 use crate::graph::{AudioGraph, AudioGraphSaveState, Edge, NewPluginRes, PluginEdges, PortType};
-use crate::plugin::host_request::HostInfo;
+use crate::plugin::host_info::HostInfo;
 use crate::plugin::{PluginFactory, PluginSaveState};
 use crate::transport::TransportHandle;
 use crate::utils::thread_id::SharedThreadIDs;
@@ -208,7 +208,6 @@ impl DSEngineMainThread {
 
         let (mut audio_graph, shared_schedule, transport_handle) = AudioGraph::new(
             self.collector.handle(),
-            Shared::clone(&self.host_info),
             num_audio_in_channels,
             num_audio_out_channels,
             sample_rate,

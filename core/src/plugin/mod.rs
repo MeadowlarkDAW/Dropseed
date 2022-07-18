@@ -5,7 +5,8 @@ use meadowlark_core_types::time::SampleRate;
 pub mod ext;
 
 pub mod buffer;
-pub mod host_request;
+pub mod host_info;
+pub mod host_request_channel;
 
 mod event;
 mod instance_id;
@@ -16,12 +17,14 @@ use crate::transport::TempoMap;
 
 pub use clack_host::events::io::EventBuffer;
 
+use crate::plugin::host_request_channel::HostRequestChannelSender;
 pub use buffer::{
     AudioPortBuffer, AudioPortBufferMut, MonoBuffer, MonoBufferMut, StereoBuffer, StereoBufferMut,
 };
 pub use event::ProcEvent;
 pub use ext::params::ParamID;
-pub use host_request::{HostInfo, HostRequest};
+pub use host_info::HostInfo;
+pub use host_request_channel::*;
 pub use instance_id::*;
 pub use process_info::{ProcBuffers, ProcInfo, ProcessStatus};
 pub use save_state::{PluginPreset, PluginSaveState};
@@ -88,16 +91,13 @@ pub trait PluginFactory: Send {
 
     /// Create a new instance of this plugin.
     ///
-    /// **NOTE**: The plugin is **NOT** allowed to use the host callbacks in this method.
-    /// Wait until the `PluginMainThread::init()` method gets called on the plugin to
-    /// start using the host callbacks.
-    ///
     /// A `basedrop` collector handle is provided for realtime-safe garbage collection.
     ///
     /// `[main-thread]`
-    fn new(
+    fn instantiate(
         &mut self,
-        host_request: HostRequest,
+        host_request_channel: HostRequestChannelSender,
+        host_info: Shared<HostInfo>,
         plugin_id: PluginInstanceID,
         coll_handle: &basedrop::Handle,
     ) -> Result<Box<dyn PluginMainThread>, String>;
@@ -110,23 +110,6 @@ pub struct PluginActivatedInfo {
 
 /// The methods of an audio plugin instance which run in the "main" thread.
 pub trait PluginMainThread {
-    /// This is called after creating a plugin instance and once it's safe for the plugin to
-    /// use the host callback methods.
-    ///
-    /// A `basedrop` collector handle is provided for realtime-safe garbage collection.
-    ///
-    /// If this returns an error, then the host will discard this plugin instance.
-    ///
-    /// By default this returns `Ok(())`.
-    ///
-    /// TODO: preset
-    ///
-    /// `[main-thread & !active_state]`
-    #[allow(unused)]
-    fn init(&mut self, coll_handle: &basedrop::Handle) -> Result<(), String> {
-        Ok(())
-    }
-
     /// Activate the plugin, and return the `PluginAudioThread` counterpart.
     ///
     /// In this call the plugin may allocate memory and prepare everything needed for the process

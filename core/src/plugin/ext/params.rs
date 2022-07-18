@@ -1,10 +1,6 @@
 use bitflags::bitflags;
 use clack_host::utils::Cookie;
 use std::hash::Hash;
-use std::sync::{
-    atomic::{AtomicBool, AtomicU32, Ordering},
-    Arc,
-};
 
 pub use clack_extensions::params::{ParamClearFlags, ParamRescanFlags};
 
@@ -168,103 +164,4 @@ impl ParamInfo {
             _cookie: Cookie::empty(),
         }
     }
-}
-
-pub struct HostParamsExtMainThread {
-    pub(crate) rescan_requested: Arc<(AtomicBool, AtomicU32)>,
-    pub(crate) clear_requested: Arc<AtomicBool>,
-    pub(crate) flush_requested: Arc<AtomicBool>,
-}
-
-impl Clone for HostParamsExtMainThread {
-    fn clone(&self) -> Self {
-        Self {
-            rescan_requested: Arc::clone(&self.rescan_requested),
-            clear_requested: Arc::clone(&self.clear_requested),
-            flush_requested: Arc::clone(&self.flush_requested),
-        }
-    }
-}
-
-impl HostParamsExtMainThread {
-    pub(crate) fn new() -> Self {
-        Self {
-            rescan_requested: Arc::new((AtomicBool::new(false), AtomicU32::new(0))),
-            clear_requested: Arc::new(AtomicBool::new(false)),
-            flush_requested: Arc::new(AtomicBool::new(false)),
-        }
-    }
-
-    /// Rescan the full list of parameters according to the flags.
-    ///
-    /// [main-thread]
-    pub fn rescan(&self, rescan_flags: ParamRescanFlags) {
-        let flags = rescan_flags.bits();
-
-        self.rescan_requested.1.store(flags, Ordering::SeqCst);
-        self.rescan_requested.0.store(true, Ordering::SeqCst);
-    }
-
-    /// Clears references to a parameter.
-    ///
-    /// [main-thread]
-    #[allow(unused)]
-    pub fn clear(&self, param_id: ParamID, clear_flags: ParamClearFlags) {
-        // TODO
-        /*
-        log::info!(
-            "got request to clear param with id {:?} and flags: {:?}",
-            param_id,
-            clear_flags
-        );
-        */
-    }
-
-    /// Request the host to call clap_plugin_params->fush().
-    /// This is useful if the plugin has parameters value changes to report to the host but the plugin
-    /// is not processing.
-    ///
-    /// eg. the plugin has a USB socket to some hardware controllers and receives a parameter change
-    /// while it is not processing.
-    ///
-    /// This must not be called on the [audio-thread].
-    ///
-    /// [thread-safe]
-    pub fn request_flush(&self) {
-        self.flush_requested.store(true, Ordering::SeqCst);
-    }
-}
-
-pub struct HostParamsExtAudioThread {
-    pub(crate) flush_requested: Arc<AtomicBool>,
-}
-
-impl HostParamsExtAudioThread {
-    /// Request the host to call clap_plugin_params->fush().
-    /// This is useful if the plugin has parameters value changes to report to the host but the plugin
-    /// is not processing.
-    ///
-    /// eg. the plugin has a USB socket to some hardware controllers and receives a parameter change
-    /// while it is not processing.
-    ///
-    /// This must not be called on the [audio-thread].
-    ///
-    /// [thread-safe]
-    pub fn request_flush(&self) {
-        self.flush_requested.store(true, Ordering::SeqCst);
-    }
-}
-
-pub fn default_db_value_to_text(value: f64) -> String {
-    format!("{:.2} dB", value)
-}
-
-pub fn parse_text_to_f64(text: &str) -> Result<f64, ()> {
-    let val: f64 = if let Ok(val) = text.parse() {
-        val
-    } else {
-        return Err(());
-    };
-
-    Ok(val)
 }

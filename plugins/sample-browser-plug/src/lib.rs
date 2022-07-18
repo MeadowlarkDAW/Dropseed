@@ -1,12 +1,9 @@
 use basedrop::{Owned, Shared};
 use clack_host::events::event_types::ParamValueEvent;
-use dropseed_core::plugin::ext::params::{
-    default_db_value_to_text, parse_text_to_f64, ParamID, ParamInfoFlags,
-};
+use dropseed_core::plugin::ext::params::{ParamID, ParamInfoFlags};
 use dropseed_core::plugin::{
-    ext, EventBuffer, HostRequest, PluginActivatedInfo, PluginAudioThread, PluginDescriptor,
-    PluginFactory, PluginInstanceID, PluginMainThread, PluginPreset, ProcBuffers, ProcInfo,
-    ProcessStatus,
+    ext, EventBuffer, PluginActivatedInfo, PluginAudioThread, PluginDescriptor, PluginFactory,
+    PluginInstanceID, PluginMainThread, PluginPreset, ProcBuffers, ProcInfo, ProcessStatus,
 };
 use dropseed_resource_loader::pcm::PcmRAM;
 use meadowlark_core_types::parameter::{
@@ -42,7 +39,7 @@ impl PluginFactory for SampleBrowserPlugFactory {
         }
     }
 
-    fn new(
+    fn instantiate(
         &mut self,
         host_request: HostRequest,
         _plugin_id: PluginInstanceID,
@@ -243,14 +240,14 @@ impl PluginMainThread for SampleBrowserPlugMainThread {
 
     fn param_value_to_text(&self, param_id: ParamID, value: f64) -> Result<String, ()> {
         match param_id {
-            ParamID(0) => Ok(default_db_value_to_text(value)),
+            ParamID(0) => Ok(format!("{:.2} dB", value)),
             _ => Err(()),
         }
     }
 
     fn param_text_to_value(&self, param_id: ParamID, text: &str) -> Result<f64, ()> {
         match param_id {
-            ParamID(0) => parse_text_to_f64(text),
+            ParamID(0) => text.parse().map_err(|_| ()),
             _ => Err(()),
         }
     }

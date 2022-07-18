@@ -4,7 +4,9 @@ use std::str::FromStr;
 use std::{collections::HashMap, error::Error};
 use walkdir::WalkDir;
 
-use dropseed_core::plugin::{HostInfo, HostRequest, PluginInstanceID, PluginInstanceType};
+use dropseed_core::plugin::{
+    HostInfo, HostRequestChannelReceiver, PluginInstanceID, PluginInstanceType,
+};
 use dropseed_core::plugin_scanner::{PluginFormat, ScannedPluginKey};
 
 use crate::graph::plugin_host::PluginInstanceHost;
@@ -304,14 +306,7 @@ impl PluginScanner {
         node_ref: audio_graph::NodeRef,
         fallback_to_other_formats: bool,
     ) -> CreatePluginResult {
-        let check_for_invalid_host_callbacks = |host_request: &HostRequest, id: &String| {
-            let request_flags = host_request._load_requested_and_reset_all();
-
-            if !request_flags.is_empty() {
-                log::warn!("Plugin with ID {} attempted to call a host request during the PluginFactory::new() method. Requests were ignored.", id);
-            }
-        };
-
+        // TODO: return an actual result
         let mut factory = None;
         let mut status = Ok(());
         let mut plugin_version = None;
@@ -365,7 +360,8 @@ impl PluginScanner {
 
         let mut format = PluginInstanceType::Unloaded;
 
-        let host_request = HostRequest::_new(Shared::clone(&self.host_info));
+        let (channel_recv, channel_send) = HostRequestChannelReceiver::new_channel();
+
         let mut main_thread = None;
 
         let id = if let Some(factory) = factory {
@@ -383,23 +379,17 @@ impl PluginScanner {
                 PluginInstanceID::_new(node_ref.as_usize(), self.next_plug_unique_id, format, rdn);
             self.next_plug_unique_id += 1;
 
-            match factory.factory.new(host_request.clone(), id.clone(), &self.coll_handle) {
-                Ok(mut plugin_main_thread) => {
-                    check_for_invalid_host_callbacks(&host_request, &factory.rdn);
-
-                    if let Err(e) = plugin_main_thread.init(&self.coll_handle) {
-                        status = Err(NewPluginInstanceError::PluginFailedToInit(
-                            (*factory.rdn).clone(),
-                            e,
-                        ));
-                    } else {
-                        main_thread = Some(plugin_main_thread);
-                        status = Ok(());
-                    }
+            match factory.factory.instantiate(
+                channel_send,
+                self.host_info.clone(),
+                id.clone(),
+                &self.coll_handle,
+            ) {
+                Ok(plugin_main_thread) => {
+                    main_thread = Some(plugin_main_thread);
+                    status = Ok(());
                 }
                 Err(e) => {
-                    check_for_invalid_host_callbacks(&host_request, &factory.rdn);
-
                     status = Err(NewPluginInstanceError::FactoryFailedToCreateNewInstance(
                         (*factory.rdn).clone(),
                         e,
@@ -427,7 +417,7 @@ impl PluginScanner {
                 id,
                 save_state,
                 main_thread,
-                host_request,
+                channel_recv,
                 plugin_version,
             ),
             status,

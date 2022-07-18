@@ -3,14 +3,15 @@ use basedrop::Shared;
 use clack_extensions::audio_ports::HostAudioPorts;
 use clack_extensions::gui::PluginGui;
 use clack_extensions::log::Log;
-use clack_extensions::params::{HostParams, PluginParams};
+use clack_extensions::params::{HostParams, ParamRescanFlags, PluginParams};
 use clack_extensions::state::PluginState;
 use clack_extensions::thread_check::ThreadCheck;
 use clack_host::events::io::{EventBuffer, InputEvents, OutputEvents};
 use clack_host::extensions::HostExtensions;
 use clack_host::host::{Host, HostAudioProcessor, HostMainThread, HostShared};
 use clack_host::plugin::{PluginAudioProcessorHandle, PluginMainThreadHandle, PluginSharedHandle};
-use dropseed_core::plugin::{HostRequest, PluginInstanceID};
+use dropseed_core::plugin::host_request_channel::HostRequestChannelSender;
+use dropseed_core::plugin::{HostRequestFlags, PluginInstanceID};
 
 pub struct ClapHost;
 
@@ -32,9 +33,24 @@ pub struct ClapHostMainThread<'a> {
     pub shared: &'a ClapHostShared<'a>,
     pub instance: Option<PluginMainThreadHandle<'a>>,
     pub gui_visible: bool,
+
+    rescan_requested: Option<ParamRescanFlags>,
+    clear_requested: bool,
+    flush_requested: bool,
 }
 
 impl<'a> ClapHostMainThread<'a> {
+    pub fn new(shared: &'a ClapHostShared<'a>) -> Self {
+        Self {
+            shared,
+            instance: None,
+            gui_visible: false,
+            rescan_requested: None,
+            clear_requested: false,
+            flush_requested: false,
+        }
+    }
+
     #[allow(unused)]
     fn param_flush(&mut self, in_events: &EventBuffer, out_events: &mut EventBuffer) {
         let params_ext = match self.shared.params_ext {
@@ -87,7 +103,7 @@ pub struct ClapHostShared<'a> {
     pub state_ext: Option<&'a PluginState>,
     pub gui_ext: Option<&'a PluginGui>,
 
-    host_request: HostRequest,
+    host_request: HostRequestChannelSender,
     plugin_log_name: Shared<String>,
     thread_ids: SharedThreadIDs,
 }
@@ -95,7 +111,7 @@ pub struct ClapHostShared<'a> {
 impl<'a> ClapHostShared<'a> {
     pub(crate) fn new(
         id: Shared<String>,
-        host_request: HostRequest,
+        host_request: HostRequestChannelSender,
         thread_ids: SharedThreadIDs,
         plugin_id: PluginInstanceID,
         coll_handle: &basedrop::Handle,
@@ -122,15 +138,15 @@ impl<'a> HostShared<'a> for ClapHostShared<'a> {
     }
 
     fn request_restart(&self) {
-        self.host_request.request_restart()
+        self.host_request.request(HostRequestFlags::RESTART)
     }
 
     fn request_process(&self) {
-        self.host_request.request_process()
+        self.host_request.request(HostRequestFlags::PROCESS)
     }
 
     fn request_callback(&self) {
-        self.host_request.request_callback()
+        self.host_request.request(HostRequestFlags::CALLBACK)
     }
 }
 

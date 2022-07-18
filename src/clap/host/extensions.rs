@@ -7,7 +7,7 @@ use clack_extensions::params::{
     HostParamsImplementation, HostParamsImplementationMainThread, ParamClearFlags, ParamRescanFlags,
 };
 use clack_extensions::thread_check::host::ThreadCheckImplementation;
-use dropseed_core::plugin::ParamID;
+use dropseed_core::plugin::HostRequestFlags;
 
 // TODO: Make sure that the log and print methods don't allocate on the current thread.
 // If they do, then we need to come up with a realtime-safe way to print to the terminal.
@@ -80,14 +80,15 @@ impl<'a> HostAudioPortsImplementation for ClapHostMainThread<'a> {
         }
 
         if !flags.is_empty() {
-            self.shared.host_request.request_restart();
+            // self.shared.host_request.request_restart(); // TODO
         }
     }
 }
 
 impl<'a> HostParamsImplementation for ClapHostShared<'a> {
+    #[inline]
     fn request_flush(&self) {
-        self.host_request.params.request_flush();
+        self.host_request.request(HostRequestFlags::FLUSH_PARAMS);
     }
 }
 
@@ -100,7 +101,8 @@ impl<'a> HostParamsImplementationMainThread for ClapHostMainThread<'a> {
 
         let flags = ParamRescanFlags::from_bits_truncate(flags.bits());
 
-        self.shared.host_request.params.rescan(flags);
+        self.rescan_requested =
+            Some(self.rescan_requested.unwrap_or(ParamRescanFlags::empty()) | flags);
     }
 
     fn clear(&mut self, param_id: u32, flags: ParamClearFlags) {
@@ -111,28 +113,35 @@ impl<'a> HostParamsImplementationMainThread for ClapHostMainThread<'a> {
 
         let flags = ParamClearFlags::from_bits_truncate(flags.bits());
 
-        self.shared.host_request.params.clear(ParamID(param_id), flags);
+        // self.shared.host_request.params.clear(ParamID(param_id), flags); TODO: Vec for each ParamID to clear?
     }
 }
 
 impl<'a> HostGuiImplementation for ClapHostShared<'a> {
     fn resize_hints_changed(&self) {
-        todo!()
+        self.host_request.request(HostRequestFlags::GUI_HINTS_CHANGED);
     }
 
     fn request_resize(&self, new_size: GuiSize) -> Result<(), GuiError> {
-        todo!()
+        self.host_request.request_gui_resize(new_size);
+        Ok(())
     }
 
     fn request_show(&self) -> Result<(), GuiError> {
-        todo!()
+        self.host_request.request(HostRequestFlags::GUI_SHOW);
+        Ok(())
     }
 
     fn request_hide(&self) -> Result<(), GuiError> {
-        todo!()
+        self.host_request.request(HostRequestFlags::GUI_HIDE);
+        Ok(())
     }
 
     fn closed(&self, was_destroyed: bool) {
-        todo!()
+        if was_destroyed {
+            self.host_request.request(HostRequestFlags::GUI_DESTROYED)
+        } else {
+            self.host_request.request(HostRequestFlags::GUI_CLOSED)
+        }
     }
 }

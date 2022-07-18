@@ -1,15 +1,4 @@
-use basedrop::Shared;
-use bitflags::bitflags;
-use std::sync::{
-    atomic::{AtomicU32, Ordering},
-    Arc,
-};
-
-use clack_extensions::audio_ports::RescanType;
-use clack_extensions::note_ports::{NoteDialects, NotePortRescanFlags};
 use clack_host::host::HostInfo as ClackHostInfo;
-
-use crate::plugin::ext::params::HostParamsExtMainThread;
 
 #[derive(Debug, Clone)]
 pub struct HostInfo {
@@ -64,29 +53,8 @@ impl HostInfo {
     }
 }
 
-bitflags! {
-    pub struct RequestFlags: u32 {
-        /// Clears all possible references to a parameter
-        const RESTART = 1 << 0;
-
-        /// Clears all automations to a parameter
-        const PROCESS = 1 << 1;
-
-        /// Clears all modulations to a parameter
-        const CALLBACK = 1 << 2;
-
-        const DEACTIVATE = 1 << 3;
-
-        const RESCAN_AUDIO_PORTS = 1 << 4;
-
-        const RESCAN_NOTE_PORTS = 1 << 5;
-
-        const STATE_DIRTY = 1 << 6;
-    }
-}
-
-/// Used to get info and request actions from the host.
-pub struct HostRequest {
+///// Used to get info and request actions from the host.
+/*pub struct HostRequest {
     pub params: HostParamsExtMainThread,
     pub info: Shared<HostInfo>,
 
@@ -258,3 +226,4 @@ impl Clone for HostRequest {
         }
     }
 }
+*/
