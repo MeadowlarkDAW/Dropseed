@@ -12,8 +12,8 @@ use dropseed_core::plugin::ext::audio_ports::{
 };
 use dropseed_core::plugin::ext::params::{ParamID, ParamInfo, ParamInfoFlags};
 use dropseed_core::plugin::{
-    ext, EventBuffer, PluginActivatedInfo, PluginAudioThread, PluginMainThread, PluginPreset,
-    ProcBuffers, ProcInfo, ProcessStatus,
+    buffer::EventBuffer, ext, PluginActivatedInfo, PluginAudioThread, PluginMainThread,
+    PluginPreset, ProcBuffers, ProcInfo, ProcessStatus,
 };
 use meadowlark_core_types::time::SampleRate;
 use smallvec::SmallVec;

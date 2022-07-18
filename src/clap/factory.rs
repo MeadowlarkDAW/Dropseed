@@ -6,7 +6,7 @@ use basedrop::Shared;
 use clack_host::bundle::PluginBundle;
 use clack_host::factory::PluginFactory as RawClapPluginFactory;
 use clack_host::instance::PluginInstance;
-use dropseed_core::plugin::host_request_channel::HostRequestChannelSender;
+use dropseed_core::plugin::HostRequestChannelSender;
 use dropseed_core::plugin::{HostInfo, PluginInstanceID};
 use std::ffi::CStr;
 use std::path::PathBuf;

@@ -17,14 +17,11 @@ use std::sync::Arc;
 bitflags! {
     /// A bitmask of all possible requests to make to the Host's main thread.
     ///
-    /// Note that the host is free to not fulfill the request at its own discretion.
+    /// The host is free to not fulfill the request at its own discretion.
     pub struct HostRequestFlags: u32 {
-        // Plugin lifetime
-
         /// The plugin requested its Audio Processor to be restarted
         const RESTART = 1 << 0;
 
-        // Plugin callbacks
         /// Should activate the plugin and start processing
         const PROCESS = 1 << 2;
 
@@ -48,13 +45,15 @@ bitflags! {
 
         /// Should show the GUI
         const GUI_SHOW = 1 << 9;
+
         /// Should hide the GUI
         const GUI_HIDE = 1 << 10;
+
         /// Should register the user closed the floating UI
         const GUI_CLOSED = 1 << 11;
+
         /// Should register the connection to the UI was lost
         const GUI_DESTROYED = 1 << 12;
-
     }
 }
 
@@ -115,7 +114,7 @@ impl HostRequestChannelReceiver {
 
 /// The sender end of the Host Request Channel.
 ///
-/// See [`HostRequestChannelReceiver`] for more information about how this works.
+/// See [the module docs](super) for more information about how this works.
 ///
 /// Cloning this sender does not clone the underlying data: all cloned copies will be linked to the
 /// same channel.

@@ -1,26 +1,19 @@
+use crate::transport::TempoMap;
 use basedrop::Shared;
 use clack_extensions::gui::GuiError;
+use clack_host::events::io::EventBuffer;
 use meadowlark_core_types::time::SampleRate;
 
+pub mod buffer;
 pub mod ext;
 
-pub mod buffer;
-pub mod host_info;
-pub mod host_request_channel;
-
 mod event;
+mod host_info;
+mod host_request_channel;
 mod instance_id;
 mod process_info;
 mod save_state;
 
-use crate::transport::TempoMap;
-
-pub use clack_host::events::io::EventBuffer;
-
-use crate::plugin::host_request_channel::HostRequestChannelSender;
-pub use buffer::{
-    AudioPortBuffer, AudioPortBufferMut, MonoBuffer, MonoBufferMut, StereoBuffer, StereoBufferMut,
-};
 pub use event::ProcEvent;
 pub use ext::params::ParamID;
 pub use host_info::HostInfo;

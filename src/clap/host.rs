@@ -10,7 +10,7 @@ use clack_host::events::io::{EventBuffer, InputEvents, OutputEvents};
 use clack_host::extensions::HostExtensions;
 use clack_host::host::{Host, HostAudioProcessor, HostMainThread, HostShared};
 use clack_host::plugin::{PluginAudioProcessorHandle, PluginMainThreadHandle, PluginSharedHandle};
-use dropseed_core::plugin::host_request_channel::HostRequestChannelSender;
+use dropseed_core::plugin::HostRequestChannelSender;
 use dropseed_core::plugin::{HostRequestFlags, PluginInstanceID};
 
 pub struct ClapHost;
