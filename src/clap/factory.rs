@@ -1,11 +1,13 @@
-use crate::clap::plugin::{ClapHostMainThread, ClapHostShared, ClapPluginMainThread};
+use super::*;
+
 use crate::plugin::{PluginDescriptor, PluginFactory, PluginMainThread};
 use crate::utils::thread_id::SharedThreadIDs;
 use basedrop::Shared;
 use clack_host::bundle::PluginBundle;
 use clack_host::factory::PluginFactory as RawClapPluginFactory;
 use clack_host::instance::PluginInstance;
-use dropseed_core::plugin::{HostRequest, PluginInstanceID};
+use dropseed_core::plugin::HostRequestChannelSender;
+use dropseed_core::plugin::{HostInfo, PluginInstanceID};
 use std::ffi::CStr;
 use std::path::PathBuf;
 
@@ -31,18 +33,19 @@ impl PluginFactory for ClapPluginFactory {
     /// A `basedrop` collector handle is provided for realtime-safe garbage collection.
     ///
     /// `[main-thread]`
-    fn new(
+    fn instantiate(
         &mut self,
-        host_request: HostRequest,
+        host_request: HostRequestChannelSender,
+        host_info: Shared<HostInfo>,
         plugin_id: PluginInstanceID,
-        main_thread_coll_handle: &basedrop::Handle,
+        coll_handle: &basedrop::Handle,
     ) -> Result<Box<dyn PluginMainThread>, String> {
         log::trace!("clap plugin factory new {}", &*self.descriptor.id);
 
         let id = Shared::clone(plugin_id.rdn());
 
         // TODO: this is a little wasteful, the PluginHost should be able to fit somewhere else
-        let host = host_request.info.clack_host_info.clone();
+        let host = host_info.clack_host_info.clone();
 
         let raw_plugin = match PluginInstance::new(
             |_| {
@@ -51,10 +54,10 @@ impl PluginFactory for ClapPluginFactory {
                     host_request,
                     self.thread_ids.clone(),
                     plugin_id,
-                    main_thread_coll_handle,
+                    coll_handle,
                 )
             },
-            |shared| ClapHostMainThread { shared, instance: None },
+            |shared| ClapHostMainThread::new(shared),
             &self.bundle,
             self.id.as_bytes(),
             &host,

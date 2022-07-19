@@ -28,8 +28,7 @@ impl Debug for PluginPreset {
 #[derive(Debug, Clone)]
 pub struct PluginSaveState {
     pub key: ScannedPluginKey,
-
-    pub activation_requested: bool,
+    pub is_active: bool,
 
     /// Use this as a backup in case the plugin fails to load. (Most
     /// likey from a user opening another user's project, but the
@@ -52,7 +51,7 @@ impl PluginSaveState {
     pub fn new_with_default_preset(key: ScannedPluginKey) -> Self {
         Self {
             key,
-            activation_requested: true,
+            is_active: true,
             backup_audio_ports: None,
             backup_note_ports: None,
             preset: None,

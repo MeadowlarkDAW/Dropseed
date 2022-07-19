@@ -11,7 +11,7 @@ use dropseed_core::plugin_scanner::ScannedPluginKey;
 use crate::engine::events::from_engine::DSEngineEvent;
 use crate::engine::events::to_engine::DSEngineRequest;
 use crate::engine::main_thread::DSEngineMainThread;
-use crate::plugin::host_request::HostInfo;
+use crate::plugin::HostInfo;
 use crate::plugin::PluginFactory;
 
 pub struct DSEngineHandle {

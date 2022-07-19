@@ -68,9 +68,12 @@ impl ProcBuffers {
         true
     }
 
-    pub fn clear_all_outputs(&mut self, frames: usize) {
+    pub fn clear_all_outputs(&mut self, proc_info: &ProcInfo) {
         for buf in self.audio_out.iter_mut() {
-            buf.clear_all(frames);
+            buf.clear_all(proc_info.frames);
+        }
+        for b in self.audio_out.iter_mut() {
+            b._sync_constant_mask_to_buffers();
         }
     }
 }

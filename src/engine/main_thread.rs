@@ -1,6 +1,7 @@
 use basedrop::{Collector, Shared, SharedCell};
 use crossbeam_channel::{Receiver, Sender};
 use fnv::FnvHashSet;
+use log::warn;
 use meadowlark_core_types::time::SampleRate;
 use std::path::PathBuf;
 use std::sync::{
@@ -19,10 +20,10 @@ use crate::engine::audio_thread::DSEngineAudioThread;
 use crate::engine::events::from_engine::{
     DSEngineEvent, EngineDeactivatedInfo, PluginScannerEvent,
 };
-use crate::engine::events::to_engine::DSEngineRequest;
+use crate::engine::events::to_engine::{DSEngineRequest, PluginRequest};
 use crate::engine::plugin_scanner::PluginScanner;
 use crate::graph::{AudioGraph, AudioGraphSaveState, Edge, NewPluginRes, PluginEdges, PortType};
-use crate::plugin::host_request::HostInfo;
+use crate::plugin::HostInfo;
 use crate::plugin::{PluginFactory, PluginSaveState};
 use crate::transport::TransportHandle;
 use crate::utils::thread_id::SharedThreadIDs;
@@ -35,8 +36,7 @@ pub(crate) struct DSEngineMainThread {
     event_tx: Sender<DSEngineEvent>,
     handle_to_engine_rx: Receiver<DSEngineRequest>,
     thread_ids: SharedThreadIDs,
-    collector: basedrop::Collector,
-    host_info: Shared<HostInfo>,
+    collector: Collector,
     run_process_thread: Option<Arc<AtomicBool>>,
     process_thread_handle: Option<JoinHandle<()>>,
     tempo_map_shared: Option<Shared<SharedCell<(Shared<TempoMap>, u64)>>>,
@@ -58,7 +58,7 @@ impl DSEngineMainThread {
         let thread_ids = SharedThreadIDs::new(None, None, &collector.handle());
 
         let mut plugin_scanner =
-            PluginScanner::new(collector.handle(), Shared::clone(&host_info), thread_ids.clone());
+            PluginScanner::new(collector.handle(), host_info, thread_ids.clone());
 
         // Scan the user's internal plugins.
         let internal_plugins_res: Vec<Result<ScannedPluginKey, String>> =
@@ -75,7 +75,6 @@ impl DSEngineMainThread {
                 thread_ids,
                 collector,
                 //coll_handle,
-                host_info,
                 run_process_thread: None,
                 process_thread_handle: None,
                 tempo_map_shared: None,
@@ -126,6 +125,34 @@ impl DSEngineMainThread {
                             if let Some(audio_graph) = &mut self.audio_graph {
                                 audio_graph.update_tempo_map(new_tempo_map_shared);
                             }
+                        }
+                    }
+                    DSEngineRequest::Plugin(instance_id, request) => {
+                        let plugin = self
+                            .audio_graph
+                            .as_mut()
+                            .and_then(|a| a.shared_plugin_pool.plugins.get_mut(&instance_id));
+
+                        if let Some(plugin) = plugin {
+                            if let Some(main_thread) = plugin.plugin_host.main_thread.as_mut() {
+                                // TODO: check this in a separate method
+                                match request {
+                                    PluginRequest::ShowGui => {
+                                        if !main_thread.is_gui_open() {
+                                            if let Err(e) = main_thread.open_gui(None) {
+                                                warn!("{:?}", e)
+                                            }
+                                        }
+                                    }
+                                    PluginRequest::CloseGui => {
+                                        if main_thread.is_gui_open() {
+                                            main_thread.close_gui()
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            warn!("Received plugin request with invalid ID: {:?}", instance_id)
                         }
                     }
                 }
@@ -184,7 +211,6 @@ impl DSEngineMainThread {
 
         let (mut audio_graph, shared_schedule, transport_handle) = AudioGraph::new(
             self.collector.handle(),
-            Shared::clone(&self.host_info),
             num_audio_in_channels,
             num_audio_out_channels,
             sample_rate,

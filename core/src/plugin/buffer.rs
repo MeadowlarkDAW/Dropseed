@@ -3,6 +3,8 @@ use basedrop::Shared;
 use smallvec::SmallVec;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+pub use clack_host::events::io::{EventBuffer, EventBufferIter};
+
 /// Used for debugging and verifying purposes.
 #[repr(u8)]
 #[allow(unused)]

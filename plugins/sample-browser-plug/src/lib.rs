@@ -1,12 +1,12 @@
 use basedrop::{Owned, Shared};
+// TODO: do not expose Clack to dependencies, reexport instead
 use clack_host::events::event_types::ParamValueEvent;
-use dropseed_core::plugin::ext::params::{
-    default_db_value_to_text, parse_text_to_f64, ParamID, ParamInfoFlags,
-};
+use dropseed_core::plugin::ext::params::{ParamID, ParamInfoFlags};
+use dropseed_core::plugin::HostRequestChannelSender;
 use dropseed_core::plugin::{
-    ext, EventBuffer, HostRequest, PluginActivatedInfo, PluginAudioThread, PluginDescriptor,
-    PluginFactory, PluginInstanceID, PluginMainThread, PluginPreset, ProcBuffers, ProcInfo,
-    ProcessStatus,
+    buffer::EventBuffer, ext, HostInfo, HostRequestFlags, PluginActivatedInfo, PluginAudioThread,
+    PluginDescriptor, PluginFactory, PluginInstanceID, PluginMainThread, PluginPreset, ProcBuffers,
+    ProcInfo, ProcessStatus,
 };
 use dropseed_resource_loader::pcm::PcmRAM;
 use meadowlark_core_types::parameter::{
@@ -42,13 +42,14 @@ impl PluginFactory for SampleBrowserPlugFactory {
         }
     }
 
-    fn new(
+    fn instantiate(
         &mut self,
-        host_request: HostRequest,
+        host_request_channel: HostRequestChannelSender,
+        _host_info: Shared<HostInfo>,
         _plugin_id: PluginInstanceID,
         _coll_handle: &basedrop::Handle,
     ) -> Result<Box<dyn PluginMainThread>, String> {
-        Ok(Box::new(SampleBrowserPlugMainThread::new(host_request)))
+        Ok(Box::new(SampleBrowserPlugMainThread::new(host_request_channel)))
     }
 }
 
@@ -65,18 +66,18 @@ impl Default for SampleBrowserPlugPreset {
 
 pub struct SampleBrowserPlugHandle {
     to_audio_thread_tx: Producer<ProcessMsg>,
-    host_request: HostRequest,
+    host_request: HostRequestChannelSender,
 }
 
 impl SampleBrowserPlugHandle {
     pub fn play_sample(&mut self, pcm: Shared<PcmRAM>) {
         self.send(ProcessMsg::PlayNewSample { pcm });
-        self.host_request.request_process();
+        self.host_request.request(HostRequestFlags::PROCESS);
     }
 
     pub fn replay_sample(&mut self) {
         self.send(ProcessMsg::ReplaySample);
-        self.host_request.request_process();
+        self.host_request.request(HostRequestFlags::PROCESS);
     }
 
     pub fn stop(&mut self) {
@@ -134,11 +135,11 @@ impl Params {
 
 pub struct SampleBrowserPlugMainThread {
     params: ParamsHandle,
-    host_request: HostRequest,
+    host_request: HostRequestChannelSender,
 }
 
 impl SampleBrowserPlugMainThread {
-    fn new(host_request: HostRequest) -> Self {
+    fn new(host_request: HostRequestChannelSender) -> Self {
         // These parameters will be re-initialized later with the correct sample_rate
         // and max_frames when the plugin is activated.
         let (_params, params_handle) =
@@ -243,14 +244,14 @@ impl PluginMainThread for SampleBrowserPlugMainThread {
 
     fn param_value_to_text(&self, param_id: ParamID, value: f64) -> Result<String, ()> {
         match param_id {
-            ParamID(0) => Ok(default_db_value_to_text(value)),
+            ParamID(0) => Ok(format!("{:.2} dB", value)),
             _ => Err(()),
         }
     }
 
     fn param_text_to_value(&self, param_id: ParamID, text: &str) -> Result<f64, ()> {
         match param_id {
-            ParamID(0) => parse_text_to_f64(text),
+            ParamID(0) => text.parse().map_err(|_| ()),
             _ => Err(()),
         }
     }

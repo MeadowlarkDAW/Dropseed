@@ -231,14 +231,13 @@ impl DSExampleGUI {
                         }
 
                         for new_plugin_res in res.new_plugins.drain(..) {
-                            let mut found = None;
-                            for (p, _) in self.plugin_list.iter() {
-                                if p.rdn() == new_plugin_res.plugin_id.rdn().as_str() {
-                                    found = Some(p.description.name.clone());
-                                    break;
-                                }
-                            }
-                            let plugin_name = found.unwrap();
+                            let found = self
+                                .plugin_list
+                                .iter()
+                                .find(|(p, _)| p.rdn() == new_plugin_res.plugin_id.rdn().as_str())
+                                .unwrap();
+
+                            let plugin_name = found.0.description.name.clone();
 
                             let active_state = match new_plugin_res.status {
                                 PluginActivationStatus::Activated {
@@ -263,6 +262,8 @@ impl DSExampleGUI {
                                 plugin_name,
                                 plugin_id: new_plugin_res.plugin_id,
                                 active_state,
+                                supports_gui: new_plugin_res.supports_gui,
+                                is_gui_open: false,
                             };
 
                             engine_state.effect_rack_state.plugins.push(effect_rack_plugin);
@@ -324,6 +325,14 @@ impl DSExampleGUI {
                             if let Some(active_state) = &mut effect_rack_plugin.active_state {
                                 active_state.params_state.parameters_modified(&modified_params);
                             }
+                        }
+                    }
+
+                    PluginEvent::GuiClosed { plugin_id } => {
+                        if let Some(engine_state) = &mut self.engine_state {
+                            let effect_rack_plugin =
+                                engine_state.effect_rack_state.plugin_mut(&plugin_id).unwrap();
+                            effect_rack_plugin.is_gui_open = false;
                         }
                     }
 

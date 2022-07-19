@@ -1,26 +1,23 @@
+use crate::transport::TempoMap;
 use basedrop::Shared;
+use clack_extensions::gui::GuiError;
+use clack_host::events::io::EventBuffer;
 use meadowlark_core_types::time::SampleRate;
 
+pub mod buffer;
 pub mod ext;
 
-pub mod buffer;
-pub mod host_request;
-
 mod event;
+mod host_info;
+mod host_request_channel;
 mod instance_id;
 mod process_info;
 mod save_state;
 
-use crate::transport::TempoMap;
-
-pub use clack_host::events::io::EventBuffer;
-
-pub use buffer::{
-    AudioPortBuffer, AudioPortBufferMut, MonoBuffer, MonoBufferMut, StereoBuffer, StereoBufferMut,
-};
 pub use event::ProcEvent;
 pub use ext::params::ParamID;
-pub use host_request::{HostInfo, HostRequest};
+pub use host_info::HostInfo;
+pub use host_request_channel::*;
 pub use instance_id::*;
 pub use process_info::{ProcBuffers, ProcInfo, ProcessStatus};
 pub use save_state::{PluginPreset, PluginSaveState};
@@ -87,16 +84,13 @@ pub trait PluginFactory: Send {
 
     /// Create a new instance of this plugin.
     ///
-    /// **NOTE**: The plugin is **NOT** allowed to use the host callbacks in this method.
-    /// Wait until the `PluginMainThread::init()` method gets called on the plugin to
-    /// start using the host callbacks.
-    ///
     /// A `basedrop` collector handle is provided for realtime-safe garbage collection.
     ///
     /// `[main-thread]`
-    fn new(
+    fn instantiate(
         &mut self,
-        host_request: HostRequest,
+        host_request_channel: HostRequestChannelSender,
+        host_info: Shared<HostInfo>,
         plugin_id: PluginInstanceID,
         coll_handle: &basedrop::Handle,
     ) -> Result<Box<dyn PluginMainThread>, String>;
@@ -109,23 +103,6 @@ pub struct PluginActivatedInfo {
 
 /// The methods of an audio plugin instance which run in the "main" thread.
 pub trait PluginMainThread {
-    /// This is called after creating a plugin instance and once it's safe for the plugin to
-    /// use the host callback methods.
-    ///
-    /// A `basedrop` collector handle is provided for realtime-safe garbage collection.
-    ///
-    /// If this returns an error, then the host will discard this plugin instance.
-    ///
-    /// By default this returns `Ok(())`.
-    ///
-    /// TODO: preset
-    ///
-    /// `[main-thread & !active_state]`
-    #[allow(unused)]
-    fn init(&mut self, coll_handle: &basedrop::Handle) -> Result<(), String> {
-        Ok(())
-    }
-
     /// Activate the plugin, and return the `PluginAudioThread` counterpart.
     ///
     /// In this call the plugin may allocate memory and prepare everything needed for the process
@@ -289,6 +266,49 @@ pub trait PluginMainThread {
     fn has_automation_out_port(&self) -> bool {
         false
     }
+
+    /// Flushes a set of parameter changes.
+    ///
+    /// This will only be called while the plugin is inactive.
+    ///
+    /// This will never be called if `PluginMainThread::num_params()` returned 0.
+    ///
+    /// This method will not be called concurrently to clap_plugin->process().
+    ///
+    /// This method will not be used while the plugin is processing.
+    ///
+    /// By default this does nothing.
+    ///
+    /// [active && !processing : audio-thread]
+    #[allow(unused)]
+    fn param_flush(&mut self, in_events: &EventBuffer, out_events: &mut EventBuffer) {}
+
+    // --- GUI ---------------------------------------------------------------------------------
+
+    /// Returns whether or not this plugin instance supports opening a floating GUI window.
+    fn supports_gui(&self) -> bool {
+        false
+    }
+
+    fn is_gui_open(&self) -> bool {
+        false
+    }
+
+    /// Initializes and opens the plugin's GUI
+    // TODO: better error type
+    fn open_gui(&mut self, _suggested_title: Option<&str>) -> Result<(), GuiError> {
+        Err(GuiError::CreateError)
+    }
+
+    /// Called when the plugin notified its GUI has been closed.
+    ///
+    /// `destroyed` is set to true if the GUI has also been destroyed completely, e.g. due to a
+    /// lost connection.
+    #[allow(unused)]
+    fn on_gui_closed(&mut self, destroyed: bool) {}
+
+    /// Closes and destroys the currently active GUI
+    fn close_gui(&mut self) {}
 }
 
 /// The methods of an audio plugin instance which run in the "audio" thread.
@@ -328,7 +348,7 @@ pub trait PluginAudioThread: Send + 'static {
 
     /// Flushes a set of parameter changes.
     ///
-    /// This will only be called while the plugin is inactive.
+    /// This will only be called while the plugin is active.
     ///
     /// This will never be called if `PluginMainThread::num_params()` returned 0.
     ///

@@ -20,7 +20,7 @@ use dropseed_core::plugin::ext::audio_ports::{MainPortsLayout, PluginAudioPortsE
 use dropseed_core::plugin::ext::note_ports::PluginNotePortsExt;
 use dropseed_core::plugin::ext::params::ParamID;
 use dropseed_core::plugin::{
-    HostInfo, HostRequest, PluginInstanceID, PluginInstanceType, PluginSaveState,
+    HostRequestChannelReceiver, PluginInstanceID, PluginInstanceType, PluginSaveState,
 };
 use dropseed_core::transport::TempoMap;
 
@@ -76,9 +76,9 @@ pub struct PortChannelID {
 }
 
 pub(crate) struct AudioGraph {
-    shared_plugin_pool: SharedPluginPool,
+    // TODO: make a proper accessor
+    pub(crate) shared_plugin_pool: SharedPluginPool,
     shared_buffer_pool: SharedBufferPool,
-    host_info: Shared<HostInfo>,
     verifier: Verifier,
 
     abstract_graph: Graph<PluginInstanceID, PortChannelID, PortType>,
@@ -106,7 +106,6 @@ pub(crate) struct AudioGraph {
 impl AudioGraph {
     pub fn new(
         coll_handle: basedrop::Handle,
-        host_info: Shared<HostInfo>,
         graph_in_channels: u16,
         graph_out_channels: u16,
         sample_rate: SampleRate,
@@ -161,7 +160,6 @@ impl AudioGraph {
         let mut new_self = Self {
             shared_plugin_pool,
             shared_buffer_pool,
-            host_info,
             verifier: Verifier::new(),
             abstract_graph,
             coll_handle,
@@ -207,7 +205,7 @@ impl AudioGraph {
 
         let node_ref = self.abstract_graph.node(temp_id);
 
-        let activate_plugin = save_state.activation_requested;
+        let activate_plugin = save_state.is_active;
 
         let res = plugin_scanner.create_plugin(save_state, node_ref, fallback_to_other_formats);
 
@@ -227,6 +225,9 @@ impl AudioGraph {
                 );
             }
         }
+
+        let supports_gui =
+            res.plugin_host.main_thread.as_ref().map(|m| m.supports_gui()).unwrap_or(false);
 
         let entry = PluginInstanceHostEntry {
             plugin_host: res.plugin_host,
@@ -249,7 +250,7 @@ impl AudioGraph {
             PluginActivationStatus::Inactive
         };
 
-        NewPluginRes { plugin_id, status: activation_status }
+        NewPluginRes { plugin_id, status: activation_status, supports_gui }
     }
 
     pub fn activate_plugin_instance(
@@ -780,7 +781,7 @@ impl AudioGraph {
             PluginInstanceHostEntry {
                 plugin_host: PluginInstanceHost::new_graph_in(
                     graph_in_node_id.clone(),
-                    HostRequest::_new(Shared::clone(&self.host_info)),
+                    HostRequestChannelReceiver::new_channel().0, // TODO: not needed (there's no sender)
                     self.graph_in_channels as usize,
                 ),
                 port_channels_refs: graph_in_port_refs,
@@ -797,7 +798,7 @@ impl AudioGraph {
             PluginInstanceHostEntry {
                 plugin_host: PluginInstanceHost::new_graph_out(
                     graph_in_node_id,
-                    HostRequest::_new(Shared::clone(&self.host_info)),
+                    HostRequestChannelReceiver::new_channel().0, // TODO: not needed (there's no sender)
                     self.graph_out_channels as usize,
                 ),
                 port_channels_refs: graph_out_port_refs,
@@ -926,7 +927,7 @@ impl AudioGraph {
         }
     }
 
-    pub fn on_idle(&mut self, event_tx: Option<&mut Sender<DSEngineEvent>>) -> bool {
+    pub fn on_idle(&mut self, mut event_tx: Option<&mut Sender<DSEngineEvent>>) -> bool {
         let mut plugins_to_remove: SmallVec<[PluginInstanceID; 4]> = SmallVec::new();
 
         let mut recompile_graph = false;
@@ -940,6 +941,7 @@ impl AudioGraph {
                 self.min_frames,
                 self.max_frames,
                 &self.coll_handle,
+                &mut event_tx,
             );
 
             match res {
@@ -1252,6 +1254,7 @@ pub struct NewPluginRes {
     pub plugin_id: PluginInstanceID,
 
     pub status: PluginActivationStatus,
+    pub supports_gui: bool, // TODO: probably doesn't belong here
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -1,3 +1,4 @@
+use dropseed_core::plugin::PluginInstanceID;
 use std::path::PathBuf;
 
 use dropseed_core::transport::TempoMap;
@@ -39,10 +40,20 @@ pub enum DSEngineRequest {
     RescanPluginDirectories,
 
     UpdateTempoMap(Box<TempoMap>),
+
+    /// A request to a specific Plugin instance
+    Plugin(PluginInstanceID, PluginRequest),
 }
 
 impl From<ModifyGraphRequest> for DSEngineRequest {
     fn from(m: ModifyGraphRequest) -> Self {
         DSEngineRequest::ModifyGraph(m)
     }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+/// A request to a specific instantiated Plugin
+pub enum PluginRequest {
+    ShowGui,
+    CloseGui,
 }
