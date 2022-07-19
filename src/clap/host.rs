@@ -1,7 +1,7 @@
 use crate::utils::thread_id::SharedThreadIDs;
 use basedrop::Shared;
 use clack_extensions::audio_ports::HostAudioPorts;
-use clack_extensions::gui::PluginGui;
+use clack_extensions::gui::{HostGui, PluginGui};
 use clack_extensions::log::Log;
 use clack_extensions::params::{HostParams, ParamRescanFlags, PluginParams};
 use clack_extensions::state::PluginState;
@@ -25,7 +25,8 @@ impl<'a> Host<'a> for ClapHost {
             .register::<Log>()
             .register::<ThreadCheck>()
             .register::<HostAudioPorts>()
-            .register::<HostParams>();
+            .register::<HostParams>()
+            .register::<HostGui>();
     }
 }
 
@@ -35,24 +36,14 @@ pub struct ClapHostMainThread<'a> {
     pub gui_visible: bool,
 
     rescan_requested: Option<ParamRescanFlags>,
-    clear_requested: bool,
-    flush_requested: bool,
 }
 
 impl<'a> ClapHostMainThread<'a> {
     pub fn new(shared: &'a ClapHostShared<'a>) -> Self {
-        Self {
-            shared,
-            instance: None,
-            gui_visible: false,
-            rescan_requested: None,
-            clear_requested: false,
-            flush_requested: false,
-        }
+        Self { shared, instance: None, gui_visible: false, rescan_requested: None }
     }
 
-    #[allow(unused)]
-    fn param_flush(&mut self, in_events: &EventBuffer, out_events: &mut EventBuffer) {
+    pub fn param_flush(&mut self, in_events: &EventBuffer, out_events: &mut EventBuffer) {
         let params_ext = match self.shared.params_ext {
             None => return,
             Some(p) => p,

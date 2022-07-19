@@ -105,15 +105,13 @@ impl<'a> HostParamsImplementationMainThread for ClapHostMainThread<'a> {
             Some(self.rescan_requested.unwrap_or(ParamRescanFlags::empty()) | flags);
     }
 
-    fn clear(&mut self, param_id: u32, flags: ParamClearFlags) {
+    fn clear(&mut self, _param_id: u32, _flags: ParamClearFlags) {
         if !self.shared.thread_ids.is_external_main_thread() {
             log::warn!("Plugin called clap_host_params->clear() not in the main thread");
             return;
         }
 
-        let flags = ParamClearFlags::from_bits_truncate(flags.bits());
-
-        // self.shared.host_request.params.clear(ParamID(param_id), flags); TODO: Vec for each ParamID to clear?
+        // TODO: we have no modulations or automations to clear yet
     }
 }
 

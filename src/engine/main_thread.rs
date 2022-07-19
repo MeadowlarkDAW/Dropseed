@@ -36,8 +36,7 @@ pub(crate) struct DSEngineMainThread {
     event_tx: Sender<DSEngineEvent>,
     handle_to_engine_rx: Receiver<DSEngineRequest>,
     thread_ids: SharedThreadIDs,
-    collector: basedrop::Collector,
-    host_info: Shared<HostInfo>,
+    collector: Collector,
     run_process_thread: Option<Arc<AtomicBool>>,
     process_thread_handle: Option<JoinHandle<()>>,
     tempo_map_shared: Option<Shared<SharedCell<(Shared<TempoMap>, u64)>>>,
@@ -59,7 +58,7 @@ impl DSEngineMainThread {
         let thread_ids = SharedThreadIDs::new(None, None, &collector.handle());
 
         let mut plugin_scanner =
-            PluginScanner::new(collector.handle(), Shared::clone(&host_info), thread_ids.clone());
+            PluginScanner::new(collector.handle(), host_info, thread_ids.clone());
 
         // Scan the user's internal plugins.
         let internal_plugins_res: Vec<Result<ScannedPluginKey, String>> =
@@ -76,7 +75,6 @@ impl DSEngineMainThread {
                 thread_ids,
                 collector,
                 //coll_handle,
-                host_info,
                 run_process_thread: None,
                 process_thread_handle: None,
                 tempo_map_shared: None,

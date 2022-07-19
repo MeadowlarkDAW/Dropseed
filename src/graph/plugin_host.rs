@@ -770,7 +770,7 @@ impl PluginInstanceHostAudioThread {
             out_buf.borrow_mut().clear();
         }
 
-        let mut state = self.state.get();
+        let state = self.state.get();
 
         // Do we want to deactivate the plugin?
         if state == PluginState::WaitingToDrop {
@@ -906,7 +906,6 @@ impl PluginInstanceHostAudioThread {
             }
 
             self.state.set(PluginState::Active);
-            state = PluginState::Active;
         }
 
         // Sync constant masks for the plugin.

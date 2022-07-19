@@ -170,9 +170,9 @@ impl PluginMainThread for ClapPluginMainThread {
         })
     }
 
-    /*fn param_flush(&mut self, in_events: &EventQueue, out_events: &mut EventQueue) {
+    fn param_flush(&mut self, in_events: &EventBuffer, out_events: &mut EventBuffer) {
         self.instance.main_thread_host_data_mut().param_flush(in_events, out_events)
-    }*/
+    }
 
     fn collect_save_state(&mut self) -> Result<Option<Vec<u8>>, String> {
         if let Some(state_ext) = self.instance.shared_host_data().state_ext {
@@ -465,7 +465,6 @@ impl PluginAudioThread for ClapPluginAudioThread {
         }
     }
 
-    #[allow(unused)]
     fn param_flush(&mut self, in_events: &EventBuffer, out_events: &mut EventBuffer) {
         self.audio_processor.audio_processor_host_data_mut().param_flush(in_events, out_events)
     }

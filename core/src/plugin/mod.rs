@@ -267,6 +267,22 @@ pub trait PluginMainThread {
         false
     }
 
+    /// Flushes a set of parameter changes.
+    ///
+    /// This will only be called while the plugin is inactive.
+    ///
+    /// This will never be called if `PluginMainThread::num_params()` returned 0.
+    ///
+    /// This method will not be called concurrently to clap_plugin->process().
+    ///
+    /// This method will not be used while the plugin is processing.
+    ///
+    /// By default this does nothing.
+    ///
+    /// [active && !processing : audio-thread]
+    #[allow(unused)]
+    fn param_flush(&mut self, in_events: &EventBuffer, out_events: &mut EventBuffer) {}
+
     // --- GUI ---------------------------------------------------------------------------------
 
     /// Returns whether or not this plugin instance supports opening a floating GUI window.
@@ -332,7 +348,7 @@ pub trait PluginAudioThread: Send + 'static {
 
     /// Flushes a set of parameter changes.
     ///
-    /// This will only be called while the plugin is inactive.
+    /// This will only be called while the plugin is active.
     ///
     /// This will never be called if `PluginMainThread::num_params()` returned 0.
     ///
