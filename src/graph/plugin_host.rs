@@ -4,6 +4,7 @@ use clack_host::events::io::EventBuffer;
 use clack_host::events::spaces::CoreEventSpace;
 use clack_host::events::{Event, EventFlags, EventHeader};
 use clack_host::utils::Cookie;
+use crossbeam_channel::Sender;
 use fnv::FnvHashMap;
 use meadowlark_core_types::time::SampleRate;
 use smallvec::SmallVec;
@@ -14,6 +15,7 @@ use std::sync::{
     Arc,
 };
 
+use crate::{DSEngineEvent, PluginEvent};
 use dropseed_core::plugin::buffer::SharedBuffer;
 use dropseed_core::plugin::ext::audio_ports::PluginAudioPortsExt;
 use dropseed_core::plugin::ext::note_ports::PluginNotePortsExt;
@@ -622,6 +624,7 @@ impl PluginInstanceHost {
         min_frames: u32,
         max_frames: u32,
         coll_handle: &basedrop::Handle,
+        event_tx: &mut Option<&mut Sender<DSEngineEvent>>,
     ) -> (OnIdleResult, SmallVec<[ParamModifiedInfo; 4]>) {
         let mut modified_params: SmallVec<[ParamModifiedInfo; 4]> = SmallVec::new();
 
@@ -646,6 +649,20 @@ impl PluginInstanceHost {
             self.restarting = true;
             if state != PluginState::DroppedAndReadyToDeactivate {
                 self.state.set(PluginState::WaitingToDrop);
+            }
+        }
+
+        if request_flags.intersects(HostRequestFlags::GUI_CLOSED | HostRequestFlags::GUI_DESTROYED)
+        {
+            plugin_main_thread
+                .on_gui_closed(request_flags.contains(HostRequestFlags::GUI_DESTROYED));
+
+            if let Some(event_tx) = event_tx.as_mut() {
+                event_tx
+                    .send(DSEngineEvent::Plugin(PluginEvent::GuiClosed {
+                        plugin_id: self.id.clone(),
+                    }))
+                    .unwrap()
             }
         }
 

@@ -263,6 +263,7 @@ impl DSExampleGUI {
                                 plugin_id: new_plugin_res.plugin_id,
                                 active_state,
                                 supports_gui: new_plugin_res.supports_gui,
+                                is_gui_open: false,
                             };
 
                             engine_state.effect_rack_state.plugins.push(effect_rack_plugin);
@@ -324,6 +325,14 @@ impl DSExampleGUI {
                             if let Some(active_state) = &mut effect_rack_plugin.active_state {
                                 active_state.params_state.parameters_modified(&modified_params);
                             }
+                        }
+                    }
+
+                    PluginEvent::GuiClosed { plugin_id } => {
+                        if let Some(engine_state) = &mut self.engine_state {
+                            let effect_rack_plugin =
+                                engine_state.effect_rack_state.plugin_mut(&plugin_id).unwrap();
+                            effect_rack_plugin.is_gui_open = false;
                         }
                     }
 

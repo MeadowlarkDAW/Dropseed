@@ -55,4 +55,5 @@ impl From<ModifyGraphRequest> for DSEngineRequest {
 /// A request to a specific instantiated Plugin
 pub enum PluginRequest {
     ShowGui,
+    CloseGui,
 }

@@ -927,7 +927,7 @@ impl AudioGraph {
         }
     }
 
-    pub fn on_idle(&mut self, event_tx: Option<&mut Sender<DSEngineEvent>>) -> bool {
+    pub fn on_idle(&mut self, mut event_tx: Option<&mut Sender<DSEngineEvent>>) -> bool {
         let mut plugins_to_remove: SmallVec<[PluginInstanceID; 4]> = SmallVec::new();
 
         let mut recompile_graph = false;
@@ -941,6 +941,7 @@ impl AudioGraph {
                 self.min_frames,
                 self.max_frames,
                 &self.coll_handle,
+                &mut event_tx,
             );
 
             match res {

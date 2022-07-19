@@ -284,6 +284,13 @@ pub trait PluginMainThread {
         Err(GuiError::CreateError)
     }
 
+    /// Called when the plugin notified its GUI has been closed.
+    ///
+    /// `destroyed` is set to true if the GUI has also been destroyed completely, e.g. due to a
+    /// lost connection.
+    #[allow(unused)]
+    fn on_gui_closed(&mut self, destroyed: bool) {}
+
     /// Closes and destroys the currently active GUI
     fn close_gui(&mut self) {}
 }

@@ -293,6 +293,8 @@ impl PluginMainThread for ClapPluginMainThread {
         }
     }
 
+    // --- GUI stuff ---------------------------------------------------------------------------------
+
     fn supports_gui(&self) -> bool {
         if let (Some(gui), Some(api)) =
             (self.instance.shared_host_data().gui_ext, GuiApiType::default_for_current_platform())
@@ -301,6 +303,11 @@ impl PluginMainThread for ClapPluginMainThread {
         } else {
             false
         }
+    }
+
+    fn is_gui_open(&self) -> bool {
+        let host = self.instance.main_thread_host_data();
+        host.gui_visible
     }
 
     fn open_gui(&mut self, suggested_title: Option<&str>) -> Result<(), GuiError> {
@@ -322,14 +329,21 @@ impl PluginMainThread for ClapPluginMainThread {
         Ok(())
     }
 
-    fn close_gui(&mut self) {
+    fn on_gui_closed(&mut self, destroyed: bool) {
         let host = self.instance.main_thread_host_data_mut();
         let gui_ext = host.shared.gui_ext.ok_or(GuiError::CreateError).unwrap();
         let instance = host.instance.as_mut().unwrap(); // TODO: unwrap
+        host.gui_visible = false;
 
-        // TODO: unwrap
-        gui_ext.hide(instance).unwrap();
+        if !destroyed {
+            // TODO: unwrap
+            gui_ext.hide(instance).unwrap();
+        }
         gui_ext.destroy(instance);
+    }
+
+    fn close_gui(&mut self) {
+        self.on_gui_closed(false)
     }
 }
 

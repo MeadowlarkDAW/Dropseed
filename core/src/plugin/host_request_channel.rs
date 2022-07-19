@@ -1,14 +1,3 @@
-//! Implementation of the Host Request Channel.
-//!
-//! The Host Request Channel is a bitmask-based MPSC communication channel that allows plugins to notify the main
-//! thread that certain actions (see [`HostRequestFlags`]) are to be taken.
-//!
-//! This channel **requires** said actions to be idempotent: it does not differentiate
-//! between sending one and multiple requests until any of them are received.
-//!
-//! This channel's actions are specific to a specific plugin instance: each plugin instance will
-//! have its own channel.
-
 use bitflags::bitflags;
 use clack_extensions::gui::GuiSize;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -59,11 +48,14 @@ bitflags! {
 
 /// The receiving end of the Host Request Channel.
 ///
-/// The Host Channel is a flag-based MPSC communication channel that allows plugins to notify the main
-/// thread that certain actions (see `RequestFlags`) are to be taken.
+/// The Host Request Channel is a bitmask-based MPSC communication channel that allows plugins to notify the main
+/// thread that certain actions (see [`HostRequestFlags`]) are to be taken.
 ///
 /// This channel **requires** said actions to be idempotent: it does not differentiate
 /// between sending one and multiple requests until any of them are received.
+///
+/// This channel's actions are specific to a specific plugin instance: each plugin instance will
+/// have its own channel.
 pub struct HostRequestChannelReceiver {
     contents: Arc<HostChannelContents>,
 }
@@ -114,7 +106,7 @@ impl HostRequestChannelReceiver {
 
 /// The sender end of the Host Request Channel.
 ///
-/// See [the module docs](super) for more information about how this works.
+/// See the [`HostRequestChannelReceiver`] docs for more information about how this works.
 ///
 /// Cloning this sender does not clone the underlying data: all cloned copies will be linked to the
 /// same channel.

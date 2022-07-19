@@ -146,6 +146,11 @@ impl DSEngineMainThread {
                                             }
                                         }
                                     }
+                                    PluginRequest::CloseGui => {
+                                        if main_thread.is_gui_open() {
+                                            main_thread.close_gui()
+                                        }
+                                    }
                                 }
                             }
                         } else {

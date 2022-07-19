@@ -107,6 +107,10 @@ pub enum PluginEvent {
         plugin_id: PluginInstanceID,
         modified_params: SmallVec<[ParamModifiedInfo; 4]>,
     },
+
+    /// Sent when the plugin closed its own GUI by its own means. UI should be updated accordingly
+    /// so that the user could open the UI again.
+    GuiClosed { plugin_id: PluginInstanceID },
 }
 
 #[derive(Debug)]
