@@ -1,6 +1,7 @@
-use clack_host::events::event_types::*;
 use clack_host::events::spaces::CoreEventSpace;
 use clack_host::events::{Event, UnknownEvent};
+
+pub use clack_host::events::event_types::*;
 
 #[derive(Clone, Copy)]
 pub enum ProcEvent {
