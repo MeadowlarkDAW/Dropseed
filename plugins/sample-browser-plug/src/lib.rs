@@ -5,16 +5,15 @@ use dropseed_core::plugin::ext::params::{ParamID, ParamInfoFlags};
 use dropseed_core::plugin::HostRequestChannelSender;
 use dropseed_core::plugin::{
     buffer::EventBuffer, ext, HostInfo, HostRequestFlags, PluginActivatedInfo, PluginAudioThread,
-    PluginDescriptor, PluginFactory, PluginInstanceID, PluginMainThread, PluginPreset, ProcBuffers,
-    ProcInfo, ProcessStatus,
+    PluginDescriptor, PluginFactory, PluginInstanceID, PluginMainThread, ProcBuffers, ProcInfo,
+    ProcessStatus,
 };
-use dropseed_resource_loader::pcm::PcmRAM;
 use meadowlark_core_types::parameter::{
     ParamF32, ParamF32Handle, Unit, DEFAULT_DB_GRADIENT, DEFAULT_SMOOTH_SECS,
 };
 use meadowlark_core_types::time::{SampleRate, Seconds};
+use pcm_loader::PcmRAM;
 use rtrb::{Consumer, Producer, RingBuffer};
-use serde::{Deserialize, Serialize};
 
 pub static SAMPLE_BROWSER_PLUG_RDN: &str = "app.meadowlark.sample-browser";
 
@@ -50,17 +49,6 @@ impl PluginFactory for SampleBrowserPlugFactory {
         _coll_handle: &basedrop::Handle,
     ) -> Result<Box<dyn PluginMainThread>, String> {
         Ok(Box::new(SampleBrowserPlugMainThread::new(host_request_channel)))
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
-pub struct SampleBrowserPlugPreset {
-    pub gain_db: f32,
-}
-
-impl Default for SampleBrowserPlugPreset {
-    fn default() -> Self {
-        Self { gain_db: 0.0 }
     }
 }
 
@@ -101,24 +89,14 @@ struct ParamsHandle {
     pub gain: ParamF32Handle,
 }
 
-impl ParamsHandle {
-    fn load_preset(&self, preset: &SampleBrowserPlugPreset) {
-        self.gain.set_value(preset.gain_db);
-    }
-}
-
 struct Params {
     pub gain: ParamF32,
 }
 
 impl Params {
-    fn new(
-        preset: &SampleBrowserPlugPreset,
-        sample_rate: SampleRate,
-        max_frames: usize,
-    ) -> (Self, ParamsHandle) {
+    fn new(sample_rate: SampleRate, max_frames: usize) -> (Self, ParamsHandle) {
         let (gain, gain_handle) = ParamF32::from_value(
-            preset.gain_db,
+            -9.0,
             0.0,
             -90.0,
             6.0,
@@ -142,14 +120,9 @@ impl SampleBrowserPlugMainThread {
     fn new(host_request: HostRequestChannelSender) -> Self {
         // These parameters will be re-initialized later with the correct sample_rate
         // and max_frames when the plugin is activated.
-        let (_params, params_handle) =
-            Params::new(&SampleBrowserPlugPreset::default(), Default::default(), 0);
+        let (_params, params_handle) = Params::new(Default::default(), 0);
 
         Self { params: params_handle, host_request }
-    }
-
-    fn save_state(&self) -> SampleBrowserPlugPreset {
-        SampleBrowserPlugPreset { gain_db: self.params.gain.value() }
     }
 }
 
@@ -161,9 +134,7 @@ impl PluginMainThread for SampleBrowserPlugMainThread {
         max_frames: u32,
         coll_handle: &basedrop::Handle,
     ) -> Result<PluginActivatedInfo, String> {
-        let preset = self.save_state();
-
-        let (params, params_handle) = Params::new(&preset, sample_rate, max_frames as usize);
+        let (params, params_handle) = Params::new(sample_rate, max_frames as usize);
         self.params = params_handle;
 
         let (to_audio_thread_tx, from_handle_rx) = RingBuffer::<ProcessMsg>::new(MSG_BUFFER_SIZE);
@@ -193,21 +164,6 @@ impl PluginMainThread for SampleBrowserPlugMainThread {
                 host_request: self.host_request.clone(),
             })),
         })
-    }
-
-    fn collect_save_state(&mut self) -> Result<Option<Vec<u8>>, String> {
-        let preset: Vec<u8> =
-            bincode::serialize(&self.save_state()).map_err(|e| format!("{}", e))?;
-
-        Ok(Some(preset))
-    }
-
-    fn load_state(&mut self, preset: &PluginPreset) -> Result<(), String> {
-        let decoded_preset = bincode::deserialize(&preset.bytes).map_err(|e| format!("{}", e))?;
-
-        self.params.load_preset(&decoded_preset);
-
-        Ok(())
     }
 
     fn audio_ports_ext(&mut self) -> Result<ext::audio_ports::PluginAudioPortsExt, String> {
