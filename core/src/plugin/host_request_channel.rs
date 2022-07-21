@@ -118,7 +118,7 @@ pub struct HostRequestChannelSender {
 impl HostRequestChannelSender {
     #[inline]
     pub fn request(&self, flags: HostRequestFlags) {
-        self.contents.request_flags.fetch_and(flags.bits, Ordering::SeqCst);
+        self.contents.request_flags.fetch_or(flags.bits, Ordering::SeqCst);
     }
 
     #[inline]

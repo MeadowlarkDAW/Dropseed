@@ -11,7 +11,7 @@ use smallvec::SmallVec;
 use std::error::Error;
 use std::fmt::Debug;
 use std::sync::{
-    atomic::{AtomicU32, Ordering},
+    atomic::{AtomicBool, AtomicU32, Ordering},
     Arc,
 };
 
@@ -271,7 +271,7 @@ impl PluginInstanceHost {
         }
 
         if main_thread.is_none() {
-            state.set(PluginState::InactiveWithError);
+            state.set_state(PluginState::InactiveWithError);
         }
 
         let (num_audio_in_channels, num_audio_out_channels) =
@@ -308,7 +308,7 @@ impl PluginInstanceHost {
     ) -> Self {
         let state = Arc::new(SharedPluginState::new());
 
-        state.set(PluginState::Inactive);
+        state.set_state(PluginState::Inactive);
 
         // We don't actually use this save state. This is just here to be
         // consistent with the rest of the plugins.
@@ -350,7 +350,7 @@ impl PluginInstanceHost {
     ) -> Self {
         let state = Arc::new(SharedPluginState::new());
 
-        state.set(PluginState::Inactive);
+        state.set_state(PluginState::Inactive);
 
         // We don't actually use this save state. This is just here to be
         // consistent with the rest of the plugins.
@@ -416,7 +416,7 @@ impl PluginInstanceHost {
             return Err(ActivatePluginError::NotLoaded);
         }
         // TODO: without this check it seems something is attempting to activate the plugin twice
-        if self.state.get() == PluginState::Active {
+        if self.state.get_state() == PluginState::Active {
             return Err(ActivatePluginError::AlreadyActive);
         }
         Ok(())
@@ -443,7 +443,7 @@ impl PluginInstanceHost {
                 audio_ports
             }
             Err(e) => {
-                self.state.set(PluginState::InactiveWithError);
+                self.state.set_state(PluginState::InactiveWithError);
                 self.audio_ports = None;
 
                 return Err(ActivatePluginError::PluginFailedToGetAudioPortsExt(e));
@@ -457,7 +457,7 @@ impl PluginInstanceHost {
                 note_ports
             }
             Err(e) => {
-                self.state.set(PluginState::InactiveWithError);
+                self.state.set_state(PluginState::InactiveWithError);
                 self.note_ports = None;
 
                 return Err(ActivatePluginError::PluginFailedToGetNotePortsExt(e));
@@ -481,7 +481,7 @@ impl PluginInstanceHost {
                         let _ = param_values.insert(id, value);
                     }
                     Err(_) => {
-                        self.state.set(PluginState::InactiveWithError);
+                        self.state.set_state(PluginState::InactiveWithError);
 
                         return Err(ActivatePluginError::PluginFailedToGetParamValue(
                             info.stable_id,
@@ -489,7 +489,7 @@ impl PluginInstanceHost {
                     }
                 },
                 Err(_) => {
-                    self.state.set(PluginState::InactiveWithError);
+                    self.state.set_state(PluginState::InactiveWithError);
 
                     return Err(ActivatePluginError::PluginFailedToGetParamInfo(i));
                 }
@@ -498,7 +498,7 @@ impl PluginInstanceHost {
 
         match plugin_main_thread.activate(sample_rate, min_frames, max_frames, coll_handle) {
             Ok(info) => {
-                self.state.set(PluginState::Active);
+                self.state.set_state(PluginState::Active);
 
                 let mut params_ext = PluginParamsExt {
                     params,
@@ -562,7 +562,7 @@ impl PluginInstanceHost {
                 ))
             }
             Err(e) => {
-                self.state.set(PluginState::InactiveWithError);
+                self.state.set_state(PluginState::InactiveWithError);
 
                 Err(ActivatePluginError::PluginSpecific(e))
             }
@@ -570,7 +570,7 @@ impl PluginInstanceHost {
     }
 
     pub fn schedule_deactivate(&mut self) {
-        if self.state.get() != PluginState::Active {
+        if self.state.get_state() != PluginState::Active {
             return;
         }
 
@@ -580,7 +580,7 @@ impl PluginInstanceHost {
 
         // Wait for the audio thread part to go to sleep before
         // deactivating.
-        self.state.set(PluginState::WaitingToDrop);
+        self.state.set_state(PluginState::WaitingToDrop);
     }
 
     pub fn schedule_remove(&mut self) {
@@ -639,7 +639,7 @@ impl PluginInstanceHost {
         let plugin_main_thread = self.main_thread.as_mut().unwrap();
 
         let request_flags = self.host_request.fetch_requests();
-        let state = self.state.get();
+        let mut state = self.state.get_state();
 
         if request_flags.contains(HostRequestFlags::CALLBACK) {
             plugin_main_thread.on_main_thread();
@@ -648,7 +648,8 @@ impl PluginInstanceHost {
         if request_flags.contains(HostRequestFlags::RESTART) && !self.remove_requested {
             self.restarting = true;
             if state != PluginState::DroppedAndReadyToDeactivate {
-                self.state.set(PluginState::WaitingToDrop);
+                self.state.set_state(PluginState::WaitingToDrop);
+                state = PluginState::WaitingToDrop;
             }
         }
 
@@ -663,32 +664,6 @@ impl PluginInstanceHost {
                         plugin_id: self.id.clone(),
                     }))
                     .unwrap()
-            }
-        }
-
-        if state == PluginState::DroppedAndReadyToDeactivate {
-            // Safe to deactivate now.
-            plugin_main_thread.deactivate();
-
-            self.state.set(PluginState::Inactive);
-
-            self.param_queues = None;
-
-            if !self.remove_requested {
-                let mut res = OnIdleResult::PluginDeactivated;
-
-                if self.restarting {
-                    match self.activate(sample_rate, min_frames, max_frames, coll_handle) {
-                        Ok((ui_handle, param_values)) => {
-                            res = OnIdleResult::PluginActivated(ui_handle, param_values)
-                        }
-                        Err(e) => res = OnIdleResult::PluginFailedToActivate(e),
-                    }
-                }
-
-                return (res, modified_params);
-            } else {
-                return (OnIdleResult::PluginReadyToRemove, modified_params);
             }
         }
 
@@ -707,6 +682,48 @@ impl PluginInstanceHost {
                     is_gesturing,
                 })
             });
+        }
+
+        if state == PluginState::DroppedAndReadyToDeactivate {
+            // Safe to deactivate now.
+            plugin_main_thread.deactivate();
+
+            self.state.set_state(PluginState::Inactive);
+
+            self.param_queues = None;
+
+            if !self.remove_requested {
+                let mut res = OnIdleResult::PluginDeactivated;
+
+                if self.restarting || request_flags.contains(HostRequestFlags::PROCESS) {
+                    match self.activate(sample_rate, min_frames, max_frames, coll_handle) {
+                        Ok((ui_handle, param_values)) => {
+                            res = OnIdleResult::PluginActivated(ui_handle, param_values)
+                        }
+                        Err(e) => res = OnIdleResult::PluginFailedToActivate(e),
+                    }
+                }
+
+                return (res, modified_params);
+            } else {
+                return (OnIdleResult::PluginReadyToRemove, modified_params);
+            }
+        } else if request_flags.contains(HostRequestFlags::PROCESS)
+            && !self.remove_requested
+            && !self.restarting
+        {
+            if state == PluginState::Active {
+                self.state.start_processing.store(true, Ordering::Relaxed);
+            } else if state == PluginState::Inactive || state == PluginState::InactiveWithError {
+                let res = match self.activate(sample_rate, min_frames, max_frames, coll_handle) {
+                    Ok((ui_handle, param_values)) => {
+                        OnIdleResult::PluginActivated(ui_handle, param_values)
+                    }
+                    Err(e) => OnIdleResult::PluginFailedToActivate(e),
+                };
+
+                return (res, modified_params);
+            }
         }
 
         (OnIdleResult::Ok, modified_params)
@@ -770,7 +787,7 @@ impl PluginInstanceHostAudioThread {
             out_buf.borrow_mut().clear();
         }
 
-        let state = self.state.get();
+        let state = self.state.get_state();
 
         // Do we want to deactivate the plugin?
         if state == PluginState::WaitingToDrop {
@@ -781,6 +798,9 @@ impl PluginInstanceHostAudioThread {
             buffers.clear_all_outputs(proc_info);
             self.in_events.clear();
             return;
+        } else if self.state.start_processing.load(Ordering::Relaxed) {
+            self.state.start_processing.store(false, Ordering::Relaxed);
+            self.processing_state = ProcessingState::WaitingForStart;
         }
 
         // We can't process a plugin which failed to start processing.
@@ -793,7 +813,6 @@ impl PluginInstanceHostAudioThread {
         self.out_events.clear();
 
         let mut has_note_in_event = false;
-
         let mut has_param_in_event = self
             .param_queues
             .as_mut()
@@ -905,7 +924,7 @@ impl PluginInstanceHostAudioThread {
                 return;
             }
 
-            self.state.set(PluginState::Active);
+            self.state.set_state(PluginState::Active);
         }
 
         // Sync constant masks for the plugin.
@@ -1151,7 +1170,7 @@ impl Drop for PluginInstanceHostAudioThread {
             self.plugin.stop_processing();
         }
 
-        self.state.set(PluginState::DroppedAndReadyToDeactivate);
+        self.state.set_state(PluginState::DroppedAndReadyToDeactivate);
     }
 }
 
@@ -1190,23 +1209,26 @@ impl From<u32> for PluginState {
 }
 
 #[derive(Debug)]
-pub(crate) struct SharedPluginState(AtomicU32);
+pub(crate) struct SharedPluginState {
+    state: AtomicU32,
+    start_processing: AtomicBool,
+}
 
 impl SharedPluginState {
     pub fn new() -> Self {
-        Self(AtomicU32::new(0))
+        Self { state: AtomicU32::new(0), start_processing: AtomicBool::new(false) }
     }
 
     #[inline]
-    pub fn get(&self) -> PluginState {
-        let s = self.0.load(Ordering::SeqCst);
+    pub fn get_state(&self) -> PluginState {
+        let s = self.state.load(Ordering::SeqCst);
 
         s.into()
     }
 
     #[inline]
-    pub fn set(&self, state: PluginState) {
-        self.0.store(state as u32, Ordering::SeqCst);
+    pub fn set_state(&self, state: PluginState) {
+        self.state.store(state as u32, Ordering::SeqCst);
     }
 }
 
