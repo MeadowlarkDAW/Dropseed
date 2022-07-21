@@ -14,7 +14,7 @@ readme = "README.md"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [workspace]
-members = ["examples/test-host", "core", "resource-loader", "plugins/sample-browser-plug"]
+members = ["examples/test-host", "core", "plugins/sample-browser-plug"]
 
 [features]
 default = ["clap-host", "cpal-backend"]
