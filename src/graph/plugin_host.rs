@@ -800,7 +800,11 @@ impl PluginInstanceHostAudioThread {
             return;
         } else if self.state.start_processing.load(Ordering::Relaxed) {
             self.state.start_processing.store(false, Ordering::Relaxed);
-            self.processing_state = ProcessingState::WaitingForStart;
+
+            if let ProcessingState::Started(_) = self.processing_state {
+            } else {
+                self.processing_state = ProcessingState::WaitingForStart;
+            }
         }
 
         // We can't process a plugin which failed to start processing.
