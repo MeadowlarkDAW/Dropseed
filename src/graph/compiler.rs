@@ -8,8 +8,8 @@ use dropseed_core::plugin::buffer::{AudioPortBuffer, AudioPortBufferMut, SharedB
 use dropseed_core::plugin::ext::audio_ports::MainPortsLayout;
 use dropseed_core::plugin::{ProcBuffers, ProcEvent};
 
+use super::schedule::transport_task::TransportTask;
 use crate::graph::shared_pool::{DelayCompKey, SharedDelayCompNode};
-use crate::transport_handle::TransportTask;
 
 use super::{
     schedule::sum::SumTask,

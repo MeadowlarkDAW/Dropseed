@@ -5,14 +5,15 @@ use smallvec::SmallVec;
 use dropseed_core::plugin::buffer::SharedBuffer;
 use dropseed_core::plugin::ProcInfo;
 
-use crate::transport_handle::TransportTask;
 use crate::utils::thread_id::SharedThreadIDs;
 
 pub(crate) mod delay_comp_node;
 pub(crate) mod sum;
 pub(crate) mod task;
+pub(crate) mod transport_task;
 
 use task::Task;
+use transport_task::TransportTask;
 
 pub struct Schedule {
     pub(crate) tasks: Vec<Task>,

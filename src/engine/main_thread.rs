@@ -22,8 +22,8 @@ use crate::engine::events::from_engine::{
 };
 use crate::engine::events::to_engine::{DSEngineRequest, PluginRequest};
 use crate::engine::plugin_scanner::PluginScanner;
+use crate::graph::schedule::transport_task::TransportHandle;
 use crate::graph::{AudioGraph, AudioGraphSaveState, Edge, NewPluginRes, PluginEdges, PortType};
-use crate::transport_handle::TransportHandle;
 use crate::utils::thread_id::SharedThreadIDs;
 
 static ENGINE_THREAD_UPDATE_INTERVAL: Duration = Duration::from_millis(10);

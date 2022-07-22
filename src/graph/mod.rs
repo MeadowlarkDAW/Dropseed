@@ -25,6 +25,7 @@ use dropseed_core::plugin::{
 use dropseed_core::transport::TempoMap;
 
 use plugin_host::OnIdleResult;
+use schedule::transport_task::{TransportHandle, TransportTask};
 use schedule::{Schedule, SharedSchedule};
 use shared_pool::{PluginInstanceHostEntry, SharedBufferPool, SharedPluginPool};
 use verifier::Verifier;
@@ -33,8 +34,6 @@ use crate::engine::events::from_engine::{DSEngineEvent, PluginEvent};
 use crate::engine::main_thread::{EdgeReq, EdgeReqPortID, PluginIDReq};
 use crate::engine::plugin_scanner::{NewPluginInstanceError, PluginScanner};
 use crate::graph::plugin_host::PluginInstanceHost;
-use crate::transport_handle::TransportHandle;
-use crate::transport_handle::TransportTask;
 use crate::utils::thread_id::SharedThreadIDs;
 
 pub use compiler::GraphCompilerError;

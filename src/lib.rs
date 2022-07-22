@@ -6,7 +6,6 @@ mod graph;
 #[cfg(feature = "clap-host")]
 mod clap;
 
-pub mod transport_handle;
 pub mod utils;
 
 pub use clack_host::events::io::EventBuffer;
@@ -25,6 +24,7 @@ pub use engine::main_thread::{
     ModifyGraphRes, PluginIDReq,
 };
 pub use engine::plugin_scanner::{RescanPluginDirectoriesRes, ScannedPlugin};
+pub use graph::schedule::transport_task::{TransportHandle, TransportSaveState};
 pub use graph::{
     ActivatePluginError, AudioGraphSaveState, Edge, NewPluginRes, ParamGestureInfo,
     ParamModifiedInfo, PluginActivationStatus, PluginEdges, PluginHandle, PluginParamsExt,
