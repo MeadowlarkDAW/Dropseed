@@ -1,7 +1,7 @@
 use fnv::FnvHashSet;
 use std::error::Error;
 
-use crate::plugin::buffer::{DebugBufferID, RawAudioChannelBuffers};
+use dropseed_core::plugin::buffer::{DebugBufferID, RawAudioChannelBuffers};
 
 use super::PluginInstanceID;
 use super::{schedule::task::Task, Schedule};

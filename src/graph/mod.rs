@@ -33,8 +33,8 @@ use crate::engine::events::from_engine::{DSEngineEvent, PluginEvent};
 use crate::engine::main_thread::{EdgeReq, EdgeReqPortID, PluginIDReq};
 use crate::engine::plugin_scanner::{NewPluginInstanceError, PluginScanner};
 use crate::graph::plugin_host::PluginInstanceHost;
-use crate::transport::TransportHandle;
-use crate::transport::TransportTask;
+use crate::transport_handle::TransportHandle;
+use crate::transport_handle::TransportTask;
 use crate::utils::thread_id::SharedThreadIDs;
 
 pub use compiler::GraphCompilerError;

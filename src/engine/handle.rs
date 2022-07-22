@@ -6,13 +6,12 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use dropseed_core::plugin::{HostInfo, PluginFactory};
 use dropseed_core::plugin_scanner::ScannedPluginKey;
 
 use crate::engine::events::from_engine::DSEngineEvent;
 use crate::engine::events::to_engine::DSEngineRequest;
 use crate::engine::main_thread::DSEngineMainThread;
-use crate::plugin::HostInfo;
-use crate::plugin::PluginFactory;
 
 pub struct DSEngineHandle {
     /// The results of scanning the internal plugins.

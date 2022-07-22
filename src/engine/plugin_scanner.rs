@@ -5,12 +5,12 @@ use std::{collections::HashMap, error::Error};
 use walkdir::WalkDir;
 
 use dropseed_core::plugin::{
-    HostInfo, HostRequestChannelReceiver, PluginInstanceID, PluginInstanceType,
+    HostInfo, HostRequestChannelReceiver, PluginDescriptor, PluginFactory, PluginInstanceID,
+    PluginInstanceType, PluginSaveState,
 };
 use dropseed_core::plugin_scanner::{PluginFormat, ScannedPluginKey};
 
 use crate::graph::plugin_host::PluginInstanceHost;
-use crate::plugin::{PluginDescriptor, PluginFactory, PluginSaveState};
 use crate::utils::thread_id::SharedThreadIDs;
 
 #[cfg(all(

@@ -6,7 +6,7 @@ mod graph;
 #[cfg(feature = "clap-host")]
 mod clap;
 
-pub mod transport;
+pub mod transport_handle;
 pub mod utils;
 
 pub use clack_host::events::io::EventBuffer;

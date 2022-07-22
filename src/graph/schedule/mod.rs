@@ -5,7 +5,7 @@ use smallvec::SmallVec;
 use dropseed_core::plugin::buffer::SharedBuffer;
 use dropseed_core::plugin::ProcInfo;
 
-use crate::transport::TransportTask;
+use crate::transport_handle::TransportTask;
 use crate::utils::thread_id::SharedThreadIDs;
 
 pub(crate) mod delay_comp_node;

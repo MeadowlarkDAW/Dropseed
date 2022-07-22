@@ -1,4 +1,4 @@
-use crate::plugin::PluginSaveState;
+use dropseed_core::plugin::PluginSaveState;
 
 use super::PortType;
 

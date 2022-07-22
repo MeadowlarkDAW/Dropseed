@@ -5,11 +5,11 @@ use smallvec::SmallVec;
 use std::error::Error;
 
 use dropseed_core::plugin::buffer::{AudioPortBuffer, AudioPortBufferMut, SharedBuffer};
+use dropseed_core::plugin::ext::audio_ports::MainPortsLayout;
 use dropseed_core::plugin::{ProcBuffers, ProcEvent};
 
 use crate::graph::shared_pool::{DelayCompKey, SharedDelayCompNode};
-use crate::plugin::ext::audio_ports::MainPortsLayout;
-use crate::transport::TransportTask;
+use crate::transport_handle::TransportTask;
 
 use super::{
     schedule::sum::SumTask,

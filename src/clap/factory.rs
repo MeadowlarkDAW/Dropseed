@@ -1,13 +1,14 @@
 use super::*;
 
-use crate::plugin::{PluginDescriptor, PluginFactory, PluginMainThread};
 use crate::utils::thread_id::SharedThreadIDs;
 use basedrop::Shared;
 use clack_host::bundle::PluginBundle;
 use clack_host::factory::PluginFactory as RawClapPluginFactory;
 use clack_host::instance::PluginInstance;
 use dropseed_core::plugin::HostRequestChannelSender;
-use dropseed_core::plugin::{HostInfo, PluginInstanceID};
+use dropseed_core::plugin::{
+    HostInfo, PluginDescriptor, PluginFactory, PluginInstanceID, PluginMainThread,
+};
 use std::ffi::CStr;
 use std::path::PathBuf;
 
