@@ -8,9 +8,6 @@ mod clap;
 
 pub mod utils;
 
-pub use clack_host::events::io::EventBuffer;
-pub use clack_host::utils::FixedPoint;
-
 pub use dropseed_core::*;
 
 pub use engine::audio_thread::DSEngineAudioThread;
