@@ -18,11 +18,11 @@ pub enum DebugBufferType {
 impl Debug for DebugBufferType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            DebugBufferType::Audio32 => f.write_str("f32"),
-            DebugBufferType::Audio64 => f.write_str("f64"),
-            DebugBufferType::IntermediaryAudio32 => f.write_str("intermediary_f32"),
-            DebugBufferType::Event => f.write_str("event"),
-            DebugBufferType::Note => f.write_str("note"),
+            DebugBufferType::Audio32 => f.write_str("fl"),
+            DebugBufferType::Audio64 => f.write_str("db"),
+            DebugBufferType::IntermediaryAudio32 => f.write_str("ifl"),
+            DebugBufferType::Event => f.write_str("ev"),
+            DebugBufferType::Note => f.write_str("nt"),
         }
     }
 }
@@ -130,6 +130,16 @@ impl<T: Clone + Copy + Send + Sync + 'static + Default> SharedBuffer<T> {
     }
 }
 
+impl<T: Copy + Default + PartialEq + Send + Sync + 'static> SharedBuffer<T> {
+    /// Checks if the buffer could be possibly silent, without reading the whole buffer.
+    ///
+    /// This only relies on the `is_constant` flag and the first sample of the buffer, and thus
+    /// may not be accurate.
+    pub fn has_silent_hint(&self) -> bool {
+        self.is_constant() && self.borrow()[0] == T::default()
+    }
+}
+
 impl<T: Clone + Copy + Send + Sync + 'static> Clone for SharedBuffer<T> {
     fn clone(&self) -> Self {
         Self { buffer: Shared::clone(&self.buffer) }
@@ -173,6 +183,17 @@ impl AudioPortBuffer {
 
     pub fn latency(&self) -> u32 {
         self.latency
+    }
+
+    /// Checks if all channel buffers could be possibly silent, without reading the whole buffers.
+    ///
+    /// This only relies on the `is_constant` flag and the first sample of each buffer, and thus
+    /// may not be accurate.
+    pub fn has_silent_hint(&self) -> bool {
+        match &self._raw_channels {
+            RawAudioChannelBuffers::F32(channels) => channels.iter().all(|c| c.has_silent_hint()),
+            RawAudioChannelBuffers::F64(channels) => channels.iter().all(|c| c.has_silent_hint()),
+        }
     }
 
     pub fn is_silent(&self, frames: usize) -> bool {

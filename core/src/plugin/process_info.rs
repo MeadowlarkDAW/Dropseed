@@ -50,6 +50,8 @@ pub struct ProcBuffers {
 }
 
 impl ProcBuffers {
+    /// Checks if all audio input buffers are silent for a given number of frames, i.e. if all
+    /// sample values are equal to `0`.
     pub fn audio_inputs_silent(&self, frames: usize) -> bool {
         for buf in self.audio_in.iter() {
             if !buf.is_silent(frames) {
@@ -57,6 +59,14 @@ impl ProcBuffers {
             }
         }
         true
+    }
+
+    /// Checks if all audio input buffers could be possibly silent, without reading the whole buffer.
+    ///
+    /// This only relies on the `is_constant` flag and the first sample of each buffer, and thus
+    /// may not be accurate.
+    pub fn audio_inputs_have_silent_hint(&self) -> bool {
+        self.audio_in.iter().all(|b| b.has_silent_hint())
     }
 
     pub fn clear_all_outputs(&mut self, proc_info: &ProcInfo) {

@@ -2,7 +2,7 @@ use crate::graph::buffers::events::{NoteEvent, ParamEvent, PluginEvent};
 use crate::graph::buffers::sanitization::PluginEventOutputSanitizer;
 use crate::graph::plugin_host::AudioToMainParamValue;
 use crate::utils::reducing_queue::ReducFnvProducerRefMut;
-use crate::EventBuffer;
+use clack_host::events::io::EventBuffer;
 use clack_host::utils::Cookie;
 use dropseed_core::plugin::buffer::SharedBuffer;
 use dropseed_core::plugin::ParamID;

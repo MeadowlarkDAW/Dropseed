@@ -1,6 +1,7 @@
 use crate::graph::buffers::events::{ParamEvent, ParamEventType, PluginEvent};
 use dropseed_core::plugin::ParamID;
 use fnv::FnvHashMap;
+use std::collections::hash_map::Entry::{Occupied, Vacant};
 
 /// Sanitizes a plugin's event output stream, by wrapping an event iterator.
 ///
@@ -43,35 +44,29 @@ where
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some(event) = self.iterator.next() {
-            match &event {
-                PluginEvent::ParamEvent {
-                    cookie: _,
-                    event: ParamEvent { parameter_id, event_type, .. },
-                } => {
-                    let is_adjusting = self
-                        .sanitizer
-                        .is_adjusting_parameter
-                        .entry(ParamID(*parameter_id))
-                        .or_insert(false);
+        for event in self.iterator.by_ref() {
+            if let PluginEvent::ParamEvent {
+                cookie: _,
+                event: ParamEvent { parameter_id, event_type, .. },
+            } = &event
+            {
+                let is_beginning = match event_type {
+                    ParamEventType::BeginGesture => true,
+                    ParamEventType::EndGesture => false,
+                    _ => return Some(event),
+                };
 
-                    match event_type {
-                        ParamEventType::BeginGesture => {
-                            if *is_adjusting {
-                                continue;
-                            }
-                            *is_adjusting = true
+                match self.sanitizer.is_adjusting_parameter.entry(ParamID(*parameter_id)) {
+                    Occupied(mut o) => {
+                        if *o.get() == is_beginning {
+                            continue;
                         }
-                        ParamEventType::EndGesture => {
-                            if !*is_adjusting {
-                                continue;
-                            }
-                            *is_adjusting = false
-                        }
-                        _ => {}
+                        o.insert(is_beginning);
                     }
-                }
-                _ => {}
+                    Vacant(v) => {
+                        v.insert(is_beginning);
+                    }
+                };
             }
 
             return Some(event);
