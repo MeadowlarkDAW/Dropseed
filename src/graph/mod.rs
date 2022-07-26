@@ -5,6 +5,7 @@ use crossbeam_channel::Sender;
 use fnv::FnvHashMap;
 use fnv::FnvHashSet;
 use meadowlark_core_types::time::SampleRate;
+use meadowlark_core_types::time::Seconds;
 use smallvec::SmallVec;
 use std::error::Error;
 
@@ -116,6 +117,7 @@ impl AudioGraph {
         note_buffer_size: usize,
         event_buffer_size: usize,
         thread_ids: SharedThreadIDs,
+        transport_declick_time: Option<Seconds>,
     ) -> (Self, SharedSchedule, TransportHandle) {
         //assert!(graph_in_channels > 0);
         assert!(graph_out_channels > 0);
@@ -130,8 +132,13 @@ impl AudioGraph {
             coll_handle.clone(),
         );
 
-        let (transport_task, transport_handle) =
-            TransportTask::new(None, sample_rate, coll_handle.clone());
+        let (transport_task, transport_handle) = TransportTask::new(
+            None,
+            sample_rate,
+            max_frames as usize,
+            transport_declick_time,
+            coll_handle.clone(),
+        );
 
         let shared_transport_task = Shared::new(&coll_handle, AtomicRefCell::new(transport_task));
 

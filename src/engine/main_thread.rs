@@ -2,7 +2,7 @@ use basedrop::{Collector, Shared, SharedCell};
 use crossbeam_channel::{Receiver, Sender};
 use fnv::FnvHashSet;
 use log::warn;
-use meadowlark_core_types::time::SampleRate;
+use meadowlark_core_types::time::{SampleRate, Seconds};
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -66,13 +66,10 @@ impl DSEngineMainThread {
             Self {
                 audio_graph: None,
                 plugin_scanner,
-                //garbage_coll_handle: Some(garbage_coll_handle),
-                //garbage_coll_run,
                 event_tx,
                 handle_to_engine_rx,
                 thread_ids,
                 collector,
-                //coll_handle,
                 run_process_thread: None,
                 process_thread_handle: None,
                 tempo_map_shared: None,
@@ -206,6 +203,7 @@ impl DSEngineMainThread {
         let sample_rate = settings.sample_rate;
         let note_buffer_size = settings.note_buffer_size;
         let event_buffer_size = settings.event_buffer_size;
+        let transport_declick_time = settings.transport_declick_time;
 
         let (mut audio_graph, shared_schedule, transport_handle) = AudioGraph::new(
             self.collector.handle(),
@@ -217,6 +215,7 @@ impl DSEngineMainThread {
             note_buffer_size,
             event_buffer_size,
             self.thread_ids.clone(),
+            transport_declick_time,
         );
 
         let graph_in_node_id = audio_graph.graph_in_node_id().clone();
@@ -565,6 +564,13 @@ pub struct ActivateEngineSettings {
     pub num_audio_out_channels: u16,
     pub note_buffer_size: usize,
     pub event_buffer_size: usize,
+
+    /// The time window for the transport's declick buffers.
+    ///
+    /// Set this to `None` to have no transport declicking.
+    ///
+    /// By default this is set to `None`.
+    pub transport_declick_time: Option<Seconds>,
 }
 
 impl Default for ActivateEngineSettings {
@@ -577,6 +583,7 @@ impl Default for ActivateEngineSettings {
             num_audio_out_channels: 2,
             note_buffer_size: 256,
             event_buffer_size: 256,
+            transport_declick_time: None,
         }
     }
 }

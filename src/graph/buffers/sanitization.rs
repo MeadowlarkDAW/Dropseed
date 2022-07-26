@@ -18,6 +18,7 @@ impl PluginEventOutputSanitizer {
         Self { is_adjusting_parameter }
     }
 
+    #[allow(unused)]
     pub fn reset(&mut self) {
         self.is_adjusting_parameter.clear()
     }

@@ -1,8 +1,11 @@
 use clack_host::events::event_types::TransportEvent;
 use meadowlark_core_types::time::{Frames, MusicalTime};
 
+mod declick;
 mod tempo_map;
 pub use tempo_map::TempoMap;
+
+pub use declick::{DeclickBuffers, DeclickInfo, DEFAULT_DECLICK_TIME};
 
 #[derive(Clone)]
 pub struct TransportInfo {
@@ -13,6 +16,7 @@ pub struct TransportInfo {
     seek_info: Option<SeekInfo>,
     range_checker: RangeChecker,
     event: Option<TransportEvent>,
+    declick: Option<DeclickInfo>,
 }
 
 impl std::fmt::Debug for TransportInfo {
@@ -39,6 +43,7 @@ impl TransportInfo {
         seek_info: Option<SeekInfo>,
         range_checker: RangeChecker,
         event: Option<TransportEvent>,
+        declick: Option<DeclickInfo>,
     ) -> Self {
         Self {
             playhead_frame,
@@ -48,6 +53,7 @@ impl TransportInfo {
             seek_info,
             range_checker,
             event,
+            declick,
         }
     }
 
@@ -101,6 +107,10 @@ impl TransportInfo {
 
     pub fn event(&self) -> Option<&TransportEvent> {
         self.event.as_ref()
+    }
+
+    pub fn declick_info(&self) -> Option<&DeclickInfo> {
+        self.declick.as_ref()
     }
 }
 
@@ -183,9 +193,9 @@ impl LoopState {
     pub fn as_proc_info(&self, tempo_map: &TempoMap) -> LoopStateProcInfo {
         match self {
             LoopState::Inactive => LoopStateProcInfo::Inactive,
-            &LoopState::Active { loop_start, loop_end } => LoopStateProcInfo::Active {
-                loop_start_frame: tempo_map.musical_to_nearest_frame_round(loop_start),
-                loop_end_frame: tempo_map.musical_to_nearest_frame_round(loop_end),
+            LoopState::Active { loop_start, loop_end } => LoopStateProcInfo::Active {
+                loop_start_frame: tempo_map.musical_to_nearest_frame_round(*loop_start),
+                loop_end_frame: tempo_map.musical_to_nearest_frame_round(*loop_end),
             },
         }
     }
