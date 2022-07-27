@@ -294,6 +294,7 @@ impl DSEngineMainThread {
             self.process_thread_handle = Some(process_thread_handle);
 
             self.tempo_map_shared = Some(transport_handle.tempo_map_shared());
+            let tempo_map = (*self.tempo_map_shared.as_ref().unwrap().get().0).clone();
 
             let info = EngineActivatedInfo {
                 audio_thread,
@@ -305,6 +306,7 @@ impl DSEngineMainThread {
                 transport_handle,
                 num_audio_in_channels,
                 num_audio_out_channels,
+                tempo_map,
             };
 
             self.event_tx.send(DSEngineEvent::EngineActivated(info)).unwrap();
@@ -678,6 +680,7 @@ pub struct EngineActivatedInfo {
     pub graph_out_node_id: PluginInstanceID,
 
     pub transport_handle: TransportHandle,
+    pub tempo_map: TempoMap,
 
     pub sample_rate: SampleRate,
     pub min_frames: u32,

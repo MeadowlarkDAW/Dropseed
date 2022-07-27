@@ -2,7 +2,7 @@ use atomic_refcell::{AtomicRef, AtomicRefCell};
 use basedrop::Shared;
 use meadowlark_core_types::time::{Frames, Seconds};
 
-pub static DEFAULT_DECLICK_TIME: Seconds = Seconds(30.0 / 1000.0);
+pub static DEFAULT_DECLICK_TIME: Seconds = Seconds(3.0 / 1000.0);
 
 pub struct DeclickBuffers {
     pub start_stop_buf: Vec<f32>,

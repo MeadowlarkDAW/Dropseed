@@ -292,7 +292,10 @@ impl TransportDeclick {
                         in_frames_left,
                         out_frames_left,
                     };
-                    self.jump_out_playhead += frames.into();
+                    self.jump_in_playhead = self.jump_in_playhead_next;
+                    self.jump_out_playhead = self.jump_out_playhead_next;
+                    self.jump_in_playhead_next += frames as i64;
+                    self.jump_out_playhead_next += frames.into();
 
                     return;
                 } else if skip_frames > 0 {
@@ -323,7 +326,7 @@ impl TransportDeclick {
 
                     // Fill the rest with a constant if the end of the declick has been reached.
                     if out_constant_frames > 0 {
-                        out_buf[out_declick_frames..frames].fill(0.0);
+                        out_buf[out_declick_frames..frames_left].fill(0.0);
                     }
 
                     if out_frames_left > frames_left {
@@ -352,7 +355,7 @@ impl TransportDeclick {
 
                     // Fill the rest with a constant if the end of the declick has been reached.
                     if in_constant_frames > 0 {
-                        in_buf[in_declick_frames..frames].fill(1.0);
+                        in_buf[in_declick_frames..frames_left].fill(1.0);
                     }
 
                     if in_frames_left > frames_left {
