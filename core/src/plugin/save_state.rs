@@ -28,22 +28,28 @@ impl Debug for PluginPreset {
 #[derive(Debug, Clone)]
 pub struct PluginSaveState {
     pub key: ScannedPluginKey,
+
+    /// If this is `false` when receiving a save state, then it means that
+    /// the plugin was deactivated at the time of collecting the save
+    /// state/saving the project.
+    ///
+    /// If this is `false` when loading a new plugin, then the plugin will
+    /// not be activated automatically.
     pub is_active: bool,
 
     /// Use this as a backup in case the plugin fails to load. (Most
     /// likey from a user opening another user's project, but the
-    /// user doesn't have this plugin installed on their system.)
+    /// former user doesn't have this plugin installed on their system.)
     pub backup_audio_ports: Option<PluginAudioPortsExt>,
 
     /// Use this as a backup in case the plugin fails to load. (Most
     /// likey from a user opening another user's project, but the
-    /// user doesn't have this plugin installed on their system.)
+    /// former user doesn't have this plugin installed on their system.)
     pub backup_note_ports: Option<PluginNotePortsExt>,
 
     /// The plugin's preset.
     ///
-    /// If this is none, then it means that the plugin should load
-    /// its default preset.
+    /// If this is `None`, then the plugin will load its default preset.
     pub preset: Option<PluginPreset>,
 }
 

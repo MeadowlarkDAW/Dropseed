@@ -207,6 +207,20 @@ impl DSExampleGUI {
                         .unwrap();
                 }
 
+                // This message is sent after the user requests the latest save states from
+                // calling `DSEngineRequest::RequestLatestSaveStates` or
+                // `PluginRequest::GetLatestSaveState`.
+                //
+                // This only returns the save states of the plugins which have changed their
+                // state.
+                //
+                // Use the latest save state as a backup in case a plugin crashes or a bug
+                // in the audio graph compiler causes the audio graph to be in an invalid
+                // state, resulting in the audio engine stopping.
+                DSEngineEvent::NewSaveStates(new_states) => {
+                    dbg!(&new_states);
+                }
+
                 // When this message is received, it means that the audio graph is starting
                 // the process of restoring from a save state.
                 //

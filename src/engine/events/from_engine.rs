@@ -2,14 +2,12 @@ use fnv::FnvHashMap;
 use smallvec::SmallVec;
 use std::path::PathBuf;
 
-use dropseed_core::plugin::{ParamID, PluginInstanceID};
+use dropseed_core::plugin::{ParamID, PluginInstanceID, PluginSaveState};
 
 use crate::{
     engine::main_thread::{EngineActivatedInfo, ModifyGraphRes},
     engine::plugin_scanner::RescanPluginDirectoriesRes,
-    graph::{
-        plugin_host::PluginHandle, ActivatePluginError, AudioGraphSaveState, ParamModifiedInfo,
-    },
+    graph::{plugin_host::PluginHandle, ActivatePluginError, ParamModifiedInfo},
 };
 
 #[derive(Debug)]
@@ -22,30 +20,29 @@ pub enum DSEngineEvent {
     /// replace it.
     ///
     /// To keep using the audio graph, you must reactivate the engine with
-    /// `DSEngineRequest::ActivateEngine`, and then restore the audio graph
-    /// from an existing save state if you wish using
-    /// `DSEngineRequest::RestoreFromSaveState`.
+    /// `DSEngineRequest::ActivateEngine` and repopulate the graph.
     EngineDeactivated(EngineDeactivatedInfo),
 
     /// This message is sent whenever the engine successfully activates.
     EngineActivated(EngineActivatedInfo),
 
-    /// This message is sent after the user requests the latest save state from
-    /// calling `DSEngineRequest::RequestLatestSaveState`.
+    /// This message is sent after the user requests the latest save states from
+    /// calling `DSEngineRequest::RequestLatestSaveStates` or
+    /// `PluginRequest::GetLatestSaveState`.
+    ///
+    /// This only returns the save states of the plugins which have changed their
+    /// state.
     ///
     /// Use the latest save state as a backup in case a plugin crashes or a bug
     /// in the audio graph compiler causes the audio graph to be in an invalid
     /// state, resulting in the audio engine stopping.
-    NewSaveState(AudioGraphSaveState),
+    NewSaveStates(Vec<(PluginInstanceID, PluginSaveState)>),
 
-    /// When this message is received, it means that the audio graph is starting
-    /// the process of restoring from a save state.
+    /// When this message is received, it means that the audio graph has been
+    /// cleared.
     ///
     /// Reset your UI as if you are loading up a project for the first time, and
     /// wait for the `AudioGraphModified` event to repopulate the UI.
-    ///
-    /// If the audio graph is in an invalid state as a result of restoring from
-    /// the save state, then the `EngineDeactivated` event will be sent instead.
     AudioGraphCleared,
 
     /// This message is sent whenever the audio graph has been modified.
@@ -73,9 +70,9 @@ pub enum DSEngineEvent {
 pub enum EngineDeactivatedInfo {
     /// The engine was deactivated gracefully after recieving a
     /// `DSEngineRequest::DeactivateEngine` request.
-    DeactivatedGracefully { recovered_save_state: AudioGraphSaveState },
+    DeactivatedGracefully,
     /// The engine has crashed.
-    EngineCrashed { error_msg: String, recovered_save_state: Option<AudioGraphSaveState> },
+    EngineCrashed { error_msg: String },
 }
 
 #[derive(Debug)]

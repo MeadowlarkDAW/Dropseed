@@ -1,10 +1,9 @@
-use dropseed_core::plugin::PluginInstanceID;
+use dropseed_core::plugin::{PluginInstanceID, PluginPreset};
 use std::path::PathBuf;
 
 use dropseed_core::transport::TempoMap;
 
 use crate::engine::main_thread::{ActivateEngineSettings, ModifyGraphRequest};
-use crate::graph::AudioGraphSaveState;
 
 #[derive(Debug, Clone)]
 /// A request to the engine.
@@ -22,11 +21,12 @@ pub enum DSEngineRequest {
     /// The engine cannot be used until it is reactivated.
     DeactivateEngine,
 
-    /// Restore the engine from a save state.
-    RestoreFromSaveState(AudioGraphSaveState),
-
-    /// Request the engine to return the latest save state.
-    RequestLatestSaveState,
+    /// Request to get the save state of all plugins that have changed since
+    /// the last request.
+    ///
+    /// Only the state of the plugins which have changed their save state since
+    /// the last request will be returned.
+    RequestLatestSaveStates,
 
     #[cfg(feature = "clap-host")]
     /// Add a directory to the list of directories to scan for CLAP plugins.
@@ -51,9 +51,12 @@ impl From<ModifyGraphRequest> for DSEngineRequest {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[derive(Debug, Clone)]
 /// A request to a specific instantiated Plugin
 pub enum PluginRequest {
     ShowGui,
     CloseGui,
+    /// Request the plugin to load a preset.
+    LoadPreset(PluginPreset),
+    GetLatestSaveState,
 }

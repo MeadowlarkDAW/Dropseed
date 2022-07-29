@@ -8,7 +8,10 @@ use clack_host::utils::{BeatTime, SecondsTime};
 use dropseed_core::transport::{
     LoopBackInfo, LoopState, LoopStateProcInfo, RangeChecker, SeekInfo, TempoMap, TransportInfo,
 };
-use meadowlark_core_types::time::{Frames, MusicalTime, SampleRate};
+use meadowlark_core_types::time::{Frames, MusicalTime, SampleRate, Seconds};
+
+mod declick;
+use declick::{JumpInfo, TransportDeclick};
 
 pub struct TransportSaveState {
     pub seek_to: MusicalTime,
@@ -116,12 +119,16 @@ pub struct TransportTask {
     bar_number: i32,
 
     playhead_frame_shared: Arc<AtomicU64>,
+
+    declick: Option<TransportDeclick>,
 }
 
 impl TransportTask {
     pub fn new(
         save_state: Option<TransportSaveState>,
         sample_rate: SampleRate,
+        max_frames: usize,
+        declick_time: Option<Seconds>,
         coll_handle: basedrop::Handle,
     ) -> (Self, TransportHandle) {
         let save_state = save_state.unwrap_or_default();
@@ -166,6 +173,12 @@ impl TransportTask {
         let (tsig_num, tsig_denom) = tempo_map.tsig_at_frame(playhead_frame);
         let (bar_number, bar_start) = tempo_map.current_bar_at_frame(playhead_frame);
 
+        let declick = if let Some(declick_time) = declick_time {
+            Some(TransportDeclick::new(max_frames, declick_time, sample_rate, &coll_handle))
+        } else {
+            None
+        };
+
         (
             TransportTask {
                 parameters: Shared::clone(&parameters),
@@ -192,6 +205,7 @@ impl TransportTask {
                 bar_start,
                 bar_number,
                 playhead_frame_shared: Arc::clone(&playhead_frame_shared),
+                declick,
             },
             TransportHandle {
                 parameters,
@@ -293,7 +307,6 @@ impl TransportTask {
         self.playhead_frame = self.next_playhead_frame;
         if self.is_playing {
             // Advance the playhead.
-            let mut did_loop = false;
             if let LoopStateProcInfo::Active { loop_start_frame, loop_end_frame } = self.loop_state
             {
                 if self.playhead_frame < loop_end_frame
@@ -315,12 +328,10 @@ impl TransportTask {
                         loop_end: loop_end_frame,
                         playhead_end: self.next_playhead_frame,
                     });
-
-                    did_loop = true;
                 }
             }
 
-            if !did_loop {
+            if self.loop_back_info.is_none() {
                 self.next_playhead_frame = self.playhead_frame + proc_frames;
 
                 self.range_checker = RangeChecker::Playing { end_frame: self.next_playhead_frame };
@@ -390,6 +401,22 @@ impl TransportTask {
             None
         };
 
+        let declick_info = if let Some(declick) = &mut self.declick {
+            let jump_info = if let Some(info) = &self.loop_back_info {
+                JumpInfo::Looped(info)
+            } else if let Some(info) = &self.seek_info {
+                JumpInfo::Seeked(info)
+            } else {
+                JumpInfo::None
+            };
+
+            declick.process(self.playhead_frame, frames, self.is_playing, jump_info);
+
+            Some(declick.get_info())
+        } else {
+            None
+        };
+
         TransportInfo::_new(
             self.playhead_frame,
             self.is_playing,
@@ -398,6 +425,7 @@ impl TransportTask {
             self.seek_info,
             self.range_checker,
             event,
+            declick_info,
         )
     }
 }
