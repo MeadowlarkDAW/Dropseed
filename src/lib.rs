@@ -23,7 +23,6 @@ pub use engine::main_thread::{
 pub use engine::plugin_scanner::{RescanPluginDirectoriesRes, ScannedPlugin};
 pub use graph::schedule::transport_task::{TransportHandle, TransportSaveState};
 pub use graph::{
-    ActivatePluginError, AudioGraphSaveState, Edge, NewPluginRes, ParamGestureInfo,
-    ParamModifiedInfo, PluginActivationStatus, PluginEdges, PluginHandle, PluginParamsExt,
-    PortType,
+    ActivatePluginError, Edge, NewPluginRes, ParamGestureInfo, ParamModifiedInfo,
+    PluginActivationStatus, PluginEdges, PluginHandle, PluginParamsExt, PortType,
 };

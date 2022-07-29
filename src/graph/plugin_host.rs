@@ -266,7 +266,7 @@ impl PluginInstanceHost {
     ) -> Self {
         let state = Arc::new(SharedPluginState::new());
 
-        if let Some(preset) = &save_state.preset {
+        if let Some(preset) = save_state.preset.clone() {
             if let Some(main_thread) = &mut main_thread {
                 match main_thread.load_state(preset) {
                     Ok(()) => {
@@ -394,8 +394,29 @@ impl PluginInstanceHost {
         }
     }
 
+    pub fn load_preset(&mut self, preset: PluginPreset) {
+        if let Some(main_thread) = &mut self.main_thread {
+            match main_thread.load_state(preset) {
+                Ok(()) => {
+                    log::trace!("Plugin {:?} successfully loaded preset", &self.id);
+                }
+                Err(e) => {
+                    log::error!("Plugin {:?} failed to load preset: {}", &self.id, e);
+                }
+            }
+
+            self.save_state_dirty = true;
+        }
+    }
+
+    pub fn save_state_dirty(&self) -> bool {
+        self.save_state_dirty
+    }
+
     pub fn collect_save_state(&mut self) -> PluginSaveState {
         if self.save_state_dirty {
+            self.save_state_dirty = false;
+
             if let Some(main_thread) = &mut self.main_thread {
                 let preset = match main_thread.collect_save_state() {
                     Ok(preset) => preset.map(|bytes| PluginPreset {
@@ -418,6 +439,24 @@ impl PluginInstanceHost {
         }
 
         self.save_state.clone()
+    }
+
+    pub fn show_gui(&mut self) {
+        if let Some(main_thread) = &mut self.main_thread {
+            if !main_thread.is_gui_open() {
+                if let Err(e) = main_thread.open_gui(None) {
+                    log::warn!("Could not open GUI for plugin {:?}: {:?}", &self.id, e);
+                }
+            }
+        }
+    }
+
+    pub fn close_gui(&mut self) {
+        if let Some(main_thread) = &mut self.main_thread {
+            if main_thread.is_gui_open() {
+                main_thread.close_gui()
+            }
+        }
     }
 
     pub fn can_activate(&self) -> Result<(), ActivatePluginError> {
@@ -644,6 +683,10 @@ impl PluginInstanceHost {
         let request_flags = self.host_request.fetch_requests();
         let mut state = self.state.get_state();
 
+        if request_flags.contains(HostRequestFlags::MARK_DIRTY) {
+            self.save_state_dirty = true;
+        }
+
         if request_flags.contains(HostRequestFlags::CALLBACK) {
             plugin_main_thread.on_main_thread();
         }
@@ -674,8 +717,17 @@ impl PluginInstanceHost {
             params_queue.audio_to_main_param_value_rx.consume(|param_id, new_value| {
                 let is_gesturing = if let Some(gesture) = new_value.gesture {
                     let _ = self.gesturing_params.insert(*param_id, gesture.is_begin);
+
+                    if !gesture.is_begin {
+                        // Only mark the state dirty once the user has finished adjusting
+                        // the parameter.
+                        self.save_state_dirty = true;
+                    }
+
                     gesture.is_begin
                 } else {
+                    self.save_state_dirty = true;
+
                     *self.gesturing_params.get(param_id).unwrap_or(&false)
                 };
 
@@ -694,6 +746,7 @@ impl PluginInstanceHost {
             self.state.set_state(PluginState::Inactive);
 
             self.param_queues = None;
+            self.save_state_dirty = true;
 
             if !self.remove_requested {
                 let mut res = OnIdleResult::PluginDeactivated;
@@ -720,6 +773,8 @@ impl PluginInstanceHost {
             } else if state == PluginState::Inactive || state == PluginState::InactiveWithError {
                 let res = match self.activate(sample_rate, min_frames, max_frames, coll_handle) {
                     Ok((ui_handle, param_values)) => {
+                        self.save_state_dirty = true;
+
                         OnIdleResult::PluginActivated(ui_handle, param_values)
                     }
                     Err(e) => OnIdleResult::PluginFailedToActivate(e),

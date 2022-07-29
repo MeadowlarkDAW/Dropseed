@@ -191,7 +191,7 @@ impl PluginMainThread for ClapPluginMainThread {
         }
     }
 
-    fn load_state(&mut self, preset: &PluginPreset) -> Result<(), String> {
+    fn load_state(&mut self, preset: PluginPreset) -> Result<(), String> {
         if let Some(state_ext) = self.instance.shared_host_data().state_ext {
             let mut reader = Cursor::new(&preset.bytes);
 

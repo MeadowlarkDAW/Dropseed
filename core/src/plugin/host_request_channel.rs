@@ -43,6 +43,12 @@ bitflags! {
 
         /// Should register the connection to the UI was lost
         const GUI_DESTROYED = 1 << 12;
+
+        /// The plugin has changed its state and it should be saved again.
+        ///
+        /// (Note that when a parameter value changes, it is implicit that
+        /// the state is dirty and no there is no need to set this flag.)
+        const MARK_DIRTY = 1 << 13;
     }
 }
 

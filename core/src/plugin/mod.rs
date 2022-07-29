@@ -140,7 +140,7 @@ pub trait PluginMainThread {
     ///
     /// `[main-thread]`
     #[allow(unused)]
-    fn load_state(&mut self, preset: &PluginPreset) -> Result<(), String> {
+    fn load_state(&mut self, preset: PluginPreset) -> Result<(), String> {
         Ok(())
     }
 

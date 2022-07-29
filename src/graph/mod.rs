@@ -16,7 +16,6 @@ pub(crate) mod shared_pool;
 pub(crate) mod buffers;
 
 mod compiler;
-mod save_state;
 mod verifier;
 
 use dropseed_core::plugin::ext::audio_ports::{MainPortsLayout, PluginAudioPortsExt};
@@ -34,7 +33,7 @@ use shared_pool::{PluginInstanceHostEntry, SharedPluginPool};
 use verifier::Verifier;
 
 use crate::engine::events::from_engine::{DSEngineEvent, PluginEvent};
-use crate::engine::main_thread::{EdgeReq, EdgeReqPortID, PluginIDReq};
+use crate::engine::main_thread::{EdgeReq, EdgeReqPortID};
 use crate::engine::plugin_scanner::{NewPluginInstanceError, PluginScanner};
 use crate::graph::plugin_host::PluginInstanceHost;
 use crate::utils::thread_id::SharedThreadIDs;
@@ -44,7 +43,6 @@ pub use compiler::GraphCompilerError;
 pub use plugin_host::{
     ActivatePluginError, ParamGestureInfo, ParamModifiedInfo, PluginHandle, PluginParamsExt,
 };
-pub use save_state::{AudioGraphSaveState, EdgeSaveState};
 pub use verifier::VerifyScheduleError;
 
 /// A default port type for general purpose applications
@@ -619,57 +617,6 @@ impl AudioGraph {
         }
     }
 
-    pub fn collect_save_state(&mut self) -> AudioGraphSaveState {
-        log::trace!("Collecting audio graph save state...");
-
-        let num_plugins = self.shared_plugin_pool.plugins.len();
-
-        let mut plugin_save_states: Vec<PluginSaveState> = Vec::with_capacity(num_plugins);
-        let mut edge_save_states: Vec<EdgeSaveState> = Vec::with_capacity(num_plugins * 3);
-
-        let mut node_ref_to_index: FnvHashMap<usize, usize> = FnvHashMap::default();
-        node_ref_to_index.reserve(num_plugins);
-
-        for (index, (plugin_id, plugin_entry)) in
-            self.shared_plugin_pool.plugins.iter_mut().enumerate()
-        {
-            if node_ref_to_index.insert(plugin_id._node_ref(), index).is_some() {
-                // In theory this should never happen.
-                panic!("More than one plugin with node ref: {:?}", plugin_id._node_ref());
-            }
-
-            // These are the only two "plugins" without a save state.
-            if plugin_id._node_ref() == self.graph_in_node_id._node_ref()
-                || plugin_id._node_ref() == self.graph_out_node_id._node_ref()
-            {
-                continue;
-            }
-
-            plugin_save_states.push(plugin_entry.plugin_host.collect_save_state());
-        }
-
-        // Iterate again to get all the edges.
-        for plugin_id in self.shared_plugin_pool.plugins.keys() {
-            for edge in self.abstract_graph.node_edges(NodeRef::new(plugin_id._node_ref())).unwrap()
-            {
-                let src_port = self.abstract_graph.port_ident(edge.src_port).unwrap();
-                let dst_port = self.abstract_graph.port_ident(edge.dst_port).unwrap();
-
-                edge_save_states.push(EdgeSaveState {
-                    edge_type: edge.port_type,
-                    src_plugin_i: *node_ref_to_index.get(&edge.src_node.as_usize()).unwrap(),
-                    dst_plugin_i: *node_ref_to_index.get(&edge.dst_node.as_usize()).unwrap(),
-                    src_port_stable_id: src_port.port_stable_id,
-                    src_port_channel: src_port.port_channel,
-                    dst_port_stable_id: dst_port.port_stable_id,
-                    dst_port_channel: dst_port.port_channel,
-                });
-            }
-        }
-
-        AudioGraphSaveState { plugins: plugin_save_states, edges: edge_save_states }
-    }
-
     pub fn reset(&mut self) {
         // Try to gracefully remove all existing plugins.
         for plugin_entry in self.shared_plugin_pool.plugins.values_mut() {
@@ -823,83 +770,6 @@ impl AudioGraph {
         // ----------------------------------------------------------------------------------------
     }
 
-    pub fn restore_from_save_state(
-        &mut self,
-        save_state: &AudioGraphSaveState,
-        plugin_scanner: &mut PluginScanner,
-        fallback_to_other_formats: bool,
-    ) -> (Vec<NewPluginRes>, Vec<(PluginInstanceID, PluginEdges)>) {
-        log::info!("Restoring audio graph from save state...");
-
-        self.reset();
-
-        let mut plugin_results: Vec<NewPluginRes> = Vec::with_capacity(save_state.plugins.len());
-
-        for plugin_save_state in save_state.plugins.iter() {
-            plugin_results.push(self.add_new_plugin_instance(
-                plugin_save_state.clone(),
-                plugin_scanner,
-                fallback_to_other_formats,
-            ));
-        }
-
-        for edge_save_state in save_state.edges.iter() {
-            if edge_save_state.src_plugin_i >= plugin_results.len() + 2 {
-                log::error!(
-                    "Could not connect edge from save state {:?}, Source plugin does not exist",
-                    edge_save_state
-                );
-                continue;
-            }
-            if edge_save_state.dst_plugin_i >= plugin_results.len() + 2 {
-                log::error!("Could not connect edge from save state {:?}, Destination plugin does not exist", edge_save_state);
-                continue;
-            }
-
-            let src_plugin_id = if edge_save_state.src_plugin_i == 0 {
-                self.graph_in_node_id.clone()
-            } else if edge_save_state.src_plugin_i == 1 {
-                self.graph_out_node_id.clone()
-            } else {
-                plugin_results[edge_save_state.src_plugin_i - 2].plugin_id.clone()
-            };
-
-            let dst_plugin_id = if edge_save_state.dst_plugin_i == 0 {
-                self.graph_in_node_id.clone()
-            } else if edge_save_state.dst_plugin_i == 1 {
-                self.graph_out_node_id.clone()
-            } else {
-                plugin_results[edge_save_state.dst_plugin_i - 2].plugin_id.clone()
-            };
-
-            let edge = EdgeReq {
-                edge_type: edge_save_state.edge_type,
-                src_plugin_id: PluginIDReq::Added(0),
-                dst_plugin_id: PluginIDReq::Added(0),
-                src_port_id: EdgeReqPortID::StableID(edge_save_state.src_port_stable_id),
-                src_port_channel: edge_save_state.src_port_channel,
-                dst_port_id: EdgeReqPortID::StableID(edge_save_state.dst_port_stable_id),
-                dst_port_channel: edge_save_state.dst_port_channel,
-                log_error_on_fail: true,
-            };
-
-            if let Err(e) = self.connect_edge(&edge, &src_plugin_id, &dst_plugin_id) {
-                log::error!("Could not connect edge from save state {:?}, {}", edge_save_state, e);
-            }
-        }
-
-        let plugins_new_edges: Vec<(PluginInstanceID, PluginEdges)> = plugin_results
-            .iter()
-            .map(|plugin_res| {
-                let id = plugin_res.plugin_id.clone();
-                let edges = self.get_plugin_edges(&id).unwrap();
-                (id, edges)
-            })
-            .collect();
-
-        (plugin_results, plugins_new_edges)
-    }
-
     /// Compile the audio graph into a schedule that is sent to the audio thread.
     ///
     /// If an error is returned then the graph **MUST** be restored with the previous
@@ -934,6 +804,18 @@ impl AudioGraph {
                 Err(e)
             }
         }
+    }
+
+    pub fn collect_save_states(&mut self) -> Vec<(PluginInstanceID, PluginSaveState)> {
+        let mut res: Vec<(PluginInstanceID, PluginSaveState)> = Vec::new();
+
+        for plugin in self.shared_plugin_pool.plugins.values_mut() {
+            if plugin.plugin_host.save_state_dirty() {
+                res.push((plugin.plugin_host.id.clone(), plugin.plugin_host.collect_save_state()));
+            }
+        }
+
+        res
     }
 
     pub fn on_idle(&mut self, mut event_tx: Option<&mut Sender<DSEngineEvent>>) -> bool {

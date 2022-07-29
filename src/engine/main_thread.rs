@@ -23,7 +23,7 @@ use crate::engine::events::from_engine::{
 use crate::engine::events::to_engine::{DSEngineRequest, PluginRequest};
 use crate::engine::plugin_scanner::PluginScanner;
 use crate::graph::schedule::transport_task::TransportHandle;
-use crate::graph::{AudioGraph, AudioGraphSaveState, Edge, NewPluginRes, PluginEdges, PortType};
+use crate::graph::{AudioGraph, Edge, NewPluginRes, PluginEdges, PortType};
 use crate::utils::thread_id::SharedThreadIDs;
 
 static ENGINE_THREAD_UPDATE_INTERVAL: Duration = Duration::from_millis(10);
@@ -88,10 +88,7 @@ impl DSEngineMainThread {
                     DSEngineRequest::ModifyGraph(req) => self.modify_graph(req),
                     DSEngineRequest::ActivateEngine(settings) => self.activate_engine(&settings),
                     DSEngineRequest::DeactivateEngine => self.deactivate_engine(),
-                    DSEngineRequest::RestoreFromSaveState(save_state) => {
-                        self.restore_audio_graph_from_save_state(&save_state)
-                    }
-                    DSEngineRequest::RequestLatestSaveState => self.request_latest_save_state(),
+                    DSEngineRequest::RequestLatestSaveStates => self.request_latest_save_states(),
 
                     #[cfg(feature = "clap-host")]
                     DSEngineRequest::AddClapScanDirectory(path) => {
@@ -129,21 +126,21 @@ impl DSEngineMainThread {
                             .and_then(|a| a.shared_plugin_pool.plugins.get_mut(&instance_id));
 
                         if let Some(plugin) = plugin {
-                            if let Some(main_thread) = plugin.plugin_host.main_thread.as_mut() {
-                                // TODO: check this in a separate method
-                                match request {
-                                    PluginRequest::ShowGui => {
-                                        if !main_thread.is_gui_open() {
-                                            if let Err(e) = main_thread.open_gui(None) {
-                                                warn!("{:?}", e)
-                                            }
-                                        }
-                                    }
-                                    PluginRequest::CloseGui => {
-                                        if main_thread.is_gui_open() {
-                                            main_thread.close_gui()
-                                        }
-                                    }
+                            match request {
+                                PluginRequest::ShowGui => plugin.plugin_host.show_gui(),
+                                PluginRequest::CloseGui => plugin.plugin_host.close_gui(),
+                                PluginRequest::LoadPreset(preset) => {
+                                    plugin.plugin_host.load_preset(preset)
+                                }
+                                PluginRequest::GetLatestSaveState => {
+                                    let state = plugin.plugin_host.collect_save_state();
+
+                                    self.event_tx
+                                        .send(DSEngineEvent::NewSaveStates(vec![(
+                                            instance_id.clone(),
+                                            state,
+                                        )]))
+                                        .unwrap();
                                 }
                             }
                         } else {
@@ -432,8 +429,6 @@ impl DSEngineMainThread {
 
         log::info!("Deactivating RustyDAW engine");
 
-        let save_state = self.audio_graph.as_mut().unwrap().collect_save_state();
-
         self.audio_graph = None;
 
         if let Some(run_process_thread) = self.run_process_thread.take() {
@@ -444,65 +439,23 @@ impl DSEngineMainThread {
         self.tempo_map_shared = None;
 
         self.event_tx
-            .send(DSEngineEvent::EngineDeactivated(EngineDeactivatedInfo::DeactivatedGracefully {
-                recovered_save_state: save_state,
-            }))
+            .send(DSEngineEvent::EngineDeactivated(EngineDeactivatedInfo::DeactivatedGracefully))
             .unwrap();
     }
 
-    fn restore_audio_graph_from_save_state(&mut self, save_state: &AudioGraphSaveState) {
+    fn request_latest_save_states(&mut self) {
         if self.audio_graph.is_none() {
-            log::warn!(
-                "Ignored request to restore audio graph from save state: Engine is deactivated"
-            );
+            log::warn!("Ignored request for the latest save states: Engine is deactivated");
             return;
         }
 
-        log::info!("Restoring audio graph from save state...");
+        log::trace!("Got request for latest plugin save states");
 
-        log::debug!("Save state: {:?}", save_state);
+        let res = self.audio_graph.as_mut().unwrap().collect_save_states();
 
-        self.event_tx.send(DSEngineEvent::AudioGraphCleared).unwrap();
-
-        let (plugins_res, plugins_edges) = self
-            .audio_graph
-            .as_mut()
-            .unwrap()
-            .restore_from_save_state(save_state, &mut self.plugin_scanner, true);
-
-        self.compile_audio_graph();
-
-        if self.audio_graph.is_some() {
-            log::info!("Restoring audio graph from save state successful");
-
-            let save_state = self.audio_graph.as_mut().unwrap().collect_save_state();
-
-            let res = ModifyGraphRes {
-                new_plugins: plugins_res,
-                removed_plugins: Vec::new(),
-                updated_plugin_edges: plugins_edges,
-            };
-
-            self.event_tx.send(DSEngineEvent::AudioGraphModified(res)).unwrap();
-
-            self.event_tx.send(DSEngineEvent::NewSaveState(save_state)).unwrap();
+        if !res.is_empty() {
+            self.event_tx.send(DSEngineEvent::NewSaveStates(res)).unwrap();
         }
-    }
-
-    fn request_latest_save_state(&mut self) {
-        if self.audio_graph.is_none() {
-            log::warn!(
-                "Ignored request for the latest audio graph save state: Engine is deactivated"
-            );
-            return;
-        }
-
-        log::trace!("Got request for latest audio graph save state");
-
-        // TODO: Collect save state in a separate thread?
-        let save_state = self.audio_graph.as_mut().unwrap().collect_save_state();
-
-        self.event_tx.send(DSEngineEvent::NewSaveState(save_state)).unwrap();
     }
 
     fn compile_audio_graph(&mut self) {
@@ -522,10 +475,7 @@ impl DSEngineMainThread {
                     // TODO: Try to recover save state?
                     self.event_tx
                         .send(DSEngineEvent::EngineDeactivated(
-                            EngineDeactivatedInfo::EngineCrashed {
-                                error_msg: format!("{}", e),
-                                recovered_save_state: None,
-                            },
+                            EngineDeactivatedInfo::EngineCrashed { error_msg: format!("{}", e) },
                         ))
                         .unwrap();
 
