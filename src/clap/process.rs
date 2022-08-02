@@ -5,9 +5,9 @@ use clack_host::instance::processor::audio::{
 };
 use std::ops::{Deref, DerefMut};
 
-use dropseed_core::plugin::buffer::RawAudioChannelBuffers;
-use dropseed_core::plugin::ext::audio_ports::PluginAudioPortsExt;
-use dropseed_core::plugin::ProcBuffers;
+use dropseed_plugin_api::buffer::RawAudioChannelBuffers;
+use dropseed_plugin_api::ext::audio_ports::PluginAudioPortsExt;
+use dropseed_plugin_api::ProcBuffers;
 
 // Deref coercion struggles to go from AtomicRefMut<Vec<T>> to [T]
 struct BorrowedBuffer<'a, T>(AtomicRefMut<'a, Vec<T>>);

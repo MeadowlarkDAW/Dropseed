@@ -4,11 +4,11 @@ use std::str::FromStr;
 use std::{collections::HashMap, error::Error};
 use walkdir::WalkDir;
 
-use dropseed_core::plugin::{
+use dropseed_plugin_api::plugin_scanner::{PluginFormat, ScannedPluginKey};
+use dropseed_plugin_api::{
     HostInfo, HostRequestChannelReceiver, PluginDescriptor, PluginFactory, PluginInstanceID,
     PluginInstanceType, PluginSaveState,
 };
-use dropseed_core::plugin_scanner::{PluginFormat, ScannedPluginKey};
 
 use crate::graph::plugin_host::PluginInstanceHost;
 use crate::utils::thread_id::SharedThreadIDs;

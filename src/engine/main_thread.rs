@@ -12,9 +12,9 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 use thread_priority::ThreadPriority;
 
-use dropseed_core::plugin::{HostInfo, PluginFactory, PluginInstanceID, PluginSaveState};
-use dropseed_core::plugin_scanner::ScannedPluginKey;
-use dropseed_core::transport::TempoMap;
+use dropseed_plugin_api::plugin_scanner::ScannedPluginKey;
+use dropseed_plugin_api::transport::TempoMap;
+use dropseed_plugin_api::{HostInfo, PluginFactory, PluginInstanceID, PluginSaveState};
 
 use crate::engine::audio_thread::DSEngineAudioThread;
 use crate::engine::events::from_engine::{

@@ -1,5 +1,5 @@
 use clack_host::instance::PluginInstance;
-use dropseed_core::plugin::ext::audio_ports::PluginAudioPortsExt;
+use dropseed_plugin_api::ext::audio_ports::PluginAudioPortsExt;
 
 pub(crate) mod factory;
 

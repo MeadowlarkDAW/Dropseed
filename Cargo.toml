@@ -14,7 +14,7 @@ readme = "README.md"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [workspace]
-members = ["examples/test-host", "core"]
+members = ["examples/test-host", "plugin-api"]
 
 [features]
 default = ["clap-host", "cpal-backend"]
@@ -23,7 +23,7 @@ cpal-backend = ["cpal"]
 cpal-asio = ["cpal/asio"]
 
 [dependencies]
-dropseed-core = { path = "./core" }
+dropseed-plugin-api = { path = "./plugin-api" }
 meadowlark-core-types = "0.3"
 audio-graph = { git = "https://github.com/MeadowlarkDAW/audio-graph", branch = "main" }
 clack-host = { git = "https://github.com/prokopyl/clack", rev = "782bbfce72f6b3505dc70807bbebadcb3dc5ac1b" }

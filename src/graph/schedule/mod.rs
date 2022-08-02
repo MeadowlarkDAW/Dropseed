@@ -2,8 +2,8 @@ use atomic_refcell::AtomicRefCell;
 use basedrop::{Shared, SharedCell};
 use smallvec::SmallVec;
 
-use dropseed_core::plugin::buffer::SharedBuffer;
-use dropseed_core::plugin::ProcInfo;
+use dropseed_plugin_api::buffer::SharedBuffer;
+use dropseed_plugin_api::ProcInfo;
 
 use crate::utils::thread_id::SharedThreadIDs;
 

@@ -6,8 +6,8 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use dropseed_core::plugin::{HostInfo, PluginFactory};
-use dropseed_core::plugin_scanner::ScannedPluginKey;
+use dropseed_plugin_api::plugin_scanner::ScannedPluginKey;
+use dropseed_plugin_api::{HostInfo, PluginFactory};
 
 use crate::engine::events::from_engine::DSEngineEvent;
 use crate::engine::events::to_engine::DSEngineRequest;

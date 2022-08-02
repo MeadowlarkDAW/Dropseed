@@ -6,9 +6,9 @@ use std::error::Error;
 
 use crate::graph::buffers::plugin::PluginEventIoBuffers;
 use crate::graph::buffers::pool::SharedBufferPool;
-use dropseed_core::plugin::buffer::{AudioPortBuffer, AudioPortBufferMut, SharedBuffer};
-use dropseed_core::plugin::ext::audio_ports::MainPortsLayout;
-use dropseed_core::plugin::ProcBuffers;
+use dropseed_plugin_api::buffer::{AudioPortBuffer, AudioPortBufferMut, SharedBuffer};
+use dropseed_plugin_api::ext::audio_ports::MainPortsLayout;
+use dropseed_plugin_api::ProcBuffers;
 
 use super::schedule::transport_task::TransportTask;
 use crate::graph::shared_pool::{DelayCompKey, SharedDelayCompNode};

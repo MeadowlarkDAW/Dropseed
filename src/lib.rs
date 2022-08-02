@@ -8,7 +8,7 @@ mod clap;
 
 pub mod utils;
 
-pub use dropseed_core::*;
+pub use dropseed_plugin_api as plugin_api;
 
 pub use engine::audio_thread::DSEngineAudioThread;
 pub use engine::events::from_engine::{

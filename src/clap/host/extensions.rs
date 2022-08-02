@@ -7,7 +7,7 @@ use clack_extensions::params::{
     HostParamsImplementation, HostParamsImplementationMainThread, ParamClearFlags, ParamRescanFlags,
 };
 use clack_extensions::thread_check::host::ThreadCheckImplementation;
-use dropseed_core::plugin::HostRequestFlags;
+use dropseed_plugin_api::HostRequestFlags;
 
 // TODO: Make sure that the log and print methods don't allocate on the current thread.
 // If they do, then we need to come up with a realtime-safe way to print to the terminal.

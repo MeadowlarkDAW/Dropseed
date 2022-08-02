@@ -3,7 +3,7 @@ use basedrop::Shared;
 use fnv::FnvHashMap;
 use std::hash::Hash;
 
-use dropseed_core::plugin::PluginInstanceID;
+use dropseed_plugin_api::PluginInstanceID;
 
 use super::plugin_host::{PluginInstanceHost, PluginInstanceHostAudioThread};
 use super::schedule::delay_comp_node::DelayCompNode;

@@ -1,5 +1,5 @@
 use crate::graph::buffers::events::{NoteEvent, ParamEvent};
-use dropseed_core::plugin::buffer::{DebugBufferID, DebugBufferType, SharedBuffer};
+use dropseed_plugin_api::buffer::{DebugBufferID, DebugBufferType, SharedBuffer};
 
 pub struct BufferPool<T: Clone + Copy + Send + Sync + 'static> {
     pool: Vec<SharedBuffer<T>>,

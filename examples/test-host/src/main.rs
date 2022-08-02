@@ -1,7 +1,7 @@
 use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::Stream;
 use crossbeam_channel::Receiver;
-use dropseed::plugin::{HostInfo, PluginInstanceID};
+use dropseed::plugin_api::{HostInfo, PluginInstanceID};
 use dropseed::{
     ActivateEngineSettings, DSEngineAudioThread, DSEngineEvent, DSEngineHandle, DSEngineRequest,
     EngineDeactivatedInfo, PluginActivationStatus, PluginEvent, PluginScannerEvent, ScannedPlugin,

@@ -1,12 +1,12 @@
-use crate::transport::TempoMap;
 use basedrop::Shared;
 use clack_extensions::gui::GuiError;
 use clack_host::events::io::EventBuffer;
 use meadowlark_core_types::time::SampleRate;
 
 pub mod buffer;
-pub use clack_host::events::event_types as event;
 pub mod ext;
+pub mod plugin_scanner;
+pub mod transport;
 
 mod host_info;
 mod host_request_channel;
@@ -14,13 +14,18 @@ mod instance_id;
 mod process_info;
 mod save_state;
 
-pub use event::*;
+pub use buffer::{AudioPortBuffer, AudioPortBufferMut};
 pub use ext::params::ParamID;
 pub use host_info::HostInfo;
 pub use host_request_channel::*;
 pub use instance_id::*;
 pub use process_info::{ProcBuffers, ProcInfo, ProcessStatus};
 pub use save_state::{PluginPreset, PluginSaveState};
+
+pub use clack_host::events::event_types as event;
+pub use clack_host::utils::FixedPoint;
+
+use transport::TempoMap;
 
 /// The description of a plugin.
 #[derive(Debug, Clone)]

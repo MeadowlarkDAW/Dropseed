@@ -3,8 +3,8 @@ use std::fmt::{Debug, Error, Formatter, Write};
 
 use crate::graph::buffers::events::{NoteEvent, ParamEvent};
 use crate::graph::buffers::plugin::PluginEventIoBuffers;
-use dropseed_core::plugin::buffer::SharedBuffer;
-use dropseed_core::plugin::{ProcBuffers, ProcInfo};
+use dropseed_plugin_api::buffer::SharedBuffer;
+use dropseed_plugin_api::{ProcBuffers, ProcInfo};
 
 use crate::graph::shared_pool::{SharedDelayCompNode, SharedPluginHostAudioThread};
 

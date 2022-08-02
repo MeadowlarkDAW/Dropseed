@@ -1,6 +1,6 @@
 use atomic_refcell::AtomicRefCell;
 use basedrop::Shared;
-use dropseed_core::transport::{DeclickBuffers, DeclickInfo, LoopBackInfo, SeekInfo};
+use dropseed_plugin_api::transport::{DeclickBuffers, DeclickInfo, LoopBackInfo, SeekInfo};
 use meadowlark_core_types::time::{Frames, SampleRate, Seconds};
 
 pub(super) enum JumpInfo<'a> {

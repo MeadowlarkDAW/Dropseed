@@ -18,13 +18,13 @@ pub(crate) mod buffers;
 mod compiler;
 mod verifier;
 
-use dropseed_core::plugin::ext::audio_ports::{MainPortsLayout, PluginAudioPortsExt};
-use dropseed_core::plugin::ext::note_ports::PluginNotePortsExt;
-use dropseed_core::plugin::ext::params::ParamID;
-use dropseed_core::plugin::{
+use dropseed_plugin_api::ext::audio_ports::{MainPortsLayout, PluginAudioPortsExt};
+use dropseed_plugin_api::ext::note_ports::PluginNotePortsExt;
+use dropseed_plugin_api::ext::params::ParamID;
+use dropseed_plugin_api::transport::TempoMap;
+use dropseed_plugin_api::{
     HostRequestChannelReceiver, PluginInstanceID, PluginInstanceType, PluginSaveState,
 };
-use dropseed_core::transport::TempoMap;
 
 use plugin_host::OnIdleResult;
 use schedule::transport_task::{TransportHandle, TransportTask};

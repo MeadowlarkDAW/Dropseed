@@ -16,15 +16,15 @@ use std::sync::{
 
 use crate::graph::buffers::events::ParamEventType;
 use crate::{DSEngineEvent, PluginEvent};
-use dropseed_core::plugin::ext::audio_ports::PluginAudioPortsExt;
-use dropseed_core::plugin::ext::note_ports::PluginNotePortsExt;
-use dropseed_core::plugin::ext::params::{ParamID, ParamInfo, ParamInfoFlags};
-use dropseed_core::plugin::{
+use dropseed_plugin_api::ext::audio_ports::PluginAudioPortsExt;
+use dropseed_plugin_api::ext::note_ports::PluginNotePortsExt;
+use dropseed_plugin_api::ext::params::{ParamID, ParamInfo, ParamInfoFlags};
+use dropseed_plugin_api::plugin_scanner::{PluginFormat, ScannedPluginKey};
+use dropseed_plugin_api::transport::TempoMap;
+use dropseed_plugin_api::{
     HostRequestChannelReceiver, HostRequestFlags, PluginInstanceID, PluginMainThread, PluginPreset,
     PluginSaveState,
 };
-use dropseed_core::plugin_scanner::{PluginFormat, ScannedPluginKey};
-use dropseed_core::transport::TempoMap;
 
 use crate::graph::shared_pool::SharedPluginHostAudioThread;
 use crate::utils::reducing_queue::{

@@ -1,8 +1,8 @@
-use dropseed_core::plugin::buffer::DebugBufferID;
+use dropseed_plugin_api::buffer::DebugBufferID;
 use fnv::FnvHashSet;
 use std::error::Error;
 
-use dropseed_core::plugin::buffer::RawAudioChannelBuffers;
+use dropseed_plugin_api::buffer::RawAudioChannelBuffers;
 
 use super::PluginInstanceID;
 use super::{schedule::task::Task, Schedule};

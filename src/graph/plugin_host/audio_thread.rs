@@ -2,8 +2,8 @@ use crate::graph::buffers::plugin::PluginEventIoBuffers;
 use crate::graph::buffers::sanitization::PluginEventOutputSanitizer;
 use crate::graph::plugin_host::{ParamQueuesAudioThread, PluginState, SharedPluginState};
 use clack_host::events::Event;
-use dropseed_core::plugin::buffer::EventBuffer;
-use dropseed_core::plugin::{
+use dropseed_plugin_api::buffer::EventBuffer;
+use dropseed_plugin_api::{
     PluginAudioThread, PluginInstanceID, ProcBuffers, ProcInfo, ProcessStatus,
 };
 use std::sync::atomic::Ordering;

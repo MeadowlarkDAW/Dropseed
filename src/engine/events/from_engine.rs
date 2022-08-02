@@ -2,7 +2,7 @@ use fnv::FnvHashMap;
 use smallvec::SmallVec;
 use std::path::PathBuf;
 
-use dropseed_core::plugin::{ParamID, PluginInstanceID, PluginSaveState};
+use dropseed_plugin_api::{ParamID, PluginInstanceID, PluginSaveState};
 
 use crate::{
     engine::main_thread::{EngineActivatedInfo, ModifyGraphRes},

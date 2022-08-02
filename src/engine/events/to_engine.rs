@@ -1,7 +1,7 @@
-use dropseed_core::plugin::{PluginInstanceID, PluginPreset};
+use dropseed_plugin_api::{PluginInstanceID, PluginPreset};
 use std::path::PathBuf;
 
-use dropseed_core::transport::TempoMap;
+use dropseed_plugin_api::transport::TempoMap;
 
 use crate::engine::main_thread::{ActivateEngineSettings, ModifyGraphRequest};
 

@@ -1,7 +1,7 @@
 use smallvec::SmallVec;
 
-use dropseed_core::plugin::buffer::SharedBuffer;
-use dropseed_core::plugin::ProcInfo;
+use dropseed_plugin_api::buffer::SharedBuffer;
+use dropseed_plugin_api::ProcInfo;
 
 pub(crate) struct SumTask {
     pub audio_in: SmallVec<[SharedBuffer<f32>; 4]>,

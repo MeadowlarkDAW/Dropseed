@@ -1,5 +1,5 @@
-use dropseed::plugin::ext::params::ParamInfoFlags;
-use dropseed::plugin::{ParamID, PluginInstanceID, PluginSaveState};
+use dropseed::plugin_api::ext::params::ParamInfoFlags;
+use dropseed::plugin_api::{ParamID, PluginInstanceID, PluginSaveState};
 use dropseed::{
     DSEngineHandle, DSEngineRequest, EdgeReq, EdgeReqPortID, ModifyGraphRequest, ParamModifiedInfo,
     PluginHandle, PluginIDReq, PluginRequest, PortType,

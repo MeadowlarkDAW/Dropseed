@@ -1,5 +1,5 @@
 use crate::graph::buffers::events::{ParamEvent, ParamEventType, PluginEvent};
-use dropseed_core::plugin::ParamID;
+use dropseed_plugin_api::ParamID;
 use fnv::FnvHashMap;
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 

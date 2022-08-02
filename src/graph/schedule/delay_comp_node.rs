@@ -1,5 +1,5 @@
-use dropseed_core::plugin::buffer::SharedBuffer;
-use dropseed_core::plugin::ProcInfo;
+use dropseed_plugin_api::buffer::SharedBuffer;
+use dropseed_plugin_api::ProcInfo;
 
 pub(crate) struct DelayCompNode {
     buf: Vec<f32>,

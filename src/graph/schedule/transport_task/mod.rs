@@ -5,7 +5,7 @@ use basedrop::{Shared, SharedCell};
 use clack_host::events::event_types::{TransportEvent, TransportEventFlags};
 use clack_host::events::{EventFlags, EventHeader};
 use clack_host::utils::{BeatTime, SecondsTime};
-use dropseed_core::transport::{
+use dropseed_plugin_api::transport::{
     LoopBackInfo, LoopState, LoopStateProcInfo, RangeChecker, SeekInfo, TempoMap, TransportInfo,
 };
 use meadowlark_core_types::time::{Frames, MusicalTime, SampleRate, Seconds};

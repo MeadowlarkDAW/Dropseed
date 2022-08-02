@@ -6,12 +6,10 @@ use clack_extensions::gui::{GuiApiType, GuiError};
 use clack_host::events::io::{InputEvents, OutputEvents};
 use clack_host::instance::processor::PluginAudioProcessor;
 use clack_host::instance::{PluginAudioConfiguration, PluginInstance};
-use dropseed_core::plugin::buffer::RawAudioChannelBuffers;
-use dropseed_core::plugin::ext::audio_ports::{
-    AudioPortInfo, MainPortsLayout, PluginAudioPortsExt,
-};
-use dropseed_core::plugin::ext::params::{ParamID, ParamInfo, ParamInfoFlags};
-use dropseed_core::plugin::{
+use dropseed_plugin_api::buffer::RawAudioChannelBuffers;
+use dropseed_plugin_api::ext::audio_ports::{AudioPortInfo, MainPortsLayout, PluginAudioPortsExt};
+use dropseed_plugin_api::ext::params::{ParamID, ParamInfo, ParamInfoFlags};
+use dropseed_plugin_api::{
     buffer::EventBuffer, ext, PluginActivatedInfo, PluginAudioThread, PluginMainThread,
     PluginPreset, ProcBuffers, ProcInfo, ProcessStatus,
 };

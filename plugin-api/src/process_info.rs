@@ -2,7 +2,7 @@ use smallvec::SmallVec;
 
 use crate::transport::TransportInfo;
 
-use super::buffer::{AudioPortBuffer, AudioPortBufferMut};
+use crate::buffer::{AudioPortBuffer, AudioPortBufferMut};
 
 /// The status of a call to a plugin's `process()` method.
 #[repr(i32)]
