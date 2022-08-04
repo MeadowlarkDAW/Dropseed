@@ -1,7 +1,8 @@
-use crate::graph::buffers::events::{ParamEvent, ParamEventType, PluginEvent};
 use dropseed_plugin_api::ParamID;
 use fnv::FnvHashMap;
 use std::collections::hash_map::Entry::{Occupied, Vacant};
+
+use super::{ParamEvent, ParamEventType, PluginEvent};
 
 /// Sanitizes a plugin's event output stream, by wrapping an event iterator.
 ///

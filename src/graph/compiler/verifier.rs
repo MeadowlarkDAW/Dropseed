@@ -1,11 +1,9 @@
-use dropseed_plugin_api::buffer::DebugBufferID;
+use dropseed_plugin_api::buffer::{DebugBufferID, RawAudioChannelBuffers};
+use dropseed_plugin_api::PluginInstanceID;
 use fnv::FnvHashSet;
 use std::error::Error;
 
-use dropseed_plugin_api::buffer::RawAudioChannelBuffers;
-
-use super::PluginInstanceID;
-use super::{schedule::task::Task, Schedule};
+use crate::schedule::{tasks::Task, Schedule};
 
 pub(crate) struct Verifier {
     plugin_instances: FnvHashSet<u64>,
@@ -41,14 +39,14 @@ impl Verifier {
 
         self.plugin_instances.clear();
 
-        for task in schedule.tasks.iter() {
+        for task in schedule.tasks().iter() {
             self.buffer_instances.clear();
 
             match task {
                 Task::Plugin(t) => {
-                    if !self.plugin_instances.insert(t.plugin.id().unique_id()) {
+                    if !self.plugin_instances.insert(t.plugin_id.unique_id()) {
                         return Err(VerifyScheduleError::PluginInstanceAppearsTwiceInSchedule {
-                            plugin_id: t.plugin.id(),
+                            plugin_id: t.plugin_id,
                         });
                     }
 

@@ -10,8 +10,8 @@ use dropseed_plugin_api::buffer::RawAudioChannelBuffers;
 use dropseed_plugin_api::ext::audio_ports::{AudioPortInfo, MainPortsLayout, PluginAudioPortsExt};
 use dropseed_plugin_api::ext::params::{ParamID, ParamInfo, ParamInfoFlags};
 use dropseed_plugin_api::{
-    buffer::EventBuffer, ext, PluginActivatedInfo, PluginAudioThread, PluginMainThread,
-    PluginPreset, ProcBuffers, ProcInfo, ProcessStatus,
+    buffer::EventBuffer, ext, PluginActivatedInfo, PluginMainThread, PluginProcessThread,
+    ProcBuffers, ProcInfo, ProcessStatus,
 };
 use meadowlark_core_types::time::SampleRate;
 use smallvec::SmallVec;
@@ -160,7 +160,7 @@ impl PluginMainThread for ClapPluginMainThread {
         };
 
         Ok(PluginActivatedInfo {
-            audio_thread: Box::new(ClapPluginAudioThread {
+            processor: Box::new(ClapPluginProcessThread {
                 audio_processor: audio_processor.into(),
                 process: ClapProcess::new(&self.audio_ports_ext),
             }),
@@ -189,9 +189,9 @@ impl PluginMainThread for ClapPluginMainThread {
         }
     }
 
-    fn load_state(&mut self, preset: PluginPreset) -> Result<(), String> {
+    fn load_save_state(&mut self, state: Vec<u8>) -> Result<(), String> {
         if let Some(state_ext) = self.instance.shared_host_data().state_ext {
-            let mut reader = Cursor::new(&preset.bytes);
+            let mut reader = Cursor::new(&state);
 
             state_ext.load(self.instance.main_thread_plugin_data(), &mut reader).map_err(|_| {
                 format!(
@@ -345,12 +345,12 @@ impl PluginMainThread for ClapPluginMainThread {
     }
 }
 
-struct ClapPluginAudioThread {
+struct ClapPluginProcessThread {
     audio_processor: PluginAudioProcessor<ClapHost>,
     process: ClapProcess,
 }
 
-impl PluginAudioThread for ClapPluginAudioThread {
+impl PluginProcessThread for ClapPluginProcessThread {
     fn start_processing(&mut self) -> Result<(), ()> {
         log::trace!(
             "clap plugin instance start_processing {}",

@@ -1,4 +1,3 @@
-use atomic_refcell::AtomicRefCell;
 use audio_graph::{Graph, NodeRef};
 use basedrop::Shared;
 use crossbeam_channel::Sender;
@@ -9,41 +8,30 @@ use meadowlark_core_types::time::Seconds;
 use smallvec::SmallVec;
 use std::error::Error;
 
-pub(crate) mod plugin_host;
-pub(crate) mod schedule;
-pub(crate) mod shared_pool;
-
-pub(crate) mod buffers;
-
 mod compiler;
-mod verifier;
+
+pub(crate) mod shared_pools;
+
+pub use compiler::GraphCompilerError;
 
 use dropseed_plugin_api::ext::audio_ports::{MainPortsLayout, PluginAudioPortsExt};
 use dropseed_plugin_api::ext::note_ports::PluginNotePortsExt;
 use dropseed_plugin_api::ext::params::ParamID;
 use dropseed_plugin_api::transport::TempoMap;
 use dropseed_plugin_api::{
-    HostRequestChannelReceiver, PluginInstanceID, PluginInstanceType, PluginSaveState,
+    DSPluginSaveState, HostRequestChannelReceiver, PluginInstanceID, PluginInstanceType,
 };
-
-use plugin_host::OnIdleResult;
-use schedule::transport_task::{TransportHandle, TransportTask};
-use schedule::{Schedule, SharedSchedule};
-use shared_pool::{PluginInstanceHostEntry, SharedPluginPool};
-use verifier::Verifier;
 
 use crate::engine::events::from_engine::{DSEngineEvent, PluginEvent};
 use crate::engine::main_thread::{EdgeReq, EdgeReqPortID};
 use crate::engine::plugin_scanner::{NewPluginInstanceError, PluginScanner};
-use crate::graph::plugin_host::PluginInstanceHost;
+use crate::plugin_host::{ActivatePluginError, OnIdleResult};
+use crate::schedule::tasks::{TransportHandle, TransportTask};
+use crate::schedule::Schedule;
 use crate::utils::thread_id::SharedThreadIDs;
 
-use crate::graph::buffers::pool::SharedBufferPool;
-pub use compiler::GraphCompilerError;
-pub use plugin_host::{
-    ActivatePluginError, ParamGestureInfo, ParamModifiedInfo, PluginHandle, PluginParamsExt,
-};
-pub use verifier::VerifyScheduleError;
+use compiler::verifier::Verifier;
+use shared_pools::{GraphSharedPools, SharedSchedule};
 
 /// A default port type for general purpose applications
 #[repr(u8)]
@@ -77,27 +65,16 @@ pub struct PortChannelID {
 }
 
 pub(crate) struct AudioGraph {
-    // TODO: make a proper accessor
-    pub(crate) shared_plugin_pool: SharedPluginPool,
-    shared_buffer_pool: SharedBufferPool,
+    shared_pools: GraphSharedPools,
     verifier: Verifier,
 
     abstract_graph: Graph<PluginInstanceID, PortChannelID, PortType>,
     coll_handle: basedrop::Handle,
 
-    shared_schedule: SharedSchedule,
-
-    graph_in_node_id: PluginInstanceID,
-    graph_out_node_id: PluginInstanceID,
-
     graph_in_channels: u16,
     graph_out_channels: u16,
 
-    graph_in_rdn: Shared<String>,
-    graph_out_rdn: Shared<String>,
     temp_rdn: Shared<String>,
-
-    shared_transport_task: Shared<AtomicRefCell<TransportTask>>,
 
     sample_rate: SampleRate,
     min_frames: u32,
@@ -122,14 +99,6 @@ impl AudioGraph {
 
         let abstract_graph = Graph::default();
 
-        let shared_plugin_pool = SharedPluginPool::new();
-        let shared_buffer_pool = SharedBufferPool::new(
-            max_frames as usize,
-            note_buffer_size,
-            event_buffer_size,
-            coll_handle.clone(),
-        );
-
         let (transport_task, transport_handle) = TransportTask::new(
             None,
             sample_rate,
@@ -138,47 +107,26 @@ impl AudioGraph {
             coll_handle.clone(),
         );
 
-        let shared_transport_task = Shared::new(&coll_handle, AtomicRefCell::new(transport_task));
-
-        let (shared_schedule, shared_schedule_clone) = SharedSchedule::new(
-            Schedule::new(max_frames as usize, Shared::clone(&shared_transport_task)),
+        let (shared_pools, shared_schedule) = GraphSharedPools::new(
             thread_ids,
-            &coll_handle,
+            max_frames as usize,
+            note_buffer_size,
+            event_buffer_size,
+            transport_task,
+            coll_handle.clone(),
         );
 
-        let graph_in_rdn = Shared::new(&coll_handle, String::from("org.rustydaw.graph_in_node"));
-        let graph_out_rdn = Shared::new(&coll_handle, String::from("org.rustydaw.graph_out_node"));
-        let temp_rdn = Shared::new(&coll_handle, String::from("org.rustydaw.temporary_plugin_rdn"));
-
-        // These will get overwritten in the `reset()` method.
-        let graph_in_node_id = PluginInstanceID::_new(
-            0,
-            0,
-            PluginInstanceType::GraphInput,
-            Shared::clone(&graph_in_rdn),
-        );
-        let graph_out_node_id = PluginInstanceID::_new(
-            1,
-            1,
-            PluginInstanceType::GraphOutput,
-            Shared::clone(&graph_out_rdn),
-        );
+        let temp_rdn =
+            Shared::new(&coll_handle, String::from("app.meadowlark.temporary_plugin_rdn"));
 
         let mut new_self = Self {
-            shared_plugin_pool,
-            shared_buffer_pool,
+            shared_pools,
             verifier: Verifier::new(),
             abstract_graph,
             coll_handle,
-            shared_schedule,
-            graph_in_node_id,
-            graph_out_node_id,
             graph_in_channels,
             graph_out_channels,
-            graph_in_rdn,
-            graph_out_rdn,
             temp_rdn,
-            shared_transport_task,
             sample_rate,
             min_frames,
             max_frames,
@@ -186,20 +134,12 @@ impl AudioGraph {
 
         new_self.reset();
 
-        (new_self, shared_schedule_clone, transport_handle)
-    }
-
-    pub fn graph_in_node_id(&self) -> &PluginInstanceID {
-        &self.graph_in_node_id
-    }
-
-    pub fn graph_out_node_id(&self) -> &PluginInstanceID {
-        &self.graph_out_node_id
+        (new_self, shared_schedule, transport_handle)
     }
 
     pub fn add_new_plugin_instance(
         &mut self,
-        save_state: PluginSaveState,
+        save_state: DSPluginSaveState,
         plugin_scanner: &mut PluginScanner,
         fallback_to_other_formats: bool,
     ) -> NewPluginRes {
@@ -236,18 +176,8 @@ impl AudioGraph {
         let supports_gui =
             res.plugin_host.main_thread.as_ref().map(|m| m.supports_gui()).unwrap_or(false);
 
-        let entry = PluginInstanceHostEntry {
-            plugin_host: res.plugin_host,
-            port_channels_refs: FnvHashMap::default(),
-            main_audio_in_port_refs: Vec::new(),
-            main_audio_out_port_refs: Vec::new(),
-            automation_in_port_ref: None,
-            automation_out_port_ref: None,
-            main_note_in_port_ref: None,
-            main_note_out_port_ref: None,
-        };
-
-        if self.shared_plugin_pool.plugins.insert(plugin_id.clone(), entry).is_some() {
+        if self.shared_pools.plugin_hosts.pool.insert(plugin_id.clone(), res.plugin_host).is_some()
+        {
             panic!("Something went wrong when allocating a new slot for a plugin");
         }
 
@@ -264,17 +194,18 @@ impl AudioGraph {
         &mut self,
         id: &PluginInstanceID,
     ) -> Result<PluginActivationStatus, ()> {
-        let entry = if let Some(entry) = self.shared_plugin_pool.plugins.get_mut(id) {
-            entry
+        let plugin_host = if let Some(plugin_host) = self.shared_pools.plugin_hosts.pool.get_mut(id)
+        {
+            plugin_host
         } else {
             return Err(());
         };
 
-        if let Err(e) = entry.plugin_host.can_activate() {
+        if let Err(e) = plugin_host.can_activate() {
             return Ok(PluginActivationStatus::ActivationError(e));
         }
 
-        let activation_status = match entry.plugin_host.activate(
+        let activation_status = match plugin_host.activate(
             self.sample_rate,
             self.min_frames as u32,
             self.max_frames as u32,

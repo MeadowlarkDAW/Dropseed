@@ -6,6 +6,12 @@ use clack_host::events::io::EventBuffer;
 use clack_host::events::spaces::CoreEventSpace;
 use clack_host::events::{Event, EventHeader as ClackEventHeader, UnknownEvent};
 
+mod event_io_buffers;
+
+pub(super) mod sanitizer;
+
+pub(crate) use event_io_buffers::PluginEventIoBuffers;
+
 // Contents of NoteBuffer
 #[derive(Copy, Clone)]
 pub struct NoteEvent {

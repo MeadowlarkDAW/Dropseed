@@ -1,12 +1,15 @@
-use crate::graph::buffers::events::{NoteEvent, ParamEvent, PluginEvent};
-use crate::graph::buffers::sanitization::PluginEventOutputSanitizer;
-use crate::graph::plugin_host::AudioToMainParamValue;
-use crate::utils::reducing_queue::ReducFnvProducerRefMut;
 use clack_host::events::io::EventBuffer;
 use clack_host::utils::Cookie;
 use dropseed_plugin_api::buffer::SharedBuffer;
 use dropseed_plugin_api::ParamID;
 use smallvec::SmallVec;
+
+use crate::utils::reducing_queue::ReducFnvProducerRefMut;
+
+use super::super::channel::ProcToMainParamValue;
+use super::super::events::{
+    sanitizer::PluginEventOutputSanitizer, NoteEvent, ParamEvent, PluginEvent,
+};
 
 // TODO: remove pubs
 pub struct PluginEventIoBuffers {
@@ -79,7 +82,7 @@ impl PluginEventIoBuffers {
         &mut self,
         raw_event_buffer: &EventBuffer,
         mut external_parameter_queue: Option<
-            &mut ReducFnvProducerRefMut<ParamID, AudioToMainParamValue>,
+            &mut ReducFnvProducerRefMut<ParamID, ProcToMainParamValue>,
         >,
         sanitizer: &mut PluginEventOutputSanitizer,
         param_target_plugin_id: u64,
@@ -103,7 +106,7 @@ impl PluginEventIoBuffers {
 
                     if let Some(queue) = external_parameter_queue.as_mut() {
                         if let Some(value) =
-                            AudioToMainParamValue::from_param_event(event.event_type)
+                            ProcToMainParamValue::from_param_event(event.event_type)
                         {
                             queue.set_or_update(ParamID::new(event.parameter_id), value);
                         }

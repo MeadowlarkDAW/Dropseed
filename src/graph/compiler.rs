@@ -1,37 +1,33 @@
-use atomic_refcell::AtomicRefCell;
 use audio_graph::{Graph, ScheduledNode};
-use basedrop::Shared;
-use smallvec::SmallVec;
-use std::error::Error;
-
-use crate::graph::buffers::plugin::PluginEventIoBuffers;
-use crate::graph::buffers::pool::SharedBufferPool;
 use dropseed_plugin_api::buffer::{AudioPortBuffer, AudioPortBufferMut, SharedBuffer};
 use dropseed_plugin_api::ext::audio_ports::MainPortsLayout;
 use dropseed_plugin_api::ProcBuffers;
+use smallvec::SmallVec;
+use std::error::Error;
 
-use super::schedule::transport_task::TransportTask;
-use crate::graph::shared_pool::{DelayCompKey, SharedDelayCompNode};
-
-use super::{
-    schedule::sum::SumTask,
-    schedule::task::{DeactivatedPluginTask, DelayCompTask, PluginTask, Task},
-    shared_pool::SharedPluginPool,
-    verifier::{Verifier, VerifyScheduleError},
-    PluginInstanceID, PortChannelID, PortType, Schedule,
+use crate::plugin_host::events::PluginEventIoBuffers;
+use crate::schedule::tasks::{
+    DeactivatedPluginTask, DelayCompNode, DelayCompTask, PluginTask, SumTask, Task,
 };
 
+pub(super) mod verifier;
+
+use verifier::Verifier;
+
+pub use verifier::VerifyScheduleError;
+
+use super::shared_pools::{DelayCompKey, GraphSharedPools, SharedDelayCompNode};
+use super::{PluginInstanceID, PortChannelID, PortType, Schedule};
+
 pub(crate) fn compile_graph(
-    shared_plugin_pool: &mut SharedPluginPool,
-    shared_buffer_pool: &mut SharedBufferPool,
+    shared_pool: &mut GraphSharedPools,
     abstract_graph: &mut Graph<PluginInstanceID, PortChannelID, PortType>,
-    shared_transport_task: &Shared<AtomicRefCell<TransportTask>>,
     graph_in_node_id: &PluginInstanceID,
     graph_out_node_id: &PluginInstanceID,
     verifier: &mut Verifier,
     coll_handle: &basedrop::Handle,
 ) -> Result<Schedule, GraphCompilerError> {
-    let num_plugins = shared_plugin_pool.plugins.len();
+    let num_plugins = shared_pool.plugin_hosts.pool.len();
 
     let mut tasks: Vec<Task> = Vec::with_capacity(num_plugins * 2);
 
@@ -43,25 +39,27 @@ pub(crate) fn compile_graph(
     let mut max_graph_note_buffer_index = 0;
     let mut max_graph_automation_buffer_index = 0;
 
-    for node in shared_plugin_pool.delay_comp_nodes.values_mut() {
+    for node in shared_pool.delay_comp_nodes.pool.values_mut() {
         node.active = false;
     }
 
     let abstract_tasks = abstract_graph.compile();
     for abstract_task in abstract_tasks.iter() {
         let (
+            plugin_id,
             num_audio_in_channels,
             num_audio_out_channels,
-            plugin_audio_thread,
+            shared_processor,
             audio_ports_ext,
             note_ports_ext,
-        ) = if let Some(entry) = shared_plugin_pool.plugins.get(&abstract_task.node) {
+        ) = if let Some(plugin_host) = shared_pool.plugin_hosts.pool.get(&abstract_task.node) {
             (
-                entry.plugin_host.num_audio_in_channels,
-                entry.plugin_host.num_audio_out_channels,
-                entry.plugin_host.audio_thread.as_ref(),
-                entry.plugin_host.audio_ports_ext(),
-                entry.plugin_host.note_ports_ext(),
+                plugin_host.id(),
+                plugin_host.num_audio_in_channels(),
+                plugin_host.num_audio_out_channels(),
+                plugin_host.shared_processor(),
+                plugin_host.audio_ports_ext(),
+                plugin_host.note_ports_ext(),
             )
         } else {
             return Err(GraphCompilerError::UnexpectedError(format!(
@@ -120,13 +118,15 @@ pub(crate) fn compile_graph(
                         max_graph_audio_buffer_index =
                             max_graph_audio_buffer_index.max(buffer.buffer_id);
 
-                        let graph_buffer = shared_buffer_pool
+                        let graph_buffer = shared_pool
+                            .buffers
                             .audio_buffer_pool
                             .initialized_buffer_at_index(buffer.buffer_id);
 
                         let channel_buffer = if let Some(delay_comp_info) = &delay_comp_info {
                             // Add an intermediate buffer for the delay compensation task.
-                            let intermediary_buffer = shared_buffer_pool
+                            let intermediary_buffer = shared_pool
+                                .buffers
                                 .intermediary_audio_buffer_pool
                                 .initialized_buffer_at_index(intermediary_buffer_i);
 
@@ -142,23 +142,24 @@ pub(crate) fn compile_graph(
                             };
 
                             let delay_comp_node = if let Some(delay_node) =
-                                shared_plugin_pool.delay_comp_nodes.get_mut(&key)
+                                shared_pool.delay_comp_nodes.pool.get_mut(&key)
                             {
                                 delay_node.active = true;
                                 delay_node.clone()
                             } else {
                                 let new_delay_node = SharedDelayCompNode::new(
-                                    delay_comp_info.delay as u32,
+                                    DelayCompNode::new(delay_comp_info.delay as u32),
                                     coll_handle,
                                 );
-                                let _ = shared_plugin_pool
+                                let _ = shared_pool
                                     .delay_comp_nodes
+                                    .pool
                                     .insert(key, new_delay_node.clone());
                                 new_delay_node
                             };
 
                             tasks.push(Task::DelayComp(DelayCompTask {
-                                delay_comp_node,
+                                shared_node: delay_comp_node,
                                 audio_in: graph_buffer,
                                 audio_out: intermediary_buffer.clone(),
                             }));
@@ -183,7 +184,8 @@ pub(crate) fn compile_graph(
                         channel_buffers[0].clone()
                     } else {
                         // Add an intermediate buffer for the sum task.
-                        let intermediary_buffer = shared_buffer_pool
+                        let intermediary_buffer = shared_pool
+                            .buffers
                             .intermediary_audio_buffer_pool
                             .initialized_buffer_at_index(intermediary_buffer_i);
                         intermediary_buffer_i += 1;
@@ -209,7 +211,8 @@ pub(crate) fn compile_graph(
                         max_graph_automation_buffer_index =
                             max_graph_automation_buffer_index.max(buffer.buffer_id);
 
-                        let buffer = shared_buffer_pool
+                        let buffer = shared_pool
+                            .buffers
                             .param_event_buffer_pool
                             .buffer_at_index(buffer.buffer_id);
 
@@ -231,7 +234,8 @@ pub(crate) fn compile_graph(
                                     max_graph_note_buffer_index =
                                         max_graph_note_buffer_index.max(buffer.buffer_id);
 
-                                    let buffer = shared_buffer_pool
+                                    let buffer = shared_pool
+                                        .buffers
                                         .note_buffer_pool
                                         .buffer_at_index(buffer.buffer_id);
 
@@ -274,7 +278,8 @@ pub(crate) fn compile_graph(
                         next_audio_out_channel_index - 1
                     };
 
-                    let graph_buffer = shared_buffer_pool
+                    let graph_buffer = shared_pool
+                        .buffers
                         .audio_buffer_pool
                         .initialized_buffer_at_index(buffer.buffer_id);
                     plugin_out_channel_buffers[channel_index] = Some(graph_buffer);
@@ -283,7 +288,8 @@ pub(crate) fn compile_graph(
                     max_graph_automation_buffer_index =
                         max_graph_automation_buffer_index.max(buffer.buffer_id);
 
-                    let buffer = shared_buffer_pool
+                    let buffer = shared_pool
+                        .buffers
                         .param_event_buffer_pool
                         .buffer_at_index(buffer.buffer_id);
 
@@ -297,7 +303,8 @@ pub(crate) fn compile_graph(
                                 max_graph_note_buffer_index =
                                     max_graph_note_buffer_index.max(buffer.buffer_id);
 
-                                let buffer = shared_buffer_pool
+                                let buffer = shared_pool
+                                    .buffers
                                     .note_buffer_pool
                                     .buffer_at_index(buffer.buffer_id);
 
@@ -347,7 +354,7 @@ pub(crate) fn compile_graph(
             continue;
         }
 
-        if plugin_audio_thread.is_none() {
+        if shared_processor.is_none() {
             let mut audio_through: SmallVec<[(SharedBuffer<f32>, SharedBuffer<f32>); 4]> =
                 SmallVec::new();
             let mut extra_audio_out: SmallVec<[SharedBuffer<f32>; 4]> = SmallVec::new();
@@ -384,7 +391,7 @@ pub(crate) fn compile_graph(
             continue;
         }
 
-        let plugin_audio_thread = plugin_audio_thread.unwrap();
+        let shared_processor = shared_processor.unwrap();
         let audio_ports_ext = audio_ports_ext.as_ref().unwrap();
 
         let mut audio_in: SmallVec<[AudioPortBuffer; 2]> = SmallVec::new();
@@ -401,7 +408,7 @@ pub(crate) fn compile_graph(
 
             audio_in.push(AudioPortBuffer::_new(
                 buffers,
-                shared_buffer_pool.audio_buffer_pool.buffer_size() as u32,
+                shared_pool.buffers.audio_buffer_pool.buffer_size() as u32,
             ));
             // TODO: proper latency?
         }
@@ -416,15 +423,16 @@ pub(crate) fn compile_graph(
 
             audio_out.push(AudioPortBufferMut::_new(
                 buffers,
-                shared_buffer_pool.audio_buffer_pool.buffer_size() as u32,
+                shared_pool.buffers.audio_buffer_pool.buffer_size() as u32,
             ));
             // TODO: proper latency?
         }
 
-        let plugin_audio_thread = plugin_audio_thread.clone();
+        let shared_processor = shared_processor.clone();
 
         tasks.push(Task::Plugin(PluginTask {
-            plugin: plugin_audio_thread,
+            plugin_id: plugin_id.clone(),
+            shared_processor,
             buffers: ProcBuffers { audio_in, audio_out },
             event_buffers: PluginEventIoBuffers {
                 unmixed_param_in_buffers: automation_in_buffers,
@@ -435,13 +443,13 @@ pub(crate) fn compile_graph(
         }));
     }
 
-    let new_schedule = Schedule {
+    let new_schedule = Schedule::new(
         tasks,
         graph_audio_in,
         graph_audio_out,
-        max_block_size: shared_buffer_pool.audio_buffer_pool.buffer_size(),
-        shared_transport_task: Shared::clone(shared_transport_task),
-    };
+        shared_pool.transports.transport.clone(),
+        shared_pool.buffers.audio_buffer_pool.buffer_size(),
+    );
 
     // This is probably expensive, but I would like to keep this check here until we are very
     // confident in the stability and soundness of this audio graph compiler.
@@ -457,7 +465,7 @@ pub(crate) fn compile_graph(
         return Err(GraphCompilerError::VerifierError(e, abstract_tasks.to_vec(), new_schedule));
     }
 
-    shared_buffer_pool.remove_excess_buffers(
+    shared_pool.buffers.remove_excess_buffers(
         max_graph_audio_buffer_index,
         total_intermediary_buffers,
         max_graph_note_buffer_index,
@@ -468,8 +476,8 @@ pub(crate) fn compile_graph(
     //
     // Not stable yet apparently
     // plugin_pool.delay_comp_nodes.drain_filter(|_, node| !node.active);
-    shared_plugin_pool.delay_comp_nodes =
-        shared_plugin_pool.delay_comp_nodes.drain().filter(|(_, node)| node.active).collect();
+    shared_pool.delay_comp_nodes.pool =
+        shared_pool.delay_comp_nodes.pool.drain().filter(|(_, node)| node.active).collect();
 
     Ok(new_schedule)
 }

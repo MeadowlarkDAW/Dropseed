@@ -1,13 +1,11 @@
-use crate::graph::buffers::plugin::PluginEventIoBuffers;
-use crate::graph::buffers::sanitization::PluginEventOutputSanitizer;
-use crate::graph::plugin_host::{ParamQueuesAudioThread, PluginState, SharedPluginState};
 use clack_host::events::Event;
 use dropseed_plugin_api::buffer::EventBuffer;
 use dropseed_plugin_api::{
-    PluginAudioThread, PluginInstanceID, ProcBuffers, ProcInfo, ProcessStatus,
+    PluginInstanceID, PluginProcessThread, ProcBuffers, ProcInfo, ProcessStatus,
 };
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
+
+use super::channel::{PlugHostChannelProcThread, PluginActiveState};
+use super::events::{sanitizer::PluginEventOutputSanitizer, PluginEventIoBuffers};
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 enum ProcessingState {
@@ -17,14 +15,13 @@ enum ProcessingState {
     Errored,
 }
 
-pub(crate) struct PluginInstanceHostAudioThread {
+pub(crate) struct PluginHostProcThread {
     pub id: PluginInstanceID,
 
-    plugin: Box<dyn PluginAudioThread>,
+    plugin: Box<dyn PluginProcessThread>,
 
-    state: Arc<SharedPluginState>,
+    channel: PlugHostChannelProcThread,
 
-    param_queues: Option<ParamQueuesAudioThread>,
     in_events: EventBuffer,
     out_events: EventBuffer,
 
@@ -33,19 +30,17 @@ pub(crate) struct PluginInstanceHostAudioThread {
     processing_state: ProcessingState,
 }
 
-impl PluginInstanceHostAudioThread {
+impl PluginHostProcThread {
     pub(crate) fn new(
         id: PluginInstanceID,
-        plugin: Box<dyn PluginAudioThread>,
-        state: Arc<SharedPluginState>,
-        param_queues: Option<ParamQueuesAudioThread>,
+        plugin: Box<dyn PluginProcessThread>,
+        channel: PlugHostChannelProcThread,
         num_params: usize,
     ) -> Self {
         Self {
             id,
             plugin,
-            state,
-            param_queues,
+            channel,
             in_events: EventBuffer::with_capacity(num_params * 3),
             out_events: EventBuffer::with_capacity(num_params * 3),
             event_output_sanitizer: PluginEventOutputSanitizer::new(num_params),
@@ -62,19 +57,17 @@ impl PluginInstanceHostAudioThread {
         // Always clear event and note output buffers.
         event_buffers.clear_before_process();
 
-        let state = self.state.get_state();
+        let state = self.channel.shared_state.get_active_state();
 
         // Do we want to deactivate the plugin?
-        if state == PluginState::WaitingToDrop {
+        if state == PluginActiveState::WaitingToDrop {
             if let ProcessingState::Started(_) = self.processing_state {
                 self.plugin.stop_processing();
             }
 
             buffers.clear_all_outputs(proc_info);
             return;
-        } else if self.state.start_processing.load(Ordering::Relaxed) {
-            self.state.start_processing.store(false, Ordering::Relaxed);
-
+        } else if self.channel.shared_state.should_start_processing() {
             if let ProcessingState::Started(_) = self.processing_state {
             } else {
                 self.processing_state = ProcessingState::WaitingForStart;
@@ -91,6 +84,7 @@ impl PluginInstanceHostAudioThread {
 
         self.in_events.clear();
         let mut has_param_in_event = self
+            .channel
             .param_queues
             .as_mut()
             .map(|q| q.consume_into_event_buffer(&mut self.in_events))
@@ -152,7 +146,7 @@ impl PluginInstanceHostAudioThread {
                 return;
             }
 
-            self.state.set_state(PluginState::Active);
+            self.channel.shared_state.set_active_state(PluginActiveState::Active);
         }
 
         // Actual processing //
@@ -163,8 +157,8 @@ impl PluginInstanceHostAudioThread {
 
         // Read from output events queue //
 
-        if let Some(params_queue) = &mut self.param_queues {
-            params_queue.audio_to_main_param_value_tx.produce(|mut producer| {
+        if let Some(params_queue) = &mut self.channel.param_queues {
+            params_queue.to_main_param_value_tx.produce(|mut producer| {
                 event_buffers.read_output_events(
                     &self.out_events,
                     Some(&mut producer),
@@ -200,12 +194,12 @@ impl PluginInstanceHostAudioThread {
     }
 }
 
-impl Drop for PluginInstanceHostAudioThread {
+impl Drop for PluginHostProcThread {
     fn drop(&mut self) {
         if let ProcessingState::Started(_) = self.processing_state {
             self.plugin.stop_processing();
         }
 
-        self.state.set_state(PluginState::DroppedAndReadyToDeactivate);
+        self.channel.shared_state.set_active_state(PluginActiveState::DroppedAndReadyToDeactivate);
     }
 }

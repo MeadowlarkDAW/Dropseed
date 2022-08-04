@@ -5,28 +5,7 @@ use super::ext::note_ports::PluginNotePortsExt;
 use crate::plugin_scanner::ScannedPluginKey;
 
 #[derive(Clone)]
-pub struct PluginPreset {
-    /// The version of this plugin that saved this preset.
-    pub version: Option<String>,
-
-    /// The preset as raw bytes (use serde and bincode).
-    pub bytes: Vec<u8>,
-}
-
-impl Debug for PluginPreset {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut f = f.debug_struct("PluginPreset");
-
-        f.field("version", &self.version);
-
-        f.field("preset_size", &self.bytes.len());
-
-        f.finish()
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct PluginSaveState {
+pub struct DSPluginSaveState {
     pub key: ScannedPluginKey,
 
     /// If this is `false` when receiving a save state, then it means that
@@ -47,20 +26,40 @@ pub struct PluginSaveState {
     /// former user doesn't have this plugin installed on their system.)
     pub backup_note_ports: Option<PluginNotePortsExt>,
 
-    /// The plugin's preset.
+    /// The plugin's state/preset as raw bytes.
     ///
-    /// If this is `None`, then the plugin will load its default preset.
-    pub preset: Option<PluginPreset>,
+    /// If this is `None`, then the plugin will load its default
+    /// state/preset.
+    pub raw_state: Option<Vec<u8>>,
 }
 
-impl PluginSaveState {
-    pub fn new_with_default_preset(key: ScannedPluginKey) -> Self {
+impl DSPluginSaveState {
+    pub fn new_with_default_state(key: ScannedPluginKey) -> Self {
         Self {
             key,
             is_active: true,
             backup_audio_ports: None,
             backup_note_ports: None,
-            preset: None,
+            raw_state: None,
         }
+    }
+}
+
+impl Debug for DSPluginSaveState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut f = f.debug_struct("DSPluginSaveState");
+
+        f.field("key", &self.key);
+        f.field("is_active", &self.is_active);
+        f.field("backup_audio_ports", &self.backup_audio_ports);
+        f.field("backup_note_ports", &self.backup_note_ports);
+
+        if let Some(s) = &self.raw_state {
+            f.field("raw_state size", &format!("{}", s.len()));
+        } else {
+            f.field("raw_state", &"None");
+        }
+
+        f.finish()
     }
 }
