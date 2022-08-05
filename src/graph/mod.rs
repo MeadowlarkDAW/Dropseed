@@ -25,6 +25,7 @@ use dropseed_plugin_api::{
 use crate::engine::events::from_engine::{DSEngineEvent, PluginEvent};
 use crate::engine::main_thread::{EdgeReq, EdgeReqPortID};
 use crate::engine::plugin_scanner::{NewPluginInstanceError, PluginScanner};
+use crate::plugin_host::PluginHostMainThread;
 use crate::plugin_host::{ActivatePluginError, OnIdleResult};
 use crate::schedule::tasks::{TransportHandle, TransportTask};
 use crate::schedule::Schedule;
@@ -74,6 +75,8 @@ pub(crate) struct AudioGraph {
     graph_in_channels: u16,
     graph_out_channels: u16,
 
+    graph_in_rdn: Shared<String>,
+    graph_out_rdn: Shared<String>,
     temp_rdn: Shared<String>,
 
     sample_rate: SampleRate,
@@ -116,6 +119,8 @@ impl AudioGraph {
             coll_handle.clone(),
         );
 
+        let graph_in_rdn = Shared::new(&coll_handle, String::from("app.meadowlark.graph_in_node"));
+        let graph_out_rdn = Shared::new(&coll_handle, String::from("app.meadowlark.graph_out_node"));
         let temp_rdn =
             Shared::new(&coll_handle, String::from("app.meadowlark.temporary_plugin_rdn"));
 
@@ -126,6 +131,8 @@ impl AudioGraph {
             coll_handle,
             graph_in_channels,
             graph_out_channels,
+            graph_in_rdn,
+            graph_out_rdn,
             temp_rdn,
             sample_rate,
             min_frames,
@@ -211,22 +218,18 @@ impl AudioGraph {
             self.max_frames as u32,
             &self.coll_handle,
         ) {
-            Ok((new_handle, new_param_values)) => {
-                PluginActivationStatus::Activated { new_handle, new_param_values }
+            Ok((new_param_values, new_audio_ports_ext, new_note_ports_ext)) => {
+                PluginActivationStatus::Activated {
+                    new_param_values,
+                    new_audio_ports_ext,
+                    new_note_ports_ext,
+                }
             }
             Err(e) => PluginActivationStatus::ActivationError(e),
         };
 
-        if let PluginActivationStatus::Activated { new_handle, .. } = &activation_status {
-            // Update the number of channels (ports) in our abstract graph.
-
-            update_plugin_ports(
-                &mut self.abstract_graph,
-                entry,
-                new_handle.audio_ports(),
-                new_handle.note_ports(),
-                entry.plugin_host.has_automation_out_port(),
-            );
+        if let PluginActivationStatus::Activated { .. } = &activation_status {
+            plugin_host.sync_ports_in_graph(&mut self.abstract_graph);
         }
 
         Ok(activation_status)
@@ -247,15 +250,6 @@ impl AudioGraph {
         let mut removed_plugins: FnvHashSet<PluginInstanceID> = FnvHashSet::default();
 
         for id in plugin_ids.iter() {
-            if id == &self.graph_in_node_id || id == &self.graph_out_node_id {
-                if id == &self.graph_in_node_id {
-                    log::warn!("Ignored request to remove the graph in node from the audio graph");
-                } else {
-                    log::warn!("Ignored request to remove the graph out node from the audio graph");
-                }
-                continue;
-            }
-
             if removed_plugins.insert(id.clone()) {
                 if let Ok(edges) = self.get_plugin_edges(&id) {
                     for e in edges.incoming {
@@ -265,8 +259,8 @@ impl AudioGraph {
                         let _ = affected_plugins.insert(e.dst_plugin_id.clone());
                     }
 
-                    if let Some(plugin) = self.shared_plugin_pool.plugins.get_mut(&id) {
-                        plugin.plugin_host.schedule_remove();
+                    if let Some(plugin_host) = self.shared_pools.plugin_hosts.pool.get_mut(&id) {
+                        plugin_host.schedule_remove();
                     }
 
                     if let Err(e) = self.abstract_graph.delete_node(NodeRef::new(id._node_ref())) {
@@ -288,28 +282,32 @@ impl AudioGraph {
         src_plugin_id: &PluginInstanceID,
         dst_plugin_id: &PluginInstanceID,
     ) -> Result<(), ConnectEdgeError> {
-        let src_entry = if let Some(entry) = self.shared_plugin_pool.plugins.get(src_plugin_id) {
-            entry
-        } else {
-            return Err(ConnectEdgeError {
-                error_type: ConnectEdgeErrorType::SrcPluginDoesNotExist,
-                edge: edge.clone(),
-            });
-        };
-        let dst_entry = if let Some(entry) = self.shared_plugin_pool.plugins.get(dst_plugin_id) {
-            entry
-        } else {
-            return Err(ConnectEdgeError {
-                error_type: ConnectEdgeErrorType::DstPluginDoesNotExist,
-                edge: edge.clone(),
-            });
-        };
+        let src_plugin_host =
+            if let Some(plugin_host) = self.shared_pools.plugin_hosts.pool.get(src_plugin_id) {
+                plugin_host
+            } else {
+                return Err(ConnectEdgeError {
+                    error_type: ConnectEdgeErrorType::SrcPluginDoesNotExist,
+                    edge: edge.clone(),
+                });
+            };
+        let dst_plugin_host =
+            if let Some(plugin_host) = self.shared_pools.plugin_hosts.pool.get(dst_plugin_id) {
+                plugin_host
+            } else {
+                return Err(ConnectEdgeError {
+                    error_type: ConnectEdgeErrorType::DstPluginDoesNotExist,
+                    edge: edge.clone(),
+                });
+            };
 
         let src_port_ref = match &edge.src_port_id {
             EdgeReqPortID::Main => match edge.edge_type {
                 PortType::Audio => {
-                    if let Some(port_ref) =
-                        src_entry.main_audio_out_port_refs.get(usize::from(edge.src_port_channel))
+                    if let Some(port_ref) = src_plugin_host
+                        .port_refs()
+                        .main_audio_out_port_refs
+                        .get(usize::from(edge.src_port_channel))
                     {
                         *port_ref
                     } else {
@@ -320,7 +318,7 @@ impl AudioGraph {
                     }
                 }
                 PortType::ParamAutomation => {
-                    if let Some(port_ref) = src_entry.automation_out_port_ref {
+                    if let Some(port_ref) = src_plugin_host.port_refs().automation_out_port_ref {
                         port_ref
                     } else {
                         return Err(ConnectEdgeError {
@@ -330,7 +328,7 @@ impl AudioGraph {
                     }
                 }
                 PortType::Note => {
-                    if let Some(port_ref) = src_entry.main_note_out_port_ref {
+                    if let Some(port_ref) = src_plugin_host.port_refs().main_note_out_port_ref {
                         port_ref
                     } else {
                         return Err(ConnectEdgeError {
@@ -348,7 +346,9 @@ impl AudioGraph {
                     port_channel: edge.src_port_channel,
                 };
 
-                if let Some(port_ref) = src_entry.port_channels_refs.get(&src_port_id) {
+                if let Some(port_ref) =
+                    src_plugin_host.port_refs().port_channels_refs.get(&src_port_id)
+                {
                     *port_ref
                 } else {
                     return Err(ConnectEdgeError {
@@ -362,8 +362,10 @@ impl AudioGraph {
         let dst_port_ref = match &edge.dst_port_id {
             EdgeReqPortID::Main => match edge.edge_type {
                 PortType::Audio => {
-                    if let Some(port_ref) =
-                        dst_entry.main_audio_in_port_refs.get(usize::from(edge.dst_port_channel))
+                    if let Some(port_ref) = dst_plugin_host
+                        .port_refs()
+                        .main_audio_in_port_refs
+                        .get(usize::from(edge.dst_port_channel))
                     {
                         *port_ref
                     } else {
@@ -374,7 +376,7 @@ impl AudioGraph {
                     }
                 }
                 PortType::ParamAutomation => {
-                    if let Some(port_ref) = dst_entry.automation_in_port_ref {
+                    if let Some(port_ref) = dst_plugin_host.port_refs().automation_in_port_ref {
                         port_ref
                     } else {
                         return Err(ConnectEdgeError {
@@ -384,7 +386,7 @@ impl AudioGraph {
                     }
                 }
                 PortType::Note => {
-                    if let Some(port_ref) = dst_entry.main_note_in_port_ref {
+                    if let Some(port_ref) = dst_plugin_host.port_refs().main_note_in_port_ref {
                         port_ref
                     } else {
                         return Err(ConnectEdgeError {
@@ -402,7 +404,9 @@ impl AudioGraph {
                     port_channel: edge.dst_port_channel,
                 };
 
-                if let Some(port_ref) = src_entry.port_channels_refs.get(&src_port_id) {
+                if let Some(port_ref) =
+                    src_plugin_host.port_refs().port_channels_refs.get(&src_port_id)
+                {
                     *port_ref
                 } else {
                     return Err(ConnectEdgeError {
@@ -550,15 +554,8 @@ impl AudioGraph {
 
     pub fn reset(&mut self) {
         // Try to gracefully remove all existing plugins.
-        for plugin_entry in self.shared_plugin_pool.plugins.values_mut() {
-            // Don't remove the graph in/out "plugins".
-            if plugin_entry.plugin_host.id == self.graph_in_node_id
-                || plugin_entry.plugin_host.id == self.graph_out_node_id
-            {
-                continue;
-            }
-
-            plugin_entry.plugin_host.schedule_remove();
+        for plugin_host in self.shared_pools.plugin_hosts.pool.values_mut() {
+            plugin_host.schedule_remove();
         }
 
         // TODO: Check that the audio thread is still alive.
@@ -570,24 +567,25 @@ impl AudioGraph {
             const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
             // Wait for all plugins to be removed.
-            while self.shared_plugin_pool.plugins.len() > 2 && start_time.elapsed() < TIMEOUT {
+            while !self.shared_pools.plugin_hosts.pool.is_empty() && start_time.elapsed() < TIMEOUT
+            {
                 std::thread::sleep(std::time::Duration::from_millis(10));
 
                 let _ = self.on_idle(None);
             }
 
-            if self.shared_plugin_pool.plugins.len() > 2 {
+            if self.shared_pools.plugin_hosts.pool.is_empty() {
                 log::error!("Timed out while removing all plugins");
             }
         }
 
-        self.shared_schedule.set_new_schedule(
-            Schedule::new(self.max_frames as usize, Shared::clone(&self.shared_transport_task)),
+        self.shared_pools.shared_schedule.set_new_schedule(
+            Schedule::new_empty(self.max_frames as usize, self.shared_pools.transports.transport.clone()),
             &self.coll_handle,
         );
 
-        self.shared_plugin_pool.plugins.clear();
-        self.shared_buffer_pool.remove_excess_buffers(0, 0, 0, 0);
+        self.shared_pools.plugin_hosts.pool.clear();
+        self.shared_pools.buffers.remove_excess_buffers(0, 0, 0, 0);
 
         self.abstract_graph = Graph::default();
 
@@ -849,204 +847,13 @@ impl AudioGraph {
     }
 }
 
-fn update_plugin_ports(
-    abstract_graph: &mut Graph<PluginInstanceID, PortChannelID, PortType>,
-    entry: &mut PluginInstanceHostEntry,
-    audio_ports: &PluginAudioPortsExt,
-    note_ports: &PluginNotePortsExt,
-    has_automation_out_port: bool,
-) {
-    let mut prev_port_channel_refs = entry.port_channels_refs.clone();
-    entry.port_channels_refs.clear();
-
-    entry.main_audio_in_port_refs.clear();
-    entry.main_audio_out_port_refs.clear();
-    entry.main_note_in_port_ref = None;
-    entry.main_note_out_port_ref = None;
-
-    for (audio_port_i, audio_in_port) in audio_ports.inputs.iter().enumerate() {
-        for i in 0..audio_in_port.channels {
-            let port_id = PortChannelID {
-                port_type: PortType::Audio,
-                port_stable_id: audio_in_port.stable_id,
-                is_input: true,
-                port_channel: i,
-            };
-
-            let port_ref = if let Some(port_ref) = prev_port_channel_refs.get(&port_id) {
-                let port_ref = *port_ref;
-                let _ = prev_port_channel_refs.remove(&port_id);
-                port_ref
-            } else {
-                let port_ref = abstract_graph
-                    .port(NodeRef::new(entry.plugin_host.id._node_ref()), PortType::Audio, port_id)
-                    .unwrap();
-
-                let _ = entry.port_channels_refs.insert(port_id, port_ref);
-
-                port_ref
-            };
-
-            if audio_port_i == 0 {
-                match audio_ports.main_ports_layout {
-                    MainPortsLayout::InOut | MainPortsLayout::InOnly => {
-                        entry.main_audio_in_port_refs.push(port_ref);
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    for (audio_port_i, audio_out_port) in audio_ports.outputs.iter().enumerate() {
-        for i in 0..audio_out_port.channels {
-            let port_id = PortChannelID {
-                port_type: PortType::Audio,
-                port_stable_id: audio_out_port.stable_id,
-                is_input: false,
-                port_channel: i,
-            };
-
-            let port_ref = if let Some(port_ref) = prev_port_channel_refs.get(&port_id) {
-                let port_ref = *port_ref;
-                let _ = prev_port_channel_refs.remove(&port_id);
-                port_ref
-            } else {
-                let port_ref = abstract_graph
-                    .port(NodeRef::new(entry.plugin_host.id._node_ref()), PortType::Audio, port_id)
-                    .unwrap();
-
-                let _ = entry.port_channels_refs.insert(port_id, port_ref);
-
-                port_ref
-            };
-
-            if audio_port_i == 0 {
-                match audio_ports.main_ports_layout {
-                    MainPortsLayout::InOut | MainPortsLayout::OutOnly => {
-                        entry.main_audio_out_port_refs.push(port_ref);
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    const IN_AUTOMATION_PORT_ID: PortChannelID = PortChannelID {
-        port_type: PortType::ParamAutomation,
-        port_stable_id: 0,
-        is_input: true,
-        port_channel: 0,
-    };
-    const OUT_AUTOMATION_PORT_ID: PortChannelID = PortChannelID {
-        port_type: PortType::ParamAutomation,
-        port_stable_id: 1,
-        is_input: false,
-        port_channel: 0,
-    };
-
-    // Plugins always have one automation in port.
-    if prev_port_channel_refs.get(&IN_AUTOMATION_PORT_ID).is_none() {
-        let in_port_ref = abstract_graph
-            .port(
-                NodeRef::new(entry.plugin_host.id._node_ref()),
-                PortType::ParamAutomation,
-                IN_AUTOMATION_PORT_ID,
-            )
-            .unwrap();
-
-        let _ = entry.port_channels_refs.insert(IN_AUTOMATION_PORT_ID, in_port_ref);
-
-        entry.automation_in_port_ref = Some(in_port_ref);
-    } else {
-        let _ = prev_port_channel_refs.remove(&IN_AUTOMATION_PORT_ID);
-    }
-
-    if has_automation_out_port {
-        if prev_port_channel_refs.get(&OUT_AUTOMATION_PORT_ID).is_none() {
-            let out_port_ref = abstract_graph
-                .port(
-                    NodeRef::new(entry.plugin_host.id._node_ref()),
-                    PortType::ParamAutomation,
-                    OUT_AUTOMATION_PORT_ID,
-                )
-                .unwrap();
-
-            let _ = entry.port_channels_refs.insert(OUT_AUTOMATION_PORT_ID, out_port_ref);
-
-            entry.automation_out_port_ref = Some(out_port_ref);
-        } else {
-            let _ = prev_port_channel_refs.remove(&OUT_AUTOMATION_PORT_ID);
-        }
-    } else {
-        entry.automation_out_port_ref = None;
-    }
-
-    for (i, note_in_port) in note_ports.inputs.iter().enumerate() {
-        let port_id = PortChannelID {
-            port_type: PortType::Note,
-            port_stable_id: note_in_port.stable_id,
-            is_input: true,
-            port_channel: 0,
-        };
-
-        let port_ref = if let Some(port_ref) = prev_port_channel_refs.get(&port_id) {
-            let port_ref = *port_ref;
-            let _ = prev_port_channel_refs.remove(&port_id);
-
-            port_ref
-        } else {
-            let port_ref = abstract_graph
-                .port(NodeRef::new(entry.plugin_host.id._node_ref()), PortType::Note, port_id)
-                .unwrap();
-
-            let _ = entry.port_channels_refs.insert(port_id, port_ref);
-
-            port_ref
-        };
-
-        if i == 0 {
-            entry.main_note_in_port_ref = Some(port_ref);
-        }
-    }
-
-    for (i, note_out_port) in note_ports.outputs.iter().enumerate() {
-        let port_id = PortChannelID {
-            port_type: PortType::Note,
-            port_stable_id: note_out_port.stable_id,
-            is_input: false,
-            port_channel: 0,
-        };
-
-        let port_ref = if let Some(port_ref) = prev_port_channel_refs.get(&port_id) {
-            let port_ref = *port_ref;
-            let _ = prev_port_channel_refs.remove(&port_id);
-
-            port_ref
-        } else {
-            let port_ref = abstract_graph
-                .port(NodeRef::new(entry.plugin_host.id._node_ref()), PortType::Note, port_id)
-                .unwrap();
-
-            let _ = entry.port_channels_refs.insert(port_id, port_ref);
-
-            port_ref
-        };
-
-        if i == 0 {
-            entry.main_note_out_port_ref = Some(port_ref);
-        }
-    }
-
-    for (_, removed_port) in prev_port_channel_refs.drain() {
-        abstract_graph.delete_port(removed_port).unwrap();
-    }
-}
-
 impl Drop for AudioGraph {
     fn drop(&mut self) {
-        self.shared_schedule.set_new_schedule(
-            Schedule::new(self.max_frames as usize, Shared::clone(&self.shared_transport_task)),
+        self.shared_pools.shared_schedule.set_new_schedule(
+            Schedule::new_empty(
+                self.max_frames as usize,
+                self.shared_pools.transports.transport.clone(),
+            ),
             &self.coll_handle,
         );
     }
@@ -1057,7 +864,11 @@ pub enum PluginActivationStatus {
     /// This means the plugin successfully activated and returned
     /// its new audio/event port configuration and its new
     /// parameter configuration.
-    Activated { new_handle: PluginHandle, new_param_values: FnvHashMap<ParamID, f64> },
+    Activated {
+        new_param_values: FnvHashMap<ParamID, f64>,
+        new_audio_ports_ext: Option<PluginAudioPortsExt>,
+        new_note_ports_ext: Option<PluginNotePortsExt>,
+    },
 
     /// This means that the plugin loaded but did not activate yet. This
     /// can happen when the user loads a project with a deactivated

@@ -1,6 +1,7 @@
+use audio_graph::{Graph, NodeRef};
 use basedrop::Shared;
 use crossbeam_channel::Sender;
-use dropseed_plugin_api::ext::audio_ports::PluginAudioPortsExt;
+use dropseed_plugin_api::ext::audio_ports::{MainPortsLayout, PluginAudioPortsExt};
 use dropseed_plugin_api::ext::note_ports::PluginNotePortsExt;
 use dropseed_plugin_api::ext::params::{ParamID, ParamInfo};
 use dropseed_plugin_api::transport::TempoMap;
@@ -13,7 +14,7 @@ use meadowlark_core_types::time::SampleRate;
 use smallvec::SmallVec;
 
 use crate::engine::events::from_engine::{DSEngineEvent, PluginEvent};
-use crate::graph::PortChannelID;
+use crate::graph::{PortChannelID, PortType};
 
 use super::channel::{PlugHostChannelMainThread, PluginActiveState, SharedPluginHostProcThread};
 use super::error::ActivatePluginError;
@@ -178,7 +179,7 @@ impl PluginHostMainThread {
         max_frames: u32,
         coll_handle: &basedrop::Handle,
     ) -> Result<
-        (FnvHashMap<ParamID, f64>, PluginAudioPortsExt, PluginNotePortsExt),
+        (FnvHashMap<ParamID, f64>, Option<PluginAudioPortsExt>, Option<PluginNotePortsExt>),
         ActivatePluginError,
     > {
         self.can_activate()?;
@@ -263,8 +264,9 @@ impl PluginHostMainThread {
 
                 Ok((
                     param_values,
-                    self.audio_ports_ext.as_ref().unwrap().clone(),
-                    self.note_ports_ext.as_ref().unwrap().clone(),
+                    // TODO: Only return the new extensions if they have changed.
+                    Some(self.audio_ports_ext.as_ref().unwrap().clone()),
+                    Some(self.note_ports_ext.as_ref().unwrap().clone()),
                 ))
             }
             Err(e) => {
@@ -469,6 +471,206 @@ impl PluginHostMainThread {
     pub fn id(&self) -> &PluginInstanceID {
         &self.id
     }
+
+    pub fn port_refs(&self) -> &PluginHostPortRefs {
+        &self.port_refs
+    }
+
+    pub fn sync_ports_in_graph(
+        &mut self,
+        abstract_graph: &mut Graph<PluginInstanceID, PortChannelID, PortType>,
+    ) {
+        let mut prev_port_channel_refs = self.port_refs.port_channels_refs.clone();
+        self.port_refs.port_channels_refs.clear();
+
+        self.port_refs.main_audio_in_port_refs.clear();
+        self.port_refs.main_audio_out_port_refs.clear();
+        self.port_refs.main_note_in_port_ref = None;
+        self.port_refs.main_note_out_port_ref = None;
+
+        if let Some(audio_ports) = &self.audio_ports_ext {
+            for (audio_port_i, audio_in_port) in audio_ports.inputs.iter().enumerate() {
+                for i in 0..audio_in_port.channels {
+                    let port_id = PortChannelID {
+                        port_type: PortType::Audio,
+                        port_stable_id: audio_in_port.stable_id,
+                        is_input: true,
+                        port_channel: i,
+                    };
+
+                    let port_ref = if let Some(port_ref) = prev_port_channel_refs.get(&port_id) {
+                        let port_ref = *port_ref;
+                        let _ = prev_port_channel_refs.remove(&port_id);
+                        port_ref
+                    } else {
+                        let port_ref = abstract_graph
+                            .port(NodeRef::new(self.id._node_ref()), PortType::Audio, port_id)
+                            .unwrap();
+
+                        let _ = self.port_refs.port_channels_refs.insert(port_id, port_ref);
+
+                        port_ref
+                    };
+
+                    if audio_port_i == 0 {
+                        match audio_ports.main_ports_layout {
+                            MainPortsLayout::InOut | MainPortsLayout::InOnly => {
+                                self.port_refs.main_audio_in_port_refs.push(port_ref);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
+            for (audio_port_i, audio_out_port) in audio_ports.outputs.iter().enumerate() {
+                for i in 0..audio_out_port.channels {
+                    let port_id = PortChannelID {
+                        port_type: PortType::Audio,
+                        port_stable_id: audio_out_port.stable_id,
+                        is_input: false,
+                        port_channel: i,
+                    };
+
+                    let port_ref = if let Some(port_ref) = prev_port_channel_refs.get(&port_id) {
+                        let port_ref = *port_ref;
+                        let _ = prev_port_channel_refs.remove(&port_id);
+                        port_ref
+                    } else {
+                        let port_ref = abstract_graph
+                            .port(NodeRef::new(self.id._node_ref()), PortType::Audio, port_id)
+                            .unwrap();
+
+                        let _ = self.port_refs.port_channels_refs.insert(port_id, port_ref);
+
+                        port_ref
+                    };
+
+                    if audio_port_i == 0 {
+                        match audio_ports.main_ports_layout {
+                            MainPortsLayout::InOut | MainPortsLayout::OutOnly => {
+                                self.port_refs.main_audio_out_port_refs.push(port_ref);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        const IN_AUTOMATION_PORT_ID: PortChannelID = PortChannelID {
+            port_type: PortType::ParamAutomation,
+            port_stable_id: 0,
+            is_input: true,
+            port_channel: 0,
+        };
+        const OUT_AUTOMATION_PORT_ID: PortChannelID = PortChannelID {
+            port_type: PortType::ParamAutomation,
+            port_stable_id: 1,
+            is_input: false,
+            port_channel: 0,
+        };
+
+        // Plugins always have one automation in port.
+        if prev_port_channel_refs.get(&IN_AUTOMATION_PORT_ID).is_none() {
+            let in_port_ref = abstract_graph
+                .port(
+                    NodeRef::new(self.id._node_ref()),
+                    PortType::ParamAutomation,
+                    IN_AUTOMATION_PORT_ID,
+                )
+                .unwrap();
+
+            let _ = self.port_refs.port_channels_refs.insert(IN_AUTOMATION_PORT_ID, in_port_ref);
+
+            self.port_refs.automation_in_port_ref = Some(in_port_ref);
+        } else {
+            let _ = prev_port_channel_refs.remove(&IN_AUTOMATION_PORT_ID);
+        }
+
+        if self.plug_main_thread.has_automation_out_port() {
+            if prev_port_channel_refs.get(&OUT_AUTOMATION_PORT_ID).is_none() {
+                let out_port_ref = abstract_graph
+                    .port(
+                        NodeRef::new(self.id._node_ref()),
+                        PortType::ParamAutomation,
+                        OUT_AUTOMATION_PORT_ID,
+                    )
+                    .unwrap();
+
+                let _ =
+                    self.port_refs.port_channels_refs.insert(OUT_AUTOMATION_PORT_ID, out_port_ref);
+
+                self.port_refs.automation_out_port_ref = Some(out_port_ref);
+            } else {
+                let _ = prev_port_channel_refs.remove(&OUT_AUTOMATION_PORT_ID);
+            }
+        } else {
+            self.port_refs.automation_out_port_ref = None;
+        }
+
+        if let Some(note_ports) = &self.note_ports_ext {
+            for (i, note_in_port) in note_ports.inputs.iter().enumerate() {
+                let port_id = PortChannelID {
+                    port_type: PortType::Note,
+                    port_stable_id: note_in_port.stable_id,
+                    is_input: true,
+                    port_channel: 0,
+                };
+
+                let port_ref = if let Some(port_ref) = prev_port_channel_refs.get(&port_id) {
+                    let port_ref = *port_ref;
+                    let _ = prev_port_channel_refs.remove(&port_id);
+
+                    port_ref
+                } else {
+                    let port_ref = abstract_graph
+                        .port(NodeRef::new(self.id._node_ref()), PortType::Note, port_id)
+                        .unwrap();
+
+                    let _ = self.port_refs.port_channels_refs.insert(port_id, port_ref);
+
+                    port_ref
+                };
+
+                if i == 0 {
+                    self.port_refs.main_note_in_port_ref = Some(port_ref);
+                }
+            }
+
+            for (i, note_out_port) in note_ports.outputs.iter().enumerate() {
+                let port_id = PortChannelID {
+                    port_type: PortType::Note,
+                    port_stable_id: note_out_port.stable_id,
+                    is_input: false,
+                    port_channel: 0,
+                };
+
+                let port_ref = if let Some(port_ref) = prev_port_channel_refs.get(&port_id) {
+                    let port_ref = *port_ref;
+                    let _ = prev_port_channel_refs.remove(&port_id);
+
+                    port_ref
+                } else {
+                    let port_ref = abstract_graph
+                        .port(NodeRef::new(self.id._node_ref()), PortType::Note, port_id)
+                        .unwrap();
+
+                    let _ = self.port_refs.port_channels_refs.insert(port_id, port_ref);
+
+                    port_ref
+                };
+
+                if i == 0 {
+                    self.port_refs.main_note_out_port_ref = Some(port_ref);
+                }
+            }
+        }
+
+        for (_, removed_port) in prev_port_channel_refs.drain() {
+            abstract_graph.delete_port(removed_port).unwrap();
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -483,8 +685,8 @@ pub(crate) enum OnIdleResult {
     PluginDeactivated,
     PluginActivated {
         new_param_values: FnvHashMap<ParamID, f64>,
-        new_audio_ports: PluginAudioPortsExt,
-        new_note_ports: PluginNotePortsExt,
+        new_audio_ports: Option<PluginAudioPortsExt>,
+        new_note_ports: Option<PluginNotePortsExt>,
     },
     PluginReadyToRemove,
     PluginFailedToActivate(ActivatePluginError),
