@@ -5,7 +5,7 @@ use std::sync::{
     Arc,
 };
 
-use crate::graph::schedule::SharedSchedule;
+use crate::graph::shared_pools::SharedSchedule;
 
 use super::audio_thread::AUDIO_THREAD_POLL_INTERVAL;
 

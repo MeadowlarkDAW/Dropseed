@@ -1,4 +1,4 @@
-use audio_graph::{Graph, ScheduledNode};
+use audio_graph::{Graph, PortRef, ScheduledNode};
 use dropseed_plugin_api::buffer::{AudioPortBuffer, AudioPortBufferMut, SharedBuffer};
 use dropseed_plugin_api::ext::audio_ports::MainPortsLayout;
 use dropseed_plugin_api::ProcBuffers;
@@ -19,11 +19,13 @@ pub use verifier::VerifyScheduleError;
 use super::shared_pools::{DelayCompKey, GraphSharedPools, SharedDelayCompNode};
 use super::{PluginInstanceID, PortChannelID, PortType, Schedule};
 
-pub(crate) fn compile_graph(
+pub(super) fn compile_graph(
     shared_pool: &mut GraphSharedPools,
     abstract_graph: &mut Graph<PluginInstanceID, PortChannelID, PortType>,
-    graph_in_node_id: &PluginInstanceID,
-    graph_out_node_id: &PluginInstanceID,
+    graph_in_id: &PluginInstanceID,
+    graph_out_id: &PluginInstanceID,
+    graph_in_audio_out_port_refs: &[PortRef],
+    graph_out_audio_in_port_refs: &[PortRef],
     verifier: &mut Verifier,
     coll_handle: &basedrop::Handle,
 ) -> Result<Schedule, GraphCompilerError> {
@@ -52,7 +54,11 @@ pub(crate) fn compile_graph(
             shared_processor,
             audio_ports_ext,
             note_ports_ext,
-        ) = if let Some(plugin_host) = shared_pool.plugin_hosts.pool.get(&abstract_task.node) {
+        ) = if &abstract_task.node == graph_in_id {
+            (graph_in_id, 0, graph_in_audio_out_port_refs.len(), &None, None, None)
+        } else if &abstract_task.node == graph_out_id {
+            (graph_out_id, graph_out_audio_in_port_refs.len(), 0, &None, None, None)
+        } else if let Some(plugin_host) = shared_pool.plugin_hosts.pool.get(&abstract_task.node) {
             (
                 plugin_host.id(),
                 plugin_host.num_audio_in_channels(),
@@ -345,11 +351,11 @@ pub(crate) fn compile_graph(
             }
         }
 
-        if &abstract_task.node == graph_in_node_id {
+        if &abstract_task.node == graph_in_id {
             graph_audio_in = audio_out_channel_buffers;
             continue;
         }
-        if &abstract_task.node == graph_out_node_id {
+        if &abstract_task.node == graph_out_id {
             graph_audio_out = audio_in_channel_buffers;
             continue;
         }
@@ -391,7 +397,7 @@ pub(crate) fn compile_graph(
             continue;
         }
 
-        let shared_processor = shared_processor.unwrap();
+        let shared_processor = shared_processor.as_ref().unwrap();
         let audio_ports_ext = audio_ports_ext.as_ref().unwrap();
 
         let mut audio_in: SmallVec<[AudioPortBuffer; 2]> = SmallVec::new();

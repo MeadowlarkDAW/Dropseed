@@ -1,4 +1,4 @@
-use dropseed_plugin_api::{PluginInstanceID, PluginPreset};
+use dropseed_plugin_api::PluginInstanceID;
 use std::path::PathBuf;
 
 use dropseed_plugin_api::transport::TempoMap;
@@ -56,7 +56,7 @@ impl From<ModifyGraphRequest> for DSEngineRequest {
 pub enum PluginRequest {
     ShowGui,
     CloseGui,
-    /// Request the plugin to load a preset.
-    LoadPreset(PluginPreset),
+    /// Request the plugin to load the save state/preset.
+    LoadSaveState(Vec<u8>),
     GetLatestSaveState,
 }

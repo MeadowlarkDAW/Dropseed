@@ -9,7 +9,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use super::process_thread::DSEngineProcessThread;
-use crate::graph::schedule::SharedSchedule;
+use crate::graph::shared_pools::SharedSchedule;
 
 // Allocate enough for at-least 3 seconds of buffer time.
 static ALLOCATED_FRAMES_PER_CHANNEL: usize = 192_000 * 3;

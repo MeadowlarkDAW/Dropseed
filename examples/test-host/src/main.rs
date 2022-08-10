@@ -7,12 +7,14 @@ use dropseed::{
     EngineDeactivatedInfo, PluginActivationStatus, PluginEvent, PluginScannerEvent, ScannedPlugin,
 };
 use eframe::egui;
+use fern::colors::ColoredLevelConfig;
+use log::LevelFilter;
 use meadowlark_core_types::time::SampleRate;
 
 mod effect_rack_page;
 mod scanned_plugins_page;
 
-use effect_rack_page::{EffectRackPluginActiveState, EffectRackPluginState, EffectRackState};
+//use effect_rack_page::{EffectRackPluginActiveState, EffectRackPluginState, EffectRackState};
 
 const MIN_BLOCK_SIZE: u32 = 1;
 const MAX_BLOCK_SIZE: u32 = 512;
@@ -22,7 +24,35 @@ const GRAPH_OUT_CHANNELS: u16 = 2;
 fn main() {
     // Prefer to use a logging crate that is wait-free for threads printing
     // out to the log.
-    fast_log::init(fast_log::Config::new().console().level(log::LevelFilter::Trace)).unwrap();
+    let log_colors = ColoredLevelConfig::default();
+
+    #[cfg(debug_assertions)]
+    const MAIN_LOG_LEVEL: LevelFilter = LevelFilter::Debug;
+    #[cfg(not(debug_assertions))]
+    const MAIN_LOG_LEVEL: LevelFilter = LevelFilter::Info;
+
+    fern::Dispatch::new()
+        // Perform allocation-free log formatting
+        .format(move |out, message, record| {
+            out.finish(format_args!(
+                "{}[{}][{}] {}",
+                chrono::Local::now().format("[%H:%M:%S]"),
+                record.target(),
+                log_colors.color(record.level()),
+                message
+            ))
+        })
+        // Add blanket level filter -
+        .level(MAIN_LOG_LEVEL)
+        // Output to stdout, files, and other Dispatch configurations
+        .chain(
+            // TODO: stdout is not realtime-safe. Send messages to a logging thread instead.
+            std::io::stdout(),
+        )
+        //.chain(fern::log_file("output.log")?)
+        // Apply globally
+        .apply()
+        .unwrap();
 
     let (to_audio_thread_tx, mut from_gui_rx) =
         ringbuf::RingBuffer::<UIToAudioThreadMsg>::new(10).split();
@@ -74,7 +104,7 @@ fn main() {
         vec![],
     );
 
-    dbg!(&engine_handle.internal_plugins_res);
+    //dbg!(&engine_handle.internal_plugins_res);
 
     engine_handle.send(DSEngineRequest::ActivateEngine(Box::new(ActivateEngineSettings {
         sample_rate,
@@ -116,8 +146,7 @@ enum UIToAudioThreadMsg {
 pub struct EngineState {
     pub graph_in_node_id: PluginInstanceID,
     pub graph_out_node_id: PluginInstanceID,
-
-    pub effect_rack_state: EffectRackState,
+    //pub effect_rack_state: EffectRackState,
 }
 
 struct DSExampleGUI {
@@ -199,7 +228,7 @@ impl DSExampleGUI {
                     self.engine_state = Some(EngineState {
                         graph_in_node_id: info.graph_in_node_id,
                         graph_out_node_id: info.graph_out_node_id,
-                        effect_rack_state: EffectRackState::new(),
+                        //effect_rack_state: EffectRackState::new(),
                     });
 
                     self.to_audio_thread_tx
@@ -231,7 +260,7 @@ impl DSExampleGUI {
                 // the save state, then the `EngineDeactivated` event will be sent instead.
                 DSEngineEvent::AudioGraphCleared => {
                     if let Some(engine_state) = &mut self.engine_state {
-                        engine_state.effect_rack_state.plugins.clear();
+                        //engine_state.effect_rack_state.plugins.clear();
                     }
                 }
 
@@ -241,7 +270,7 @@ impl DSExampleGUI {
                 DSEngineEvent::AudioGraphModified(mut res) => {
                     if let Some(engine_state) = &mut self.engine_state {
                         for plugin_id in res.removed_plugins.drain(..) {
-                            engine_state.effect_rack_state.remove_plugin(&plugin_id);
+                            //engine_state.effect_rack_state.remove_plugin(&plugin_id);
                         }
 
                         for new_plugin_res in res.new_plugins.drain(..) {
@@ -253,12 +282,13 @@ impl DSExampleGUI {
 
                             let plugin_name = found.0.description.name.clone();
 
+                            /*
                             let active_state = match new_plugin_res.status {
                                 PluginActivationStatus::Activated {
-                                    new_handle,
                                     new_param_values,
+                                    new_audio_ports_ext,
+                                    new_note_ports_ext,
                                 } => Some(EffectRackPluginActiveState::new(
-                                    new_handle,
                                     new_param_values,
                                 )),
                                 PluginActivationStatus::Inactive => None,
@@ -281,15 +311,18 @@ impl DSExampleGUI {
                             };
 
                             engine_state.effect_rack_state.plugins.push(effect_rack_plugin);
+                            */
                         }
 
                         for (plugin_id, _) in res.updated_plugin_edges.drain(..) {
+                            /*
                             let effect_rack_plugin =
                                 engine_state.effect_rack_state.plugin_mut(&plugin_id).unwrap();
 
                             if effect_rack_plugin.active_state.is_some() {
                                 // TODO
                             }
+                            */
                         }
                     }
                 }
@@ -299,12 +332,19 @@ impl DSExampleGUI {
                     // when the plugin restarts.
                     //
                     // Make sure your UI updates the port configuration on this plugin.
-                    PluginEvent::Activated { plugin_id, new_handle, new_param_values } => {
+                    PluginEvent::Activated {
+                        plugin_id,
+                        new_param_values,
+                        new_audio_ports,
+                        new_note_ports,
+                    } => {
                         if let Some(engine_state) = &mut self.engine_state {
+                            /*
                             let effect_rack_plugin =
                                 engine_state.effect_rack_state.plugin_mut(&plugin_id).unwrap();
+                            */
 
-                            effect_rack_plugin.update_handle(new_handle, new_param_values);
+                            //effect_rack_plugin.update_handle(new_handle, new_param_values);
                         }
                     }
 
@@ -320,10 +360,12 @@ impl DSExampleGUI {
                         status,
                     } => {
                         if let Some(engine_state) = &mut self.engine_state {
+                            /*
                             let effect_rack_plugin =
                                 engine_state.effect_rack_state.plugin_mut(&plugin_id).unwrap();
 
                             effect_rack_plugin.set_inactive();
+                            */
 
                             if let Err(e) = status {
                                 println!("Plugin failed to activate: {}", e);
@@ -333,20 +375,24 @@ impl DSExampleGUI {
 
                     PluginEvent::ParamsModified { plugin_id, modified_params } => {
                         if let Some(engine_state) = &mut self.engine_state {
+                            /*
                             let effect_rack_plugin =
                                 engine_state.effect_rack_state.plugin_mut(&plugin_id).unwrap();
 
                             if let Some(active_state) = &mut effect_rack_plugin.active_state {
                                 active_state.params_state.parameters_modified(&modified_params);
                             }
+                            */
                         }
                     }
 
                     PluginEvent::GuiClosed { plugin_id } => {
                         if let Some(engine_state) = &mut self.engine_state {
+                            /*
                             let effect_rack_plugin =
                                 engine_state.effect_rack_state.plugin_mut(&plugin_id).unwrap();
                             effect_rack_plugin.is_gui_open = false;
+                            */
                         }
                     }
 

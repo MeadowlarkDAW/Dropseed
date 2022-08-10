@@ -46,7 +46,7 @@ impl Verifier {
                 Task::Plugin(t) => {
                     if !self.plugin_instances.insert(t.plugin_id.unique_id()) {
                         return Err(VerifyScheduleError::PluginInstanceAppearsTwiceInSchedule {
-                            plugin_id: t.plugin_id,
+                            plugin_id: t.plugin_id.clone(),
                         });
                     }
 

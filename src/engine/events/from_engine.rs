@@ -2,12 +2,15 @@ use fnv::FnvHashMap;
 use smallvec::SmallVec;
 use std::path::PathBuf;
 
-use dropseed_plugin_api::{ParamID, PluginInstanceID, PluginSaveState};
+use dropseed_plugin_api::{
+    ext::{audio_ports::PluginAudioPortsExt, note_ports::PluginNotePortsExt},
+    DSPluginSaveState, ParamID, PluginInstanceID,
+};
 
 use crate::{
     engine::main_thread::{EngineActivatedInfo, ModifyGraphRes},
     engine::plugin_scanner::RescanPluginDirectoriesRes,
-    graph::{plugin_host::PluginHandle, ActivatePluginError, ParamModifiedInfo},
+    plugin_host::{ActivatePluginError, ParamModifiedInfo},
 };
 
 #[derive(Debug)]
@@ -36,7 +39,7 @@ pub enum DSEngineEvent {
     /// Use the latest save state as a backup in case a plugin crashes or a bug
     /// in the audio graph compiler causes the audio graph to be in an invalid
     /// state, resulting in the audio engine stopping.
-    NewSaveStates(Vec<(PluginInstanceID, PluginSaveState)>),
+    NewSaveStates(Vec<(PluginInstanceID, DSPluginSaveState)>),
 
     /// When this message is received, it means that the audio graph has been
     /// cleared.
@@ -84,8 +87,9 @@ pub enum PluginEvent {
     /// Make sure your UI updates the port configuration on this plugin.
     Activated {
         plugin_id: PluginInstanceID,
-        new_handle: PluginHandle,
         new_param_values: FnvHashMap<ParamID, f64>,
+        new_audio_ports: Option<PluginAudioPortsExt>,
+        new_note_ports: Option<PluginNotePortsExt>,
     },
 
     /// Sent whenever a plugin becomes deactivated. When a plugin is deactivated

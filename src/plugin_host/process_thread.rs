@@ -1,8 +1,6 @@
 use clack_host::events::Event;
 use dropseed_plugin_api::buffer::EventBuffer;
-use dropseed_plugin_api::{
-    PluginInstanceID, PluginProcessThread, ProcBuffers, ProcInfo, ProcessStatus,
-};
+use dropseed_plugin_api::{PluginProcessThread, ProcBuffers, ProcInfo, ProcessStatus};
 
 use super::channel::{PlugHostChannelProcThread, PluginActiveState};
 use super::events::{sanitizer::PluginEventOutputSanitizer, PluginEventIoBuffers};
@@ -16,8 +14,6 @@ enum ProcessingState {
 }
 
 pub(crate) struct PluginHostProcThread {
-    pub id: PluginInstanceID,
-
     plugin: Box<dyn PluginProcessThread>,
 
     channel: PlugHostChannelProcThread,
@@ -32,13 +28,11 @@ pub(crate) struct PluginHostProcThread {
 
 impl PluginHostProcThread {
     pub(crate) fn new(
-        id: PluginInstanceID,
         plugin: Box<dyn PluginProcessThread>,
         channel: PlugHostChannelProcThread,
         num_params: usize,
     ) -> Self {
         Self {
-            id,
             plugin,
             channel,
             in_events: EventBuffer::with_capacity(num_params * 3),

@@ -3,7 +3,7 @@ use dropseed_plugin_api::ProcInfo;
 
 use crate::graph::shared_pools::SharedDelayCompNode;
 
-pub struct DelayCompTask {
+pub(crate) struct DelayCompTask {
     pub shared_node: SharedDelayCompNode,
 
     pub audio_in: SharedBuffer<f32>,

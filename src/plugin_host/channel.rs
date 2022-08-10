@@ -5,7 +5,7 @@ use clack_host::utils::Cookie;
 use dropseed_plugin_api::{
     buffer::EventBuffer,
     event::{ParamModEvent, ParamValueEvent},
-    ParamID, PluginInstanceID, PluginProcessThread,
+    ParamID, PluginProcessThread,
 };
 use std::sync::{
     atomic::{AtomicBool, AtomicU32, Ordering},
@@ -38,7 +38,6 @@ impl PlugHostChannelMainThread {
 
     pub fn create_process_thread(
         &mut self,
-        plugin_id: PluginInstanceID,
         plugin_processor: Box<dyn PluginProcessThread>,
         num_params: usize,
         coll_handle: &basedrop::Handle,
@@ -75,7 +74,7 @@ impl PlugHostChannelMainThread {
         };
 
         let shared_proc_thread = SharedPluginHostProcThread::new(
-            PluginHostProcThread::new(plugin_id, plugin_processor, proc_channel, num_params),
+            PluginHostProcThread::new(plugin_processor, proc_channel, num_params),
             coll_handle,
         );
 
@@ -94,7 +93,7 @@ impl PlugHostChannelMainThread {
     }
 }
 
-pub(super) struct PlugHostChannelProcThread {
+pub(crate) struct PlugHostChannelProcThread {
     pub param_queues: Option<ParamQueuesProcThread>,
 
     pub shared_state: Arc<SharedPluginHostState>,
@@ -107,7 +106,7 @@ pub(super) struct ParamQueuesMainThread {
     pub from_proc_param_value_rx: ReducFnvConsumer<ParamID, ProcToMainParamValue>,
 }
 
-pub(super) struct ParamQueuesProcThread {
+pub(crate) struct ParamQueuesProcThread {
     pub from_main_param_value_rx: ReducFnvConsumer<ParamID, MainToProcParamValue>,
     pub from_main_param_mod_rx: ReducFnvConsumer<ParamID, MainToProcParamValue>,
 
@@ -165,19 +164,19 @@ impl ParamQueuesProcThread {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct MainToProcParamValue {
+pub(crate) struct MainToProcParamValue {
     pub value: f64,
 }
 
 impl ReducFnvValue for MainToProcParamValue {}
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct ParamGestureInfo {
+pub(crate) struct ParamGestureInfo {
     pub is_begin: bool,
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct ProcToMainParamValue {
+pub(crate) struct ProcToMainParamValue {
     pub value: Option<f64>,
     pub gesture: Option<ParamGestureInfo>,
 }
@@ -209,7 +208,7 @@ impl ProcToMainParamValue {
     }
 }
 
-pub(super) struct SharedPluginHostState {
+pub(crate) struct SharedPluginHostState {
     active_state: AtomicU32,
     start_processing: AtomicBool,
 }
@@ -239,7 +238,7 @@ impl SharedPluginHostState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
-pub(super) enum PluginActiveState {
+pub(crate) enum PluginActiveState {
     // TODO: this state shouldn't be able to exist for the process thread
     /// The plugin is inactive, only the main thread uses it.
     Inactive = 0,

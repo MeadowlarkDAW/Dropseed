@@ -1,14 +1,15 @@
 use dropseed::plugin_api::ext::params::ParamInfoFlags;
-use dropseed::plugin_api::{ParamID, PluginInstanceID, PluginSaveState};
+use dropseed::plugin_api::{DSPluginSaveState, ParamID, PluginInstanceID};
 use dropseed::{
     DSEngineHandle, DSEngineRequest, EdgeReq, EdgeReqPortID, ModifyGraphRequest, ParamModifiedInfo,
-    PluginHandle, PluginIDReq, PluginRequest, PortType,
+    PluginIDReq, PluginRequest, PortType,
 };
 use eframe::egui;
 use fnv::FnvHashMap;
 
 use super::DSExampleGUI;
 
+/*
 pub struct ParamState {
     id: ParamID,
 
@@ -31,10 +32,10 @@ pub struct ParamsState {
 }
 
 impl ParamsState {
-    pub fn new(handle: &PluginHandle, param_values: FnvHashMap<ParamID, f64>) -> Self {
+    pub fn new(param_values: FnvHashMap<ParamID, f64>) -> Self {
         let mut new_self = Self { params: FnvHashMap::default() };
 
-        new_self.update_handle(handle, param_values);
+        new_self.update_handle(param_values);
 
         new_self
     }
@@ -159,10 +160,12 @@ impl EffectRackState {
         }
     }
 }
+*/
 
 pub(crate) fn show(app: &mut DSExampleGUI, ui: &mut egui::Ui) {
     if let Some(engine_state) = &mut app.engine_state {
         ui.horizontal(|ui| {
+            /*
             let selected_text =
                 if let Some(plugin_i) = engine_state.effect_rack_state.selected_to_add_plugin_i {
                     &app.plugin_list[plugin_i].1
@@ -252,16 +255,21 @@ pub(crate) fn show(app: &mut DSExampleGUI, ui: &mut egui::Ui) {
                     app.engine_handle.send(request.into());
                 }
             }
+
+            */
         });
 
+        /*
         for (plugin_i, plugin) in engine_state.effect_rack_state.plugins.iter_mut().enumerate() {
             show_effect_rack_plugin(ui, plugin_i, plugin, &mut app.engine_handle);
         }
+        */
     } else {
         ui.label("Audio engine is deactivated");
     }
 }
 
+/*
 pub(crate) fn show_effect_rack_plugin(
     ui: &mut egui::Ui,
     plugin_i: usize,
@@ -383,3 +391,5 @@ pub(crate) fn show_effect_rack_plugin(
             );
         });
 }
+
+*/

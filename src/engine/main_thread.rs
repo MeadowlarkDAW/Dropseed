@@ -14,7 +14,7 @@ use thread_priority::ThreadPriority;
 
 use dropseed_plugin_api::plugin_scanner::ScannedPluginKey;
 use dropseed_plugin_api::transport::TempoMap;
-use dropseed_plugin_api::{HostInfo, PluginFactory, PluginInstanceID, PluginSaveState};
+use dropseed_plugin_api::{DSPluginSaveState, HostInfo, PluginFactory, PluginInstanceID};
 
 use crate::engine::audio_thread::DSEngineAudioThread;
 use crate::engine::events::from_engine::{
@@ -22,8 +22,8 @@ use crate::engine::events::from_engine::{
 };
 use crate::engine::events::to_engine::{DSEngineRequest, PluginRequest};
 use crate::engine::plugin_scanner::PluginScanner;
-use crate::graph::schedule::transport_task::TransportHandle;
 use crate::graph::{AudioGraph, Edge, NewPluginRes, PluginEdges, PortType};
+use crate::schedule::tasks::TransportHandle;
 use crate::utils::thread_id::SharedThreadIDs;
 
 static ENGINE_THREAD_UPDATE_INTERVAL: Duration = Duration::from_millis(10);
@@ -120,20 +120,20 @@ impl DSEngineMainThread {
                         }
                     }
                     DSEngineRequest::Plugin(instance_id, request) => {
-                        let plugin = self
+                        let plugin_host = self
                             .audio_graph
                             .as_mut()
-                            .and_then(|a| a.shared_plugin_pool.plugins.get_mut(&instance_id));
+                            .and_then(|a| a.get_plugin_host_mut(&instance_id));
 
-                        if let Some(plugin) = plugin {
+                        if let Some(plugin_host) = plugin_host {
                             match request {
-                                PluginRequest::ShowGui => plugin.plugin_host.show_gui(),
-                                PluginRequest::CloseGui => plugin.plugin_host.close_gui(),
-                                PluginRequest::LoadPreset(preset) => {
-                                    plugin.plugin_host.load_preset(preset)
+                                PluginRequest::ShowGui => plugin_host.show_gui(),
+                                PluginRequest::CloseGui => plugin_host.close_gui(),
+                                PluginRequest::LoadSaveState(state) => {
+                                    plugin_host.load_save_state(state)
                                 }
                                 PluginRequest::GetLatestSaveState => {
-                                    let state = plugin.plugin_host.collect_save_state();
+                                    let state = plugin_host.collect_save_state();
 
                                     self.event_tx
                                         .send(DSEngineEvent::NewSaveStates(vec![(
@@ -215,8 +215,8 @@ impl DSEngineMainThread {
             transport_declick_time,
         );
 
-        let graph_in_node_id = audio_graph.graph_in_node_id().clone();
-        let graph_out_node_id = audio_graph.graph_out_node_id().clone();
+        let graph_in_node_id = audio_graph.graph_in_id().clone();
+        let graph_out_node_id = audio_graph.graph_out_id().clone();
 
         // TODO: Remove this once compiler is fixed.
         audio_graph
@@ -295,8 +295,8 @@ impl DSEngineMainThread {
 
             let info = EngineActivatedInfo {
                 audio_thread,
-                graph_in_node_id: audio_graph.graph_in_node_id().clone(),
-                graph_out_node_id: audio_graph.graph_out_node_id().clone(),
+                graph_in_node_id: audio_graph.graph_in_id().clone(),
+                graph_out_node_id: audio_graph.graph_out_id().clone(),
                 sample_rate,
                 min_frames,
                 max_frames,
@@ -393,8 +393,8 @@ impl DSEngineMainThread {
             }
 
             // Don't include the graph in/out "plugins" in the result.
-            let _ = affected_plugins.remove(audio_graph.graph_in_node_id());
-            let _ = affected_plugins.remove(audio_graph.graph_out_node_id());
+            let _ = affected_plugins.remove(audio_graph.graph_in_id());
+            let _ = affected_plugins.remove(audio_graph.graph_out_id());
 
             let updated_plugin_edges: Vec<(PluginInstanceID, PluginEdges)> = affected_plugins
                 .iter()
@@ -587,7 +587,7 @@ pub struct EdgeReq {
 #[derive(Debug, Clone)]
 pub struct ModifyGraphRequest {
     /// Any new plugin instances to add.
-    pub add_plugin_instances: Vec<PluginSaveState>,
+    pub add_plugin_instances: Vec<DSPluginSaveState>,
 
     /// Any plugins to remove.
     pub remove_plugin_instances: Vec<PluginInstanceID>,

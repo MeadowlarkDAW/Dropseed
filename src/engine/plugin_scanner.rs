@@ -6,12 +6,15 @@ use walkdir::WalkDir;
 
 use dropseed_plugin_api::plugin_scanner::{PluginFormat, ScannedPluginKey};
 use dropseed_plugin_api::{
-    HostInfo, HostRequestChannelReceiver, PluginDescriptor, PluginFactory, PluginInstanceID,
-    PluginInstanceType, PluginSaveState,
+    DSPluginSaveState, HostInfo, HostRequestChannelReceiver, PluginDescriptor, PluginFactory,
+    PluginInstanceID, PluginInstanceType,
 };
 
-use crate::graph::plugin_host::PluginInstanceHost;
+use crate::plugin_host::PluginHostMainThread;
 use crate::utils::thread_id::SharedThreadIDs;
+
+mod missing_plugin;
+use missing_plugin::MissingPluginMainThread;
 
 #[cfg(all(
     feature = "clap-host",
@@ -45,7 +48,6 @@ impl ScannedPlugin {
 struct ScannedPluginFactory {
     pub rdn: Shared<String>,
     pub format: PluginFormat,
-    pub plugin_version: Shared<String>,
 
     factory: Box<dyn PluginFactory>,
 }
@@ -231,9 +233,6 @@ impl PluginScanner {
 
                             let description = f.description();
 
-                            let plugin_version =
-                                Shared::new(&self.coll_handle, description.version.clone());
-
                             scanned_plugins.push(ScannedPlugin {
                                 description,
                                 format: PluginFormat::Clap,
@@ -248,7 +247,6 @@ impl PluginScanner {
                                     ScannedPluginFactory {
                                         rdn: Shared::new(&self.coll_handle, id.clone()),
                                         format: PluginFormat::Clap,
-                                        plugin_version,
                                         factory: Box::new(f),
                                     },
                                 )
@@ -291,7 +289,6 @@ impl PluginScanner {
         let scanned_plugin = ScannedPluginFactory {
             factory,
             rdn: Shared::new(&self.coll_handle, key.rdn.clone()),
-            plugin_version: Shared::new(&self.coll_handle, description.version),
             format: PluginFormat::Internal,
         };
 
@@ -302,14 +299,13 @@ impl PluginScanner {
 
     pub(crate) fn create_plugin(
         &mut self,
-        mut save_state: PluginSaveState,
+        mut save_state: DSPluginSaveState,
         node_ref: audio_graph::NodeRef,
         fallback_to_other_formats: bool,
     ) -> CreatePluginResult {
         // TODO: return an actual result
         let mut factory = None;
         let mut status = Ok(());
-        let mut plugin_version = None;
 
         // Always try to use internal plugins when available.
         if save_state.key.format == PluginFormat::Internal || fallback_to_other_formats {
@@ -360,15 +356,11 @@ impl PluginScanner {
 
         let mut format = PluginInstanceType::Unloaded;
 
-        let (channel_recv, channel_send) = HostRequestChannelReceiver::new_channel();
+        let (host_request_rx, channel_send) = HostRequestChannelReceiver::new_channel();
 
-        let mut main_thread = None;
-
-        let id = if let Some(factory) = factory {
+        let plugin_host = if let Some(factory) = factory {
             format = factory.format.into();
             let rdn = factory.rdn.clone();
-
-            plugin_version = Some(Shared::clone(&factory.plugin_version));
 
             if save_state.key.format != factory.format {
                 save_state.key =
@@ -379,25 +371,32 @@ impl PluginScanner {
                 PluginInstanceID::_new(node_ref.as_usize(), self.next_plug_unique_id, format, rdn);
             self.next_plug_unique_id += 1;
 
-            match factory.factory.instantiate(
+            let plug_main_thread = match factory.factory.instantiate(
                 channel_send,
                 self.host_info.clone(),
                 id.clone(),
                 &self.coll_handle,
             ) {
-                Ok(plugin_main_thread) => {
-                    main_thread = Some(plugin_main_thread);
+                Ok(plug_main_thread) => {
                     status = Ok(());
+
+                    plug_main_thread
                 }
                 Err(e) => {
                     status = Err(NewPluginInstanceError::FactoryFailedToCreateNewInstance(
                         (*factory.rdn).clone(),
                         e,
                     ));
+
+                    Box::new(MissingPluginMainThread::new(
+                        save_state.key.clone(),
+                        save_state.backup_audio_ports.clone(),
+                        save_state.backup_note_ports.clone(),
+                    ))
                 }
             };
 
-            id
+            PluginHostMainThread::new(id, save_state, plug_main_thread, host_request_rx)
         } else {
             let rdn = Shared::new(&self.coll_handle, save_state.key.rdn.clone());
 
@@ -409,24 +408,21 @@ impl PluginScanner {
                 status = Err(NewPluginInstanceError::NotFound(save_state.key.rdn.clone()));
             }
 
-            id
+            let plug_main_thread = Box::new(MissingPluginMainThread::new(
+                save_state.key.clone(),
+                save_state.backup_audio_ports.clone(),
+                save_state.backup_note_ports.clone(),
+            ));
+
+            PluginHostMainThread::new(id, save_state, plug_main_thread, host_request_rx)
         };
 
-        CreatePluginResult {
-            plugin_host: PluginInstanceHost::new(
-                id,
-                save_state,
-                main_thread,
-                channel_recv,
-                plugin_version,
-            ),
-            status,
-        }
+        CreatePluginResult { plugin_host, status }
     }
 }
 
 pub(crate) struct CreatePluginResult {
-    pub plugin_host: PluginInstanceHost,
+    pub plugin_host: PluginHostMainThread,
     pub status: Result<(), NewPluginInstanceError>,
 }
 

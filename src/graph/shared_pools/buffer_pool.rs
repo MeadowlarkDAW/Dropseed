@@ -2,7 +2,7 @@ use dropseed_plugin_api::buffer::{DebugBufferID, DebugBufferType, SharedBuffer};
 
 use crate::plugin_host::events::{NoteEvent, ParamEvent};
 
-struct BufferPool<T: Clone + Copy + Send + Sync + 'static> {
+pub(crate) struct BufferPool<T: Clone + Copy + Send + Sync + 'static> {
     pool: Vec<SharedBuffer<T>>,
     buffer_size: usize,
     buffer_type: DebugBufferType,

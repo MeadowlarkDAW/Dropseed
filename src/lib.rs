@@ -23,6 +23,8 @@ pub use engine::main_thread::{
     ModifyGraphRes, PluginIDReq,
 };
 pub use engine::plugin_scanner::{RescanPluginDirectoriesRes, ScannedPlugin};
+pub use graph::{PluginActivationStatus, PortType};
+pub use plugin_host::ParamModifiedInfo;
 /*
 pub use graph::schedule::transport_task::{TransportHandle, TransportSaveState};
 pub use graph::{

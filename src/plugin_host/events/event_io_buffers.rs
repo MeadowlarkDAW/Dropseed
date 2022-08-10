@@ -12,7 +12,7 @@ use super::super::events::{
 };
 
 // TODO: remove pubs
-pub struct PluginEventIoBuffers {
+pub(crate) struct PluginEventIoBuffers {
     pub unmixed_param_in_buffers: Option<SmallVec<[SharedBuffer<ParamEvent>; 2]>>,
     /// Only for internal plugin (e.g. timeline or macros)
     pub param_out_buffer: Option<SharedBuffer<ParamEvent>>,

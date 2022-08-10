@@ -5,7 +5,7 @@ use fnv::FnvHashMap;
 use crate::schedule::tasks::DelayCompNode;
 
 #[derive(Clone)]
-pub struct SharedDelayCompNode {
+pub(crate) struct SharedDelayCompNode {
     pub active: bool,
     pub delay: u32,
 

@@ -76,8 +76,6 @@ impl PluginHostMainThread {
         mut plug_main_thread: Box<dyn PluginMainThread>,
         host_request_rx: HostRequestChannelReceiver,
     ) -> Self {
-        let mut channel = PlugHostChannelMainThread::new();
-
         if let Some(save_state) = save_state.raw_state.clone() {
             match plug_main_thread.load_save_state(save_state) {
                 Ok(()) => {
@@ -104,7 +102,7 @@ impl PluginHostMainThread {
             note_ports_ext: None,
             num_audio_in_channels,
             num_audio_out_channels,
-            channel,
+            channel: PlugHostChannelMainThread::new(),
             save_state,
             gesturing_params: FnvHashMap::default(),
             host_request_rx,
@@ -162,6 +160,10 @@ impl PluginHostMainThread {
         if self.plug_main_thread.is_gui_open() {
             self.plug_main_thread.close_gui()
         }
+    }
+
+    pub fn supports_gui(&self) -> bool {
+        self.plug_main_thread.supports_gui()
     }
 
     pub fn can_activate(&self) -> Result<(), ActivatePluginError> {
@@ -255,12 +257,7 @@ impl PluginHostMainThread {
             Ok(info) => {
                 self.channel.shared_state.set_active_state(PluginActiveState::Active);
 
-                self.channel.create_process_thread(
-                    self.id.clone(),
-                    info.processor,
-                    num_params,
-                    coll_handle,
-                );
+                self.channel.create_process_thread(info.processor, num_params, coll_handle);
 
                 Ok((
                     param_values,
@@ -314,15 +311,6 @@ impl PluginHostMainThread {
         } else {
             self.save_state.backup_note_ports.as_ref()
         }
-    }
-
-    /// Whether or not this plugin has an automation out port (seperate from audio
-    /// and note out ports).
-    ///
-    /// Only return `true` for internal plugins which output parameter automation
-    /// events for other plugins.
-    pub fn has_automation_out_port(&self) -> bool {
-        self.plug_main_thread.has_automation_out_port()
     }
 
     pub fn on_idle(
@@ -674,7 +662,7 @@ impl PluginHostMainThread {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct ParamModifiedInfo {
+pub struct ParamModifiedInfo {
     pub param_id: ParamID,
     pub new_value: Option<f64>,
     pub is_gesturing: bool,
