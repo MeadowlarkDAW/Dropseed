@@ -1,36 +1,31 @@
 use audio_graph::{Graph, NodeRef};
 use basedrop::Shared;
-use crossbeam_channel::Sender;
-use fnv::FnvHashMap;
 use fnv::FnvHashSet;
 use meadowlark_core_types::time::SampleRate;
 use meadowlark_core_types::time::Seconds;
 use smallvec::SmallVec;
-use std::error::Error;
 
 mod compiler;
 
+pub mod error;
+
 pub(crate) mod shared_pools;
 
-pub use compiler::GraphCompilerError;
-
-use dropseed_plugin_api::ext::audio_ports::PluginAudioPortsExt;
-use dropseed_plugin_api::ext::note_ports::PluginNotePortsExt;
-use dropseed_plugin_api::ext::params::ParamID;
 use dropseed_plugin_api::transport::TempoMap;
 use dropseed_plugin_api::{DSPluginSaveState, PluginInstanceID, PluginInstanceType};
 
-use crate::engine::events::from_engine::{DSEngineEvent, PluginEvent};
-use crate::engine::main_thread::{EdgeReq, EdgeReqPortID};
-use crate::engine::plugin_scanner::{NewPluginInstanceError, PluginScanner};
-use crate::plugin_host::PluginHostMainThread;
-use crate::plugin_host::{ActivatePluginError, OnIdleResult};
-use crate::schedule::tasks::{TransportHandle, TransportTask};
-use crate::schedule::Schedule;
+use crate::engine::request::{EdgeReq, EdgeReqPortID};
+use crate::engine::{NewPluginRes, NewPluginStatus, OnIdleEvent};
+use crate::plugin_host::{OnIdleResult, PluginHostMainThread};
+use crate::plugin_scanner::PluginScanner;
+use crate::processor_schedule::tasks::{TransportHandle, TransportTask};
+use crate::processor_schedule::ProcessorSchedule;
 use crate::utils::thread_id::SharedThreadIDs;
 
 use compiler::verifier::Verifier;
-use shared_pools::{GraphSharedPools, SharedSchedule};
+use shared_pools::{GraphSharedPools, SharedProcessorSchedule};
+
+use error::{ConnectEdgeError, ConnectEdgeErrorType, GraphCompilerError};
 
 /// A default port type for general purpose applications
 #[repr(u8)]
@@ -98,7 +93,7 @@ impl AudioGraph {
         event_buffer_size: usize,
         thread_ids: SharedThreadIDs,
         transport_declick_time: Option<Seconds>,
-    ) -> (Self, SharedSchedule, TransportHandle) {
+    ) -> (Self, SharedProcessorSchedule, TransportHandle) {
         //assert!(graph_in_channels > 0);
         assert!(graph_out_channels > 0);
 
@@ -200,7 +195,7 @@ impl AudioGraph {
         let activation_status = if activate_plugin {
             self.activate_plugin_instance(&plugin_id).unwrap()
         } else {
-            PluginActivationStatus::Inactive
+            NewPluginStatus::Inactive
         };
 
         NewPluginRes { plugin_id, status: activation_status, supports_gui }
@@ -209,7 +204,7 @@ impl AudioGraph {
     pub fn activate_plugin_instance(
         &mut self,
         id: &PluginInstanceID,
-    ) -> Result<PluginActivationStatus, ()> {
+    ) -> Result<NewPluginStatus, ()> {
         let plugin_host = if let Some(plugin_host) = self.shared_pools.plugin_hosts.pool.get_mut(id)
         {
             plugin_host
@@ -218,7 +213,7 @@ impl AudioGraph {
         };
 
         if let Err(e) = plugin_host.can_activate() {
-            return Ok(PluginActivationStatus::ActivationError(e));
+            return Ok(NewPluginStatus::ActivationError(e));
         }
 
         let activation_status = match plugin_host.activate(
@@ -227,17 +222,11 @@ impl AudioGraph {
             self.max_frames as u32,
             &self.coll_handle,
         ) {
-            Ok((new_param_values, new_audio_ports_ext, new_note_ports_ext)) => {
-                PluginActivationStatus::Activated {
-                    new_param_values,
-                    new_audio_ports_ext,
-                    new_note_ports_ext,
-                }
-            }
-            Err(e) => PluginActivationStatus::ActivationError(e),
+            Ok(res) => NewPluginStatus::Activated(res),
+            Err(e) => NewPluginStatus::ActivationError(e),
         };
 
-        if let PluginActivationStatus::Activated { .. } = &activation_status {
+        if let NewPluginStatus::Activated { .. } = &activation_status {
             plugin_host.sync_ports_in_graph(&mut self.abstract_graph);
         }
 
@@ -656,7 +645,9 @@ impl AudioGraph {
             {
                 std::thread::sleep(std::time::Duration::from_millis(10));
 
-                let _ = self.on_idle(None);
+                let mut _events_out: SmallVec<[OnIdleEvent; 32]> = SmallVec::new();
+
+                let _ = self.on_idle(&mut _events_out);
             }
 
             if self.shared_pools.plugin_hosts.pool.is_empty() {
@@ -665,7 +656,7 @@ impl AudioGraph {
         }
 
         self.shared_pools.shared_schedule.set_new_schedule(
-            Schedule::new_empty(
+            ProcessorSchedule::new_empty(
                 self.max_frames as usize,
                 self.shared_pools.transports.transport.clone(),
             ),
@@ -760,7 +751,7 @@ impl AudioGraph {
                 // Replace the current schedule with an emtpy one now that the graph
                 // is in an invalid state.
                 self.shared_pools.shared_schedule.set_new_schedule(
-                    Schedule::new_empty(
+                    ProcessorSchedule::new_empty(
                         self.max_frames as usize,
                         self.shared_pools.transports.transport.clone(),
                     ),
@@ -783,7 +774,7 @@ impl AudioGraph {
         res
     }
 
-    pub fn on_idle(&mut self, mut event_tx: Option<&mut Sender<DSEngineEvent>>) -> bool {
+    pub fn on_idle(&mut self, mut events_out: &mut SmallVec<[OnIdleEvent; 32]>) -> bool {
         let mut plugins_to_remove: SmallVec<[PluginInstanceID; 4]> = SmallVec::new();
 
         let mut recompile_graph = false;
@@ -797,7 +788,7 @@ impl AudioGraph {
                 self.min_frames,
                 self.max_frames,
                 &self.coll_handle,
-                &mut event_tx,
+                &mut events_out,
             );
 
             match res {
@@ -807,64 +798,42 @@ impl AudioGraph {
 
                     println!("plugin deactivated");
 
-                    if let Some(event_tx) = event_tx.as_ref() {
-                        event_tx
-                            .send(DSEngineEvent::Plugin(PluginEvent::Deactivated {
-                                plugin_id: plugin_host.id().clone(),
-                                status: Ok(()),
-                            }))
-                            .unwrap();
-                    }
+                    events_out.push(OnIdleEvent::PluginDeactivated {
+                        plugin_id: plugin_host.id().clone(),
+                        status: Ok(()),
+                    });
                 }
-                OnIdleResult::PluginActivated {
-                    new_param_values,
-                    new_audio_ports,
-                    new_note_ports,
-                } => {
+                OnIdleResult::PluginActivated(res) => {
                     plugin_host.sync_ports_in_graph(&mut self.abstract_graph);
 
                     recompile_graph = true;
 
-                    if let Some(event_tx) = event_tx.as_ref() {
-                        event_tx
-                            .send(DSEngineEvent::Plugin(PluginEvent::Activated {
-                                plugin_id: plugin_host.id().clone(),
-                                new_param_values,
-                                new_audio_ports,
-                                new_note_ports,
-                            }))
-                            .unwrap();
-                    }
+                    events_out.push(OnIdleEvent::PluginActivated {
+                        plugin_id: plugin_host.id().clone(),
+                        result: res,
+                    });
                 }
                 OnIdleResult::PluginReadyToRemove => {
                     plugins_to_remove.push(plugin_host.id().clone());
 
                     // The user should have already been alerted of the plugin being removed
-                    // in a previous `DSEngineEvent::AudioGraphModified` event.
+                    // in a previous `OnIdleEvent::AudioGraphModified` event.
                 }
                 OnIdleResult::PluginFailedToActivate(e) => {
                     recompile_graph = true;
 
-                    if let Some(event_tx) = event_tx.as_ref() {
-                        event_tx
-                            .send(DSEngineEvent::Plugin(PluginEvent::Deactivated {
-                                plugin_id: plugin_host.id().clone(),
-                                status: Err(e),
-                            }))
-                            .unwrap();
-                    }
+                    events_out.push(OnIdleEvent::PluginDeactivated {
+                        plugin_id: plugin_host.id().clone(),
+                        status: Err(e),
+                    });
                 }
             }
 
             if !modified_params.is_empty() {
-                if let Some(event_tx) = event_tx.as_ref() {
-                    event_tx
-                        .send(DSEngineEvent::Plugin(PluginEvent::ParamsModified {
-                            plugin_id: plugin_host.id().clone(),
-                            modified_params: modified_params.to_owned(),
-                        }))
-                        .unwrap();
-                }
+                events_out.push(OnIdleEvent::PluginParamsModified {
+                    plugin_id: plugin_host.id().clone(),
+                    modified_params: modified_params.to_owned(),
+                });
             }
         }
 
@@ -879,6 +848,10 @@ impl AudioGraph {
         for plugin_host in self.shared_pools.plugin_hosts.pool.values_mut() {
             plugin_host.update_tempo_map(&new_tempo_map);
         }
+    }
+
+    pub fn get_plugin_host(&self, id: &PluginInstanceID) -> Option<&PluginHostMainThread> {
+        self.shared_pools.plugin_hosts.pool.get(id)
     }
 
     pub fn get_plugin_host_mut(
@@ -900,44 +873,13 @@ impl AudioGraph {
 impl Drop for AudioGraph {
     fn drop(&mut self) {
         self.shared_pools.shared_schedule.set_new_schedule(
-            Schedule::new_empty(
+            ProcessorSchedule::new_empty(
                 self.max_frames as usize,
                 self.shared_pools.transports.transport.clone(),
             ),
             &self.coll_handle,
         );
     }
-}
-
-#[derive(Debug)]
-pub enum PluginActivationStatus {
-    /// This means the plugin successfully activated and returned
-    /// its new audio/event port configuration and its new
-    /// parameter configuration.
-    Activated {
-        new_param_values: FnvHashMap<ParamID, f64>,
-        new_audio_ports_ext: Option<PluginAudioPortsExt>,
-        new_note_ports_ext: Option<PluginNotePortsExt>,
-    },
-
-    /// This means that the plugin loaded but did not activate yet. This
-    /// can happen when the user loads a project with a deactivated
-    /// plugin.
-    Inactive,
-
-    /// There was an error loading the plugin.
-    LoadError(NewPluginInstanceError),
-
-    /// There was an error activating the plugin.
-    ActivationError(ActivatePluginError),
-}
-
-#[derive(Debug)]
-pub struct NewPluginRes {
-    pub plugin_id: PluginInstanceID,
-
-    pub status: PluginActivationStatus,
-    pub supports_gui: bool, // TODO: probably doesn't belong here
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -964,63 +906,4 @@ pub struct Edge {
 
     pub dst_port_stable_id: u32,
     pub dst_port_channel: u16,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConnectEdgeErrorType {
-    SrcPluginDoesNotExist,
-    DstPluginDoesNotExist,
-    SrcPortDoesNotExist,
-    DstPortDoesNotExist,
-    Cycle,
-    Unkown,
-}
-
-#[derive(Debug, Clone)]
-pub struct ConnectEdgeError {
-    pub error_type: ConnectEdgeErrorType,
-    pub edge: EdgeReq,
-}
-
-impl Error for ConnectEdgeError {}
-
-impl std::fmt::Display for ConnectEdgeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.error_type {
-            ConnectEdgeErrorType::SrcPluginDoesNotExist => {
-                write!(
-                    f,
-                    "Could not add edge {:?} to graph: Source plugin does not exist",
-                    &self.edge
-                )
-            }
-            ConnectEdgeErrorType::DstPluginDoesNotExist => {
-                write!(
-                    f,
-                    "Could not add edge {:?} to graph: Destination plugin does not exist",
-                    &self.edge
-                )
-            }
-            ConnectEdgeErrorType::SrcPortDoesNotExist => {
-                write!(
-                    f,
-                    "Could not add edge {:?} to graph: Source port does not exist",
-                    &self.edge
-                )
-            }
-            ConnectEdgeErrorType::DstPortDoesNotExist => {
-                write!(
-                    f,
-                    "Could not add edge {:?} to graph: Destination port does not exist",
-                    &self.edge
-                )
-            }
-            ConnectEdgeErrorType::Cycle => {
-                write!(f, "Could not add edge {:?} to graph: Cycle detected", &self.edge)
-            }
-            ConnectEdgeErrorType::Unkown => {
-                write!(f, "Could not add edge {:?} to graph: Unkown error", &self.edge)
-            }
-        }
-    }
 }

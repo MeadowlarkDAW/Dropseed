@@ -1,4 +1,3 @@
-use crate::clap::host::{ClapHostMainThread, ClapHostShared};
 use clack_extensions::audio_ports::{HostAudioPortsImplementation, RescanType};
 use clack_extensions::gui::{GuiError, GuiSize, HostGuiImplementation};
 use clack_extensions::log::implementation::HostLog;
@@ -8,6 +7,8 @@ use clack_extensions::params::{
 };
 use clack_extensions::thread_check::host::ThreadCheckImplementation;
 use dropseed_plugin_api::HostRequestFlags;
+
+use super::{ClapHostMainThread, ClapHostShared};
 
 // TODO: Make sure that the log and print methods don't allocate on the current thread.
 // If they do, then we need to come up with a realtime-safe way to print to the terminal.
@@ -30,27 +31,17 @@ impl<'a> HostLog for ClapHostShared<'a> {
 
 impl<'a> ThreadCheckImplementation for ClapHostShared<'a> {
     fn is_main_thread(&self) -> bool {
-        if let Some(thread_id) = self.thread_ids.external_main_thread_id() {
-            std::thread::current().id() == thread_id
-        } else {
-            log::error!("external_main_thread_id is None");
-            false
-        }
+        self.thread_ids.is_main_thread()
     }
 
     fn is_audio_thread(&self) -> bool {
-        if let Some(thread_id) = self.thread_ids.external_audio_thread_id() {
-            std::thread::current().id() == thread_id
-        } else {
-            log::error!("external_audio_thread_id is None");
-            false
-        }
+        self.thread_ids.is_process_thread()
     }
 }
 
 impl<'a> HostAudioPortsImplementation for ClapHostMainThread<'a> {
     fn is_rescan_flag_supported(&self, mut flag: RescanType) -> bool {
-        if !self.shared.thread_ids.is_external_main_thread() {
+        if !self.shared.thread_ids.is_main_thread() {
             log::warn!("Plugin called clap_host_audio_ports->is_rescan_flag_supported() not in the main thread");
             return false;
         }
@@ -67,7 +58,7 @@ impl<'a> HostAudioPortsImplementation for ClapHostMainThread<'a> {
     }
 
     fn rescan(&mut self, mut flags: RescanType) {
-        if !self.shared.thread_ids.is_external_main_thread() {
+        if !self.shared.thread_ids.is_main_thread() {
             log::warn!("Plugin called clap_host_audio_ports->rescan() not in the main thread");
             return;
         }
@@ -94,7 +85,7 @@ impl<'a> HostParamsImplementation for ClapHostShared<'a> {
 
 impl<'a> HostParamsImplementationMainThread for ClapHostMainThread<'a> {
     fn rescan(&mut self, flags: ParamRescanFlags) {
-        if !self.shared.thread_ids.is_external_main_thread() {
+        if !self.shared.thread_ids.is_main_thread() {
             log::warn!("Plugin called clap_host_params->rescan() not in the main thread");
             return;
         }
@@ -106,7 +97,7 @@ impl<'a> HostParamsImplementationMainThread for ClapHostMainThread<'a> {
     }
 
     fn clear(&mut self, _param_id: u32, _flags: ParamClearFlags) {
-        if !self.shared.thread_ids.is_external_main_thread() {
+        if !self.shared.thread_ids.is_main_thread() {
             log::warn!("Plugin called clap_host_params->clear() not in the main thread");
             return;
         }

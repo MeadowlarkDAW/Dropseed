@@ -2,7 +2,7 @@ use atomic_refcell::{AtomicRefCell, AtomicRefMut};
 use basedrop::Shared;
 use fnv::FnvHashMap;
 
-use crate::schedule::tasks::DelayCompNode;
+use crate::processor_schedule::tasks::DelayCompNode;
 
 #[derive(Clone)]
 pub(crate) struct SharedDelayCompNode {

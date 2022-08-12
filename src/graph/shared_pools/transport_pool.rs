@@ -1,7 +1,7 @@
 use atomic_refcell::{AtomicRefCell, AtomicRefMut};
 use basedrop::Shared;
 
-use crate::schedule::tasks::TransportTask;
+use crate::processor_schedule::tasks::TransportTask;
 
 #[derive(Clone)]
 pub struct SharedTransportTask {

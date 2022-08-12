@@ -1,9 +1,9 @@
 use dropseed_plugin_api::buffer::{DebugBufferID, RawAudioChannelBuffers};
-use dropseed_plugin_api::PluginInstanceID;
 use fnv::FnvHashSet;
-use std::error::Error;
 
-use crate::schedule::{tasks::Task, Schedule};
+use crate::processor_schedule::{tasks::Task, ProcessorSchedule};
+
+use super::super::error::VerifyScheduleError;
 
 pub(crate) struct Verifier {
     plugin_instances: FnvHashSet<u64>,
@@ -32,7 +32,7 @@ impl Verifier {
     /// appearing multiple times between parallel tasks (once we have multithreaded scheduling).
     pub fn verify_schedule_for_race_conditions(
         &mut self,
-        schedule: &Schedule,
+        schedule: &ProcessorSchedule,
     ) -> Result<(), VerifyScheduleError> {
         // TODO: verifying that there are not data races between parallel threads once we
         // have multithreaded scheduling.
@@ -174,47 +174,5 @@ impl Verifier {
         }
 
         Ok(())
-    }
-}
-
-#[allow(unused)]
-#[derive(Debug, Clone)]
-pub enum VerifyScheduleError {
-    BufferAppearsTwiceInSameTask {
-        buffer_id: DebugBufferID,
-        task_info: String,
-    },
-    BufferAppearsTwiceInParallelTasks {
-        buffer_id: DebugBufferID,
-    },
-    PluginInstanceAppearsTwiceInSchedule {
-        plugin_id: PluginInstanceID,
-    },
-    /// This could be made just a warning and not an error, but it's still not what
-    /// we want to happen.
-    SumNodeWithLessThanTwoInputs {
-        num_inputs: usize,
-        task_info: String,
-    },
-}
-
-impl Error for VerifyScheduleError {}
-
-impl std::fmt::Display for VerifyScheduleError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self {
-            VerifyScheduleError::BufferAppearsTwiceInSameTask { buffer_id, task_info } => {
-                write!(f, "Error detected in compiled audio graph: The buffer with ID {:?} appears more than once within the same task {}", buffer_id, task_info)
-            }
-            VerifyScheduleError::BufferAppearsTwiceInParallelTasks { buffer_id } => {
-                write!(f, "Error detected in compiled audio graph: The buffer with ID {:?} appears more than once between the parallel tasks", buffer_id)
-            }
-            VerifyScheduleError::PluginInstanceAppearsTwiceInSchedule { plugin_id } => {
-                write!(f, "Error detected in compiled audio graph: The plugin instance with ID {:?} appears more than once in the schedule", plugin_id)
-            }
-            VerifyScheduleError::SumNodeWithLessThanTwoInputs { num_inputs, task_info } => {
-                write!(f, "Error detected in compiled audio graph: A Sum node was created with {} inputs in the task {}", num_inputs, task_info)
-            }
-        }
     }
 }

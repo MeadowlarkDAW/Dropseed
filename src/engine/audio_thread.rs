@@ -9,7 +9,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use super::process_thread::DSEngineProcessThread;
-use crate::graph::shared_pools::SharedSchedule;
+use crate::graph::shared_pools::SharedProcessorSchedule;
 
 // Allocate enough for at-least 3 seconds of buffer time.
 static ALLOCATED_FRAMES_PER_CHANNEL: usize = 192_000 * 3;
@@ -63,7 +63,7 @@ impl DSEngineAudioThread {
         in_channels: usize,
         out_channels: usize,
         coll_handle: &basedrop::Handle,
-        schedule: SharedSchedule,
+        schedule: SharedProcessorSchedule,
         sample_rate: SampleRate,
     ) -> (Self, DSEngineProcessThread) {
         let (to_engine_audio_in_tx, from_audio_thread_audio_in_rx) =

@@ -1,9 +1,8 @@
 use audio_graph::{Graph, NodeRef};
 use basedrop::Shared;
-use crossbeam_channel::Sender;
 use dropseed_plugin_api::ext::audio_ports::{MainPortsLayout, PluginAudioPortsExt};
 use dropseed_plugin_api::ext::note_ports::PluginNotePortsExt;
-use dropseed_plugin_api::ext::params::{ParamID, ParamInfo};
+use dropseed_plugin_api::ext::params::{ParamID, ParamInfo, ParamInfoFlags};
 use dropseed_plugin_api::transport::TempoMap;
 use dropseed_plugin_api::{
     DSPluginSaveState, HostRequestChannelReceiver, HostRequestFlags, PluginInstanceID,
@@ -13,11 +12,13 @@ use fnv::FnvHashMap;
 use meadowlark_core_types::time::SampleRate;
 use smallvec::SmallVec;
 
-use crate::engine::events::from_engine::{DSEngineEvent, PluginEvent};
+use crate::engine::{OnIdleEvent, PluginActivatedRes};
 use crate::graph::{PortChannelID, PortType};
 
-use super::channel::{PlugHostChannelMainThread, PluginActiveState, SharedPluginHostProcThread};
-use super::error::ActivatePluginError;
+use super::channel::{
+    MainToProcParamValue, PlugHostChannelMainThread, PluginActiveState, SharedPluginHostProcThread,
+};
+use super::error::{ActivatePluginError, SetParamValueError, ShowGuiError};
 
 /// The references to this plugin's ports in the audio graph.
 pub(crate) struct PluginHostPortRefs {
@@ -44,7 +45,7 @@ impl PluginHostPortRefs {
     }
 }
 
-pub(crate) struct PluginHostMainThread {
+pub struct PluginHostMainThread {
     id: PluginInstanceID,
 
     audio_ports_ext: Option<PluginAudioPortsExt>,
@@ -52,6 +53,8 @@ pub(crate) struct PluginHostMainThread {
 
     num_audio_in_channels: usize,
     num_audio_out_channels: usize,
+
+    params: Option<FnvHashMap<ParamID, ParamInfo>>,
 
     plug_main_thread: Box<dyn PluginMainThread>,
 
@@ -70,7 +73,7 @@ pub(crate) struct PluginHostMainThread {
 }
 
 impl PluginHostMainThread {
-    pub fn new(
+    pub(crate) fn new(
         id: PluginInstanceID,
         save_state: DSPluginSaveState,
         mut plug_main_thread: Box<dyn PluginMainThread>,
@@ -102,6 +105,7 @@ impl PluginHostMainThread {
             note_ports_ext: None,
             num_audio_in_channels,
             num_audio_out_channels,
+            params: None,
             channel: PlugHostChannelMainThread::new(),
             save_state,
             gesturing_params: FnvHashMap::default(),
@@ -112,17 +116,9 @@ impl PluginHostMainThread {
         }
     }
 
-    pub fn load_save_state(&mut self, state: Vec<u8>) {
-        match self.plug_main_thread.load_save_state(state) {
-            Ok(()) => {
-                log::trace!("Plugin {:?} successfully loaded state", &self.id);
-            }
-            Err(e) => {
-                log::error!("Plugin {:?} failed to load state: {}", &self.id, e);
-            }
-        }
-
+    pub fn load_save_state(&mut self, state: Vec<u8>) -> Result<(), String> {
         self.save_state_dirty = true;
+        self.plug_main_thread.load_save_state(state)
     }
 
     pub fn is_save_state_dirty(&self) -> bool {
@@ -148,17 +144,84 @@ impl PluginHostMainThread {
         self.save_state.clone()
     }
 
-    pub fn show_gui(&mut self) {
+    pub fn set_param_value(
+        &mut self,
+        param_id: ParamID,
+        value: f64,
+    ) -> Result<f64, SetParamValueError> {
+        if let Some(param_queues) = &mut self.channel.param_queues {
+            let params = self.params.as_ref().unwrap();
+
+            if let Some(param_info) = params.get(&param_id) {
+                if param_info.flags.contains(ParamInfoFlags::IS_READONLY) {
+                    Err(SetParamValueError::ParamIsReadOnly(param_id))
+                } else {
+                    let value = value.clamp(param_info.min_value, param_info.max_value);
+
+                    param_queues
+                        .to_proc_param_value_tx
+                        .set(param_id, MainToProcParamValue { value });
+                    param_queues.to_proc_param_value_tx.producer_done();
+
+                    Ok(value)
+                }
+            } else {
+                Err(SetParamValueError::ParamDoesNotExist(param_id))
+            }
+        } else {
+            Err(SetParamValueError::PluginNotActive)
+        }
+    }
+
+    pub fn set_param_mod_amount(
+        &mut self,
+        param_id: ParamID,
+        mod_amount: f64,
+    ) -> Result<(), SetParamValueError> {
+        if let Some(param_queues) = &mut self.channel.param_queues {
+            let params = self.params.as_ref().unwrap();
+
+            if let Some(param_info) = params.get(&param_id) {
+                if !param_info.flags.contains(ParamInfoFlags::IS_MODULATABLE) {
+                    Err(SetParamValueError::ParamIsNotModulatable(param_id))
+                } else {
+                    param_queues
+                        .to_proc_param_mod_tx
+                        .set(param_id, MainToProcParamValue { value: mod_amount });
+                    param_queues.to_proc_param_mod_tx.producer_done();
+
+                    Ok(())
+                }
+            } else {
+                Err(SetParamValueError::ParamDoesNotExist(param_id))
+            }
+        } else {
+            Err(SetParamValueError::PluginNotActive)
+        }
+    }
+
+    pub fn param_value_to_text(&self, param_id: ParamID, value: f64) -> Result<String, ()> {
+        self.plug_main_thread.param_value_to_text(param_id, value)
+    }
+
+    pub fn param_text_to_value(&self, param_id: ParamID, display: &str) -> Result<f64, ()> {
+        self.plug_main_thread.param_text_to_value(param_id, display)
+    }
+
+    pub fn show_gui(&mut self) -> Result<(), ShowGuiError> {
         if !self.plug_main_thread.is_gui_open() {
             if let Err(e) = self.plug_main_thread.open_gui(None) {
-                log::warn!("Could not open GUI for plugin {:?}: {:?}", &self.id, e);
+                return Err(ShowGuiError::HostError(e));
             }
+            Ok(())
+        } else {
+            Err(ShowGuiError::AlreadyOpen)
         }
     }
 
     pub fn close_gui(&mut self) {
         if self.plug_main_thread.is_gui_open() {
-            self.plug_main_thread.close_gui()
+            self.plug_main_thread.close_gui();
         }
     }
 
@@ -174,16 +237,14 @@ impl PluginHostMainThread {
         Ok(())
     }
 
-    pub fn activate(
+    // TODO: method to let the user manually activate an inactive plugin
+    pub(crate) fn activate(
         &mut self,
         sample_rate: SampleRate,
         min_frames: u32,
         max_frames: u32,
         coll_handle: &basedrop::Handle,
-    ) -> Result<
-        (FnvHashMap<ParamID, f64>, Option<PluginAudioPortsExt>, Option<PluginNotePortsExt>),
-        ActivatePluginError,
-    > {
+    ) -> Result<PluginActivatedRes, ActivatePluginError> {
         self.can_activate()?;
 
         let audio_ports = match self.plug_main_thread.audio_ports_ext() {
@@ -222,7 +283,7 @@ impl PluginHostMainThread {
 
         let num_params = self.plug_main_thread.num_params() as usize;
         let mut params: FnvHashMap<ParamID, ParamInfo> = FnvHashMap::default();
-        let mut param_values: FnvHashMap<ParamID, f64> = FnvHashMap::default();
+        let mut param_values: Vec<(ParamInfo, f64)> = Vec::with_capacity(num_params);
 
         for i in 0..num_params {
             match self.plug_main_thread.param_info(i) {
@@ -230,8 +291,8 @@ impl PluginHostMainThread {
                     Ok(value) => {
                         let id = info.stable_id;
 
-                        let _ = params.insert(id, info);
-                        let _ = param_values.insert(id, value);
+                        let _ = params.insert(id, info.clone());
+                        let _ = param_values.push((info, value));
                     }
                     Err(_) => {
                         self.channel
@@ -259,22 +320,26 @@ impl PluginHostMainThread {
 
                 self.channel.create_process_thread(info.processor, num_params, coll_handle);
 
-                Ok((
-                    param_values,
+                self.params = Some(params);
+
+                Ok(PluginActivatedRes {
+                    new_parameters: param_values,
                     // TODO: Only return the new extensions if they have changed.
-                    Some(self.audio_ports_ext.as_ref().unwrap().clone()),
-                    Some(self.note_ports_ext.as_ref().unwrap().clone()),
-                ))
+                    new_audio_ports_ext: Some(self.audio_ports_ext.as_ref().unwrap().clone()),
+                    new_note_ports_ext: Some(self.note_ports_ext.as_ref().unwrap().clone()),
+                    internal_handle: info.internal_handle,
+                })
             }
             Err(e) => {
                 self.channel.shared_state.set_active_state(PluginActiveState::InactiveWithError);
+                self.params = None;
 
                 Err(ActivatePluginError::PluginSpecific(e))
             }
         }
     }
 
-    pub fn schedule_deactivate(&mut self) {
+    pub(crate) fn schedule_deactivate(&mut self) {
         if self.channel.shared_state.get_active_state() != PluginActiveState::Active {
             return;
         }
@@ -291,7 +356,7 @@ impl PluginHostMainThread {
         self.channel.shared_state.set_active_state(PluginActiveState::WaitingToDrop);
     }
 
-    pub fn schedule_remove(&mut self) {
+    pub(crate) fn schedule_remove(&mut self) {
         self.remove_requested = true;
 
         self.schedule_deactivate();
@@ -313,13 +378,13 @@ impl PluginHostMainThread {
         }
     }
 
-    pub fn on_idle(
+    pub(crate) fn on_idle(
         &mut self,
         sample_rate: SampleRate,
         min_frames: u32,
         max_frames: u32,
         coll_handle: &basedrop::Handle,
-        event_tx: &mut Option<&mut Sender<DSEngineEvent>>,
+        events_out: &mut SmallVec<[OnIdleEvent; 32]>,
     ) -> (OnIdleResult, SmallVec<[ParamModifiedInfo; 4]>) {
         let mut modified_params: SmallVec<[ParamModifiedInfo; 4]> = SmallVec::new();
 
@@ -347,13 +412,7 @@ impl PluginHostMainThread {
             self.plug_main_thread
                 .on_gui_closed(request_flags.contains(HostRequestFlags::GUI_DESTROYED));
 
-            if let Some(event_tx) = event_tx.as_mut() {
-                event_tx
-                    .send(DSEngineEvent::Plugin(PluginEvent::GuiClosed {
-                        plugin_id: self.id.clone(),
-                    }))
-                    .unwrap()
-            }
+            events_out.push(OnIdleEvent::PluginGuiClosed { plugin_id: self.id.clone() });
         }
 
         if let Some(params_queue) = &mut self.channel.param_queues {
@@ -397,11 +456,7 @@ impl PluginHostMainThread {
                 if self.restarting || request_flags.contains(HostRequestFlags::PROCESS) {
                     match self.activate(sample_rate, min_frames, max_frames, coll_handle) {
                         Ok(r) => {
-                            res = OnIdleResult::PluginActivated {
-                                new_param_values: r.0,
-                                new_audio_ports: r.1,
-                                new_note_ports: r.2,
-                            };
+                            res = OnIdleResult::PluginActivated(r);
                         }
                         Err(e) => res = OnIdleResult::PluginFailedToActivate(e),
                     }
@@ -424,11 +479,7 @@ impl PluginHostMainThread {
                     Ok(r) => {
                         self.save_state_dirty = true;
 
-                        OnIdleResult::PluginActivated {
-                            new_param_values: r.0,
-                            new_audio_ports: r.1,
-                            new_note_ports: r.2,
-                        }
+                        OnIdleResult::PluginActivated(r)
                     }
                     Err(e) => OnIdleResult::PluginFailedToActivate(e),
                 };
@@ -440,7 +491,7 @@ impl PluginHostMainThread {
         (OnIdleResult::Ok, modified_params)
     }
 
-    pub fn update_tempo_map(&mut self, new_tempo_map: &Shared<TempoMap>) {
+    pub(crate) fn update_tempo_map(&mut self, new_tempo_map: &Shared<TempoMap>) {
         self.plug_main_thread.update_tempo_map(new_tempo_map);
     }
 
@@ -452,7 +503,7 @@ impl PluginHostMainThread {
         self.num_audio_out_channels
     }
 
-    pub fn shared_processor(&self) -> &Option<SharedPluginHostProcThread> {
+    pub(crate) fn shared_processor(&self) -> &Option<SharedPluginHostProcThread> {
         self.channel.shared_processor()
     }
 
@@ -460,11 +511,11 @@ impl PluginHostMainThread {
         &self.id
     }
 
-    pub fn port_refs(&self) -> &PluginHostPortRefs {
+    pub(crate) fn port_refs(&self) -> &PluginHostPortRefs {
         &self.port_refs
     }
 
-    pub fn sync_ports_in_graph(
+    pub(crate) fn sync_ports_in_graph(
         &mut self,
         abstract_graph: &mut Graph<PluginInstanceID, PortChannelID, PortType>,
     ) {
@@ -671,11 +722,7 @@ pub struct ParamModifiedInfo {
 pub(crate) enum OnIdleResult {
     Ok,
     PluginDeactivated,
-    PluginActivated {
-        new_param_values: FnvHashMap<ParamID, f64>,
-        new_audio_ports: Option<PluginAudioPortsExt>,
-        new_note_ports: Option<PluginNotePortsExt>,
-    },
+    PluginActivated(PluginActivatedRes),
     PluginReadyToRemove,
     PluginFailedToActivate(ActivatePluginError),
 }

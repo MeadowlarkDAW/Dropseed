@@ -5,11 +5,13 @@ use dropseed_plugin_api::ProcInfo;
 
 pub(crate) mod tasks;
 
+pub use tasks::TransportHandle;
+
 use crate::graph::shared_pools::SharedTransportTask;
 
 use tasks::Task;
 
-pub struct Schedule {
+pub struct ProcessorSchedule {
     tasks: Vec<Task>,
 
     graph_audio_in: SmallVec<[SharedBuffer<f32>; 4]>,
@@ -20,7 +22,7 @@ pub struct Schedule {
     max_block_size: usize,
 }
 
-impl Schedule {
+impl ProcessorSchedule {
     pub(crate) fn new(
         tasks: Vec<Task>,
         graph_audio_in: SmallVec<[SharedBuffer<f32>; 4]>,
@@ -46,11 +48,11 @@ impl Schedule {
     }
 }
 
-impl std::fmt::Debug for Schedule {
+impl std::fmt::Debug for ProcessorSchedule {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut s = String::new();
 
-        s.push_str("Schedule {\n");
+        s.push_str("ProcessorSchedule {\n");
 
         let mut g_s = String::new();
         for b in self.graph_audio_in.iter() {
@@ -72,7 +74,7 @@ impl std::fmt::Debug for Schedule {
     }
 }
 
-impl Schedule {
+impl ProcessorSchedule {
     pub fn process_interleaved(
         &mut self,
         audio_in: &[f32],

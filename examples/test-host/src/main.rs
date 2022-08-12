@@ -4,7 +4,7 @@ use crossbeam_channel::Receiver;
 use dropseed::plugin_api::{HostInfo, PluginInstanceID};
 use dropseed::{
     ActivateEngineSettings, DSEngineAudioThread, DSEngineEvent, DSEngineHandle, DSEngineRequest,
-    EngineDeactivatedInfo, PluginActivationStatus, PluginEvent, PluginScannerEvent, ScannedPlugin,
+    EngineDeactivatedInfo, NewPluginStatus, PluginEvent, PluginScannerEvent, ScannedPlugin,
 };
 use eframe::egui;
 use fern::colors::ColoredLevelConfig;
@@ -284,19 +284,19 @@ impl DSExampleGUI {
 
                             /*
                             let active_state = match new_plugin_res.status {
-                                PluginActivationStatus::Activated {
+                                NewPluginStatus::Activated {
                                     new_param_values,
                                     new_audio_ports_ext,
                                     new_note_ports_ext,
                                 } => Some(EffectRackPluginActiveState::new(
                                     new_param_values,
                                 )),
-                                PluginActivationStatus::Inactive => None,
-                                PluginActivationStatus::LoadError(e) => {
+                                NewPluginStatus::Inactive => None,
+                                NewPluginStatus::LoadError(e) => {
                                     println!("Plugin failed to load: {}", e);
                                     None
                                 }
-                                PluginActivationStatus::ActivationError(e) => {
+                                NewPluginStatus::ActivationError(e) => {
                                     println!("Plugin failed to activate: {}", e);
                                     None
                                 }

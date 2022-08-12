@@ -57,6 +57,7 @@ impl PluginInstanceID {
         Self { node_ref, unique_id, format, rdn }
     }
 
+    /// The reverse domain name of this plugin.
     pub fn rdn(&self) -> &Shared<String> {
         &self.rdn
     }

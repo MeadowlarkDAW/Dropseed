@@ -1,6 +1,6 @@
 use dropseed_plugin_api::buffer::{DebugBufferID, DebugBufferType, SharedBuffer};
 
-use crate::plugin_host::events::{NoteEvent, ParamEvent};
+use crate::plugin_host::event_io_buffers::{NoteIoEvent, ParamIoEvent};
 
 pub(crate) struct BufferPool<T: Clone + Copy + Send + Sync + 'static> {
     pool: Vec<SharedBuffer<T>>,
@@ -70,8 +70,8 @@ pub(crate) struct SharedBufferPool {
     pub audio_buffer_pool: BufferPool<f32>,
     pub intermediary_audio_buffer_pool: BufferPool<f32>,
 
-    pub param_event_buffer_pool: BufferPool<ParamEvent>,
-    pub note_buffer_pool: BufferPool<NoteEvent>,
+    pub param_event_buffer_pool: BufferPool<ParamIoEvent>,
+    pub note_buffer_pool: BufferPool<NoteIoEvent>,
 }
 
 impl SharedBufferPool {

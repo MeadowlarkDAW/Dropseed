@@ -1,7 +1,7 @@
 use atomic_refcell::AtomicRefCell;
 use basedrop::{Shared, SharedCell};
 
-use crate::schedule::Schedule;
+use crate::processor_schedule::ProcessorSchedule;
 use crate::utils::thread_id::SharedThreadIDs;
 
 // Required so we can send the schedule from the main thread to the process
@@ -11,7 +11,7 @@ use crate::utils::thread_id::SharedThreadIDs;
 // thread. The only reason why the main thread holds onto these shared
 // pointers of buffers and `PluginAudioThread`s is so it can construct new
 // schedules with them. The main thread never dereferences these pointers.
-unsafe impl Send for Schedule {}
+unsafe impl Send for ProcessorSchedule {}
 // Required so we can send the schedule from the main thread to the process
 // thread. The fact that the main thread holds onto shared pointers of
 // buffers and `PluginAudioThread`s requires this to be `Sync` as well.
@@ -20,24 +20,24 @@ unsafe impl Send for Schedule {}
 // thread. The only reason why the main thread holds onto these shared
 // pointers of buffers and `PluginAudioThread`s is so it can construct new
 // schedules with them. The main thread never dereferences these pointers.
-unsafe impl Sync for Schedule {}
+unsafe impl Sync for ProcessorSchedule {}
 
-pub(crate) struct SharedSchedule {
-    schedule: Shared<SharedCell<AtomicRefCell<Schedule>>>,
+pub(crate) struct SharedProcessorSchedule {
+    schedule: Shared<SharedCell<AtomicRefCell<ProcessorSchedule>>>,
     thread_ids: SharedThreadIDs,
     coll_handle: basedrop::Handle,
 }
 
 // Implement Debug so we can send it in an event.
-impl std::fmt::Debug for SharedSchedule {
+impl std::fmt::Debug for SharedProcessorSchedule {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "SharedSchedule")
+        write!(f, "SharedProcessorSchedule")
     }
 }
 
-impl SharedSchedule {
+impl SharedProcessorSchedule {
     pub fn new(
-        schedule: Schedule,
+        schedule: ProcessorSchedule,
         thread_ids: SharedThreadIDs,
         coll_handle: &basedrop::Handle,
     ) -> (Self, Self) {
@@ -56,7 +56,11 @@ impl SharedSchedule {
         )
     }
 
-    pub fn set_new_schedule(&mut self, schedule: Schedule, coll_handle: &basedrop::Handle) {
+    pub fn set_new_schedule(
+        &mut self,
+        schedule: ProcessorSchedule,
+        coll_handle: &basedrop::Handle,
+    ) {
         self.schedule.set(Shared::new(coll_handle, AtomicRefCell::new(schedule)));
     }
 
@@ -71,14 +75,13 @@ impl SharedSchedule {
 
         let mut schedule = latest_schedule.borrow_mut();
 
-        if let Some(audio_thread_id) = self.thread_ids.external_audio_thread_id() {
-            if std::thread::current().id() != audio_thread_id {
+        if let Some(process_thread_id) = self.thread_ids.process_thread_id() {
+            if std::thread::current().id() != process_thread_id {
                 self.thread_ids
-                    .set_external_audio_thread_id(std::thread::current().id(), &self.coll_handle);
+                    .set_process_thread_id(std::thread::current().id(), &self.coll_handle);
             }
         } else {
-            self.thread_ids
-                .set_external_audio_thread_id(std::thread::current().id(), &self.coll_handle);
+            self.thread_ids.set_process_thread_id(std::thread::current().id(), &self.coll_handle);
         }
 
         schedule.process_interleaved(audio_in, audio_in_channels, audio_out, audio_out_channels);

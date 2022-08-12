@@ -3,7 +3,7 @@ use dropseed_plugin_api::buffer::EventBuffer;
 use dropseed_plugin_api::{PluginProcessThread, ProcBuffers, ProcInfo, ProcessStatus};
 
 use super::channel::{PlugHostChannelProcThread, PluginActiveState};
-use super::events::{sanitizer::PluginEventOutputSanitizer, PluginEventIoBuffers};
+use super::event_io_buffers::{PluginEventIoBuffers, PluginEventOutputSanitizer};
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 enum ProcessingState {

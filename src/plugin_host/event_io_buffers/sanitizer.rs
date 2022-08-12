@@ -2,7 +2,7 @@ use dropseed_plugin_api::ParamID;
 use fnv::FnvHashMap;
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 
-use super::{ParamEvent, ParamEventType, PluginEvent};
+use super::{ParamIoEvent, ParamIoEventType, PluginIoEvent};
 
 /// Sanitizes a plugin's event output stream, by wrapping an event iterator.
 ///
@@ -27,7 +27,7 @@ impl PluginEventOutputSanitizer {
     #[inline]
     pub fn sanitize<I>(&mut self, iterator: I) -> ParamOutputSanitizerIter<I>
     where
-        I: Iterator<Item = PluginEvent>,
+        I: Iterator<Item = PluginIoEvent>,
     {
         ParamOutputSanitizerIter { sanitizer: self, iterator }
     }
@@ -40,21 +40,21 @@ pub struct ParamOutputSanitizerIter<'a, I> {
 
 impl<'a, I> Iterator for ParamOutputSanitizerIter<'a, I>
 where
-    I: Iterator<Item = PluginEvent>,
+    I: Iterator<Item = PluginIoEvent>,
 {
-    type Item = PluginEvent;
+    type Item = PluginIoEvent;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         for event in self.iterator.by_ref() {
-            if let PluginEvent::ParamEvent {
+            if let PluginIoEvent::ParamEvent {
                 cookie: _,
-                event: ParamEvent { parameter_id, event_type, .. },
+                event: ParamIoEvent { parameter_id, event_type, .. },
             } = &event
             {
                 let is_beginning = match event_type {
-                    ParamEventType::BeginGesture => true,
-                    ParamEventType::EndGesture => false,
+                    ParamIoEventType::BeginGesture => true,
+                    ParamIoEventType::EndGesture => false,
                     _ => return Some(event),
                 };
 

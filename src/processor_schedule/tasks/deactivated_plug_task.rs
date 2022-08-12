@@ -3,15 +3,15 @@ use smallvec::SmallVec;
 use dropseed_plugin_api::buffer::SharedBuffer;
 use dropseed_plugin_api::ProcInfo;
 
-use crate::plugin_host::events::{NoteEvent, ParamEvent};
+use crate::plugin_host::event_io_buffers::{NoteIoEvent, ParamIoEvent};
 
 pub(crate) struct DeactivatedPluginTask {
     pub audio_through: SmallVec<[(SharedBuffer<f32>, SharedBuffer<f32>); 4]>,
     pub extra_audio_out: SmallVec<[SharedBuffer<f32>; 4]>,
 
-    pub automation_out_buffer: Option<SharedBuffer<ParamEvent>>,
+    pub automation_out_buffer: Option<SharedBuffer<ParamIoEvent>>,
 
-    pub note_out_buffers: SmallVec<[Option<SharedBuffer<NoteEvent>>; 2]>,
+    pub note_out_buffers: SmallVec<[Option<SharedBuffer<NoteIoEvent>>; 2]>,
 }
 
 impl DeactivatedPluginTask {

@@ -1,12 +1,11 @@
-use audio_graph::{Graph, PortRef, ScheduledNode};
+use audio_graph::{Graph, PortRef};
 use dropseed_plugin_api::buffer::{AudioPortBuffer, AudioPortBufferMut, SharedBuffer};
 use dropseed_plugin_api::ext::audio_ports::MainPortsLayout;
 use dropseed_plugin_api::ProcBuffers;
 use smallvec::SmallVec;
-use std::error::Error;
 
-use crate::plugin_host::events::PluginEventIoBuffers;
-use crate::schedule::tasks::{
+use crate::plugin_host::event_io_buffers::PluginEventIoBuffers;
+use crate::processor_schedule::tasks::{
     DeactivatedPluginTask, DelayCompNode, DelayCompTask, PluginTask, SumTask, Task,
 };
 
@@ -14,10 +13,9 @@ pub(super) mod verifier;
 
 use verifier::Verifier;
 
-pub use verifier::VerifyScheduleError;
-
+use super::error::GraphCompilerError;
 use super::shared_pools::{DelayCompKey, GraphSharedPools, SharedDelayCompNode};
-use super::{PluginInstanceID, PortChannelID, PortType, Schedule};
+use super::{PluginInstanceID, PortChannelID, PortType, ProcessorSchedule};
 
 pub(super) fn compile_graph(
     shared_pool: &mut GraphSharedPools,
@@ -28,7 +26,7 @@ pub(super) fn compile_graph(
     graph_out_audio_in_port_refs: &[PortRef],
     verifier: &mut Verifier,
     coll_handle: &basedrop::Handle,
-) -> Result<Schedule, GraphCompilerError> {
+) -> Result<ProcessorSchedule, GraphCompilerError> {
     let num_plugins = shared_pool.plugin_hosts.pool.len();
 
     let mut tasks: Vec<Task> = Vec::with_capacity(num_plugins * 2);
@@ -449,7 +447,7 @@ pub(super) fn compile_graph(
         }));
     }
 
-    let new_schedule = Schedule::new(
+    let new_schedule = ProcessorSchedule::new(
         tasks,
         graph_audio_in,
         graph_audio_out,
@@ -486,29 +484,4 @@ pub(super) fn compile_graph(
         shared_pool.delay_comp_nodes.pool.drain().filter(|(_, node)| node.active).collect();
 
     Ok(new_schedule)
-}
-
-#[derive(Debug)]
-pub enum GraphCompilerError {
-    VerifierError(
-        VerifyScheduleError,
-        Vec<ScheduledNode<PluginInstanceID, PortChannelID, PortType>>,
-        Schedule,
-    ),
-    UnexpectedError(String, Vec<ScheduledNode<PluginInstanceID, PortChannelID, PortType>>),
-}
-
-impl Error for GraphCompilerError {}
-
-impl std::fmt::Display for GraphCompilerError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self {
-            GraphCompilerError::VerifierError(e, abstract_schedule, schedule) => {
-                write!(f, "Failed to compile audio graph: {}\n\nOutput of abstract graph compiler: {:?}\n\nOutput of final compiler: {:?}", e, &abstract_schedule, &schedule)
-            }
-            GraphCompilerError::UnexpectedError(e, abstract_schedule) => {
-                write!(f, "Failed to compile audio graph: Unexpected error: {}\n\nOutput of abstract graph compiler: {:?}", e, &abstract_schedule)
-            }
-        }
-    }
 }

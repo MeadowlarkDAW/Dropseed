@@ -2,6 +2,8 @@ use std::error::Error;
 
 use dropseed_plugin_api::ParamID;
 
+pub use clack_extensions::gui::GuiError;
+
 #[derive(Debug)]
 pub enum ActivatePluginError {
     NotLoaded,
@@ -50,5 +52,63 @@ impl std::fmt::Display for ActivatePluginError {
 impl From<String> for ActivatePluginError {
     fn from(e: String) -> Self {
         ActivatePluginError::PluginSpecific(e)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum SetParamValueError {
+    ParamDoesNotExist(ParamID),
+    PluginNotActive,
+    ParamIsReadOnly(ParamID),
+    ParamIsNotModulatable(ParamID),
+}
+
+impl Error for SetParamValueError {}
+
+impl std::fmt::Display for SetParamValueError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SetParamValueError::ParamDoesNotExist(id) => {
+                write!(f, "failed to set value of plugin parameter: parameter with id {:?} does not exist", id)
+            }
+            SetParamValueError::PluginNotActive => {
+                write!(f, "failed to set value of plugin parameter: plugin is not activated")
+            }
+            SetParamValueError::ParamIsReadOnly(id) => {
+                write!(
+                    f,
+                    "failed to set value of plugin parameter: parameter with id {:?} is read-only",
+                    id
+                )
+            }
+            SetParamValueError::ParamIsNotModulatable(id) => {
+                write!(
+                    f,
+                    "failed to set modulation amount on plugin parameter: parameter with id {:?} is not marked as modulatable",
+                    id
+                )
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum ShowGuiError {
+    HostError(GuiError),
+    AlreadyOpen,
+}
+
+impl Error for ShowGuiError {}
+
+impl std::fmt::Display for ShowGuiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ShowGuiError::HostError(e) => {
+                write!(f, "Failed to open plugin GUI: {}", e)
+            }
+            ShowGuiError::AlreadyOpen => {
+                write!(f, "Failed to open plugin GUI: plugin GUI is already open")
+            }
+        }
     }
 }

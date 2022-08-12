@@ -7,16 +7,16 @@ mod transport_pool;
 pub(crate) use buffer_pool::SharedBufferPool;
 pub(crate) use delay_comp_node_pool::{DelayCompKey, DelayCompNodePool, SharedDelayCompNode};
 pub(crate) use plugin_host_pool::PluginHostPool;
-pub(crate) use shared_schedule::SharedSchedule;
+pub(crate) use shared_schedule::SharedProcessorSchedule;
 pub(crate) use transport_pool::{SharedTransportTask, TransportPool};
 
 use crate::{
-    schedule::{tasks::TransportTask, Schedule},
+    processor_schedule::{tasks::TransportTask, ProcessorSchedule},
     utils::thread_id::SharedThreadIDs,
 };
 
 pub(super) struct GraphSharedPools {
-    pub shared_schedule: SharedSchedule,
+    pub shared_schedule: SharedProcessorSchedule,
 
     pub buffers: SharedBufferPool,
     pub plugin_hosts: PluginHostPool,
@@ -32,13 +32,14 @@ impl GraphSharedPools {
         event_buffer_size: usize,
         transport: TransportTask,
         coll_handle: basedrop::Handle,
-    ) -> (Self, SharedSchedule) {
+    ) -> (Self, SharedProcessorSchedule) {
         let shared_transport_task = SharedTransportTask::new(transport, &coll_handle);
 
-        let empty_schedule = Schedule::new_empty(audio_buffer_size, shared_transport_task.clone());
+        let empty_schedule =
+            ProcessorSchedule::new_empty(audio_buffer_size, shared_transport_task.clone());
 
         let (shared_schedule, shared_schedule_clone) =
-            SharedSchedule::new(empty_schedule, thread_ids, &coll_handle);
+            SharedProcessorSchedule::new(empty_schedule, thread_ids, &coll_handle);
 
         (
             Self {

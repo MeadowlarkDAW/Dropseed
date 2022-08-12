@@ -1,7 +1,7 @@
 use basedrop::Shared;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::{collections::HashMap, error::Error};
 use walkdir::WalkDir;
 
 use dropseed_plugin_api::plugin_scanner::{PluginFormat, ScannedPluginKey};
@@ -10,6 +10,7 @@ use dropseed_plugin_api::{
     PluginInstanceID, PluginInstanceType,
 };
 
+use crate::engine::error::NewPluginInstanceError;
 use crate::plugin_host::PluginHostMainThread;
 use crate::utils::thread_id::SharedThreadIDs;
 
@@ -20,7 +21,7 @@ use missing_plugin::MissingPluginMainThread;
     feature = "clap-host",
     any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd")
 ))]
-const DEFAULT_CLAP_SCAN_DIRECTORIES: [&str; 2] = ["/usr/lib/clap", "/usr/local/lib/clap"];
+const DEFAULT_CLAP_SCAN_DIRECTORIES: [&'static str; 2] = ["/usr/lib/clap", "/usr/local/lib/clap"];
 
 #[cfg(all(feature = "clap-host", target_os = "macos"))]
 const DEFAULT_CLAP_SCAN_DIRECTORIES: [&'static str; 1] = ["/Library/Audio/Plug-Ins/CLAP"];
@@ -209,7 +210,7 @@ impl PluginScanner {
             }
 
             for binary_path in found_binaries.iter() {
-                match crate::clap::factory::entry_init(
+                match crate::plugin_host::external::clap::factory::entry_init(
                     binary_path,
                     self.thread_ids.clone(),
                     &self.coll_handle,
@@ -430,42 +431,4 @@ pub(crate) struct CreatePluginResult {
 pub struct RescanPluginDirectoriesRes {
     pub scanned_plugins: Vec<ScannedPlugin>,
     pub failed_plugins: Vec<(PathBuf, String)>,
-}
-
-#[derive(Debug)]
-pub enum NewPluginInstanceError {
-    FactoryFailedToCreateNewInstance(String, String),
-    PluginFailedToInit(String, String),
-    NotFound(String),
-    FormatNotFound(String, PluginFormat),
-}
-
-impl Error for NewPluginInstanceError {}
-
-impl std::fmt::Display for NewPluginInstanceError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            NewPluginInstanceError::FactoryFailedToCreateNewInstance(n, e) => {
-                write!(f, "Failed to create instance of plugin {}: plugin factory failed to create new instance: {}", n, e)
-            }
-            NewPluginInstanceError::PluginFailedToInit(n, e) => {
-                write!(f, "Failed to create instance of plugin {}: plugin instance failed to initialize: {}", n, e)
-            }
-            NewPluginInstanceError::NotFound(n) => {
-                write!(
-                    f,
-                    "Failed to create instance of plugin {}: not in list of scanned plugins",
-                    n
-                )
-            }
-            NewPluginInstanceError::FormatNotFound(n, p) => {
-                write!(
-                    f,
-                    "Failed to create instance of plugin {}: the format {:?} not found for this plugin",
-                    n,
-                    p
-                )
-            }
-        }
-    }
 }

@@ -7,11 +7,13 @@ mod plugin_task;
 mod sum_task;
 mod transport_task;
 
+pub use transport_task::TransportHandle;
+
 pub(crate) use deactivated_plug_task::DeactivatedPluginTask;
 pub(crate) use delay_comp_task::{DelayCompNode, DelayCompTask};
 pub(crate) use plugin_task::PluginTask;
 pub(crate) use sum_task::SumTask;
-pub(crate) use transport_task::{TransportHandle, TransportTask};
+pub(crate) use transport_task::TransportTask;
 
 pub(crate) enum Task {
     Plugin(PluginTask),
