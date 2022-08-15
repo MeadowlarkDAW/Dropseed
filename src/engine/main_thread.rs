@@ -1,51 +1,55 @@
 use basedrop::{Collector, Shared, SharedCell};
-use crossbeam_channel::{Receiver, Sender};
 use fnv::FnvHashSet;
-use log::warn;
 use meadowlark_core_types::time::{SampleRate, Seconds};
+use smallvec::SmallVec;
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use std::thread::JoinHandle;
-use std::time::Duration;
+use std::thread::{self, JoinHandle};
 use thread_priority::ThreadPriority;
 
+use dropseed_plugin_api::ext::audio_ports::PluginAudioPortsExt;
+use dropseed_plugin_api::ext::note_ports::PluginNotePortsExt;
+use dropseed_plugin_api::ext::params::ParamInfo;
 use dropseed_plugin_api::plugin_scanner::ScannedPluginKey;
 use dropseed_plugin_api::transport::TempoMap;
-use dropseed_plugin_api::{HostInfo, PluginFactory, PluginInstanceID, PluginSaveState};
+use dropseed_plugin_api::{DSPluginSaveState, HostInfo, PluginFactory, PluginInstanceID};
 
 use crate::engine::audio_thread::DSEngineAudioThread;
-use crate::engine::events::from_engine::{
-    DSEngineEvent, EngineDeactivatedInfo, PluginScannerEvent,
-};
-use crate::engine::events::to_engine::{DSEngineRequest, PluginRequest};
-use crate::engine::plugin_scanner::PluginScanner;
-use crate::graph::schedule::transport_task::TransportHandle;
-use crate::graph::{AudioGraph, Edge, NewPluginRes, PluginEdges, PortType};
+use crate::graph::{AudioGraph, PluginEdges, PortType};
+use crate::plugin_host::error::ActivatePluginError;
+use crate::plugin_host::{ParamModifiedInfo, PluginHostMainThread};
+use crate::plugin_scanner::{PluginScanner, ScanExternalPluginsRes};
+use crate::processor_schedule::TransportHandle;
 use crate::utils::thread_id::SharedThreadIDs;
 
-static ENGINE_THREAD_UPDATE_INTERVAL: Duration = Duration::from_millis(10);
+use super::error::{EngineCrashError, NewPluginInstanceError};
+use super::request::{EdgeReq, EdgeReqPortID, ModifyGraphRequest, PluginIDReq};
 
-pub(crate) struct DSEngineMainThread {
+pub struct DSEngineMainThread {
     audio_graph: Option<AudioGraph>,
+    host_info: Shared<HostInfo>,
     plugin_scanner: PluginScanner,
-    event_tx: Sender<DSEngineEvent>,
-    handle_to_engine_rx: Receiver<DSEngineRequest>,
     thread_ids: SharedThreadIDs,
     collector: Collector,
     run_process_thread: Option<Arc<AtomicBool>>,
     process_thread_handle: Option<JoinHandle<()>>,
     tempo_map_shared: Option<Shared<SharedCell<(Shared<TempoMap>, u64)>>>,
+    crash_msg: Option<EngineCrashError>,
 }
 
 impl DSEngineMainThread {
-    pub(crate) fn new(
+    /// Construct a new Dropseed engine.
+    ///
+    /// * `host_info` - The information about this host.
+    /// * `internal_plugins` - A list of plugin factories for internal plugins.
+    ///
+    /// This also returns the result of scanning the internal plugins.
+    pub fn new(
         host_info: HostInfo,
         mut internal_plugins: Vec<Box<dyn PluginFactory>>,
-        handle_to_engine_rx: Receiver<DSEngineRequest>,
-        event_tx: Sender<DSEngineEvent>,
     ) -> (Self, Vec<Result<ScannedPluginKey, String>>) {
         // Set up and run garbage collector wich collects and safely drops garbage from
         // the audio thread.
@@ -53,10 +57,11 @@ impl DSEngineMainThread {
 
         let host_info = Shared::new(&collector.handle(), host_info);
 
-        let thread_ids = SharedThreadIDs::new(None, None, &collector.handle());
+        let thread_ids =
+            SharedThreadIDs::new(Some(thread::current().id()), None, &collector.handle());
 
         let mut plugin_scanner =
-            PluginScanner::new(collector.handle(), host_info, thread_ids.clone());
+            PluginScanner::new(collector.handle(), Shared::clone(&host_info), thread_ids.clone());
 
         // Scan the user's internal plugins.
         let internal_plugins_res: Vec<Result<ScannedPluginKey, String>> =
@@ -65,130 +70,126 @@ impl DSEngineMainThread {
         (
             Self {
                 audio_graph: None,
+                host_info,
                 plugin_scanner,
-                event_tx,
-                handle_to_engine_rx,
                 thread_ids,
                 collector,
                 run_process_thread: None,
                 process_thread_handle: None,
                 tempo_map_shared: None,
+                crash_msg: None,
             },
             internal_plugins_res,
         )
     }
 
-    pub fn run(&mut self, run: Arc<AtomicBool>) {
-        self.thread_ids
-            .set_external_main_thread_id(std::thread::current().id(), &self.collector.handle());
+    /// Retrieve the info about this host
+    pub fn host_info(&self) -> &HostInfo {
+        &*self.host_info
+    }
 
-        while run.load(Ordering::Relaxed) {
-            while let Ok(msg) = self.handle_to_engine_rx.try_recv() {
-                match msg {
-                    DSEngineRequest::ModifyGraph(req) => self.modify_graph(req),
-                    DSEngineRequest::ActivateEngine(settings) => self.activate_engine(&settings),
-                    DSEngineRequest::DeactivateEngine => self.deactivate_engine(),
-                    DSEngineRequest::RequestLatestSaveStates => self.request_latest_save_states(),
+    // TODO: multiple transports
+    /// Replace the old tempo map with this new one.
+    pub fn update_tempo_map(&mut self, new_tempo_map: TempoMap) {
+        if let Some(tempo_map_shared) = &self.tempo_map_shared {
+            let tempo_map_version = tempo_map_shared.get().1;
 
-                    #[cfg(feature = "clap-host")]
-                    DSEngineRequest::AddClapScanDirectory(path) => {
-                        self.add_clap_scan_directory(path)
-                    }
+            let new_tempo_map_shared = Shared::new(&self.collector.handle(), new_tempo_map);
 
-                    #[cfg(feature = "clap-host")]
-                    DSEngineRequest::RemoveClapScanDirectory(path) => {
-                        self.remove_clap_scan_directory(path)
-                    }
-
-                    DSEngineRequest::RescanPluginDirectories => self.rescan_plugin_directories(),
-
-                    DSEngineRequest::UpdateTempoMap(new_tempo_map) => {
-                        if let Some(tempo_map_shared) = &self.tempo_map_shared {
-                            let tempo_map_version = tempo_map_shared.get().1;
-
-                            let new_tempo_map_shared =
-                                Shared::new(&self.collector.handle(), *new_tempo_map);
-
-                            tempo_map_shared.set(Shared::new(
-                                &self.collector.handle(),
-                                (Shared::clone(&new_tempo_map_shared), tempo_map_version + 1),
-                            ));
-
-                            if let Some(audio_graph) = &mut self.audio_graph {
-                                audio_graph.update_tempo_map(new_tempo_map_shared);
-                            }
-                        }
-                    }
-                    DSEngineRequest::Plugin(instance_id, request) => {
-                        let plugin = self
-                            .audio_graph
-                            .as_mut()
-                            .and_then(|a| a.shared_plugin_pool.plugins.get_mut(&instance_id));
-
-                        if let Some(plugin) = plugin {
-                            match request {
-                                PluginRequest::ShowGui => plugin.plugin_host.show_gui(),
-                                PluginRequest::CloseGui => plugin.plugin_host.close_gui(),
-                                PluginRequest::LoadPreset(preset) => {
-                                    plugin.plugin_host.load_preset(preset)
-                                }
-                                PluginRequest::GetLatestSaveState => {
-                                    let state = plugin.plugin_host.collect_save_state();
-
-                                    self.event_tx
-                                        .send(DSEngineEvent::NewSaveStates(vec![(
-                                            instance_id.clone(),
-                                            state,
-                                        )]))
-                                        .unwrap();
-                                }
-                            }
-                        } else {
-                            warn!("Received plugin request with invalid ID: {:?}", instance_id)
-                        }
-                    }
-                }
-            }
+            tempo_map_shared.set(Shared::new(
+                &self.collector.handle(),
+                (Shared::clone(&new_tempo_map_shared), tempo_map_version + 1),
+            ));
 
             if let Some(audio_graph) = &mut self.audio_graph {
-                let recompile = audio_graph.on_idle(Some(&mut self.event_tx));
-
-                if recompile {
-                    self.compile_audio_graph();
-                }
+                audio_graph.update_tempo_map(new_tempo_map_shared);
             }
-
-            self.collector.collect();
-
-            std::thread::sleep(ENGINE_THREAD_UPDATE_INTERVAL);
         }
+    }
+
+    /// Get an immutable reference to the host for a particular plugin.
+    ///
+    /// This will return `None` if a plugin with the given ID does not exist/
+    /// has been removed.
+    pub fn get_plugin_host(&self, id: &PluginInstanceID) -> Option<&PluginHostMainThread> {
+        self.audio_graph.as_ref().and_then(|a| a.get_plugin_host(&id))
+    }
+
+    /// Get a mutable reference to the host for a particular plugin.
+    ///
+    /// This will return `None` if a plugin with the given ID does not exist/
+    /// has been removed.
+    pub fn get_plugin_host_mut(
+        &mut self,
+        id: &PluginInstanceID,
+    ) -> Option<&mut PluginHostMainThread> {
+        self.audio_graph.as_mut().and_then(|a| a.get_plugin_host_mut(&id))
+    }
+
+    /// This must be called periodically (i.e. once every frame).
+    ///
+    /// This will return a list of events that have occured.
+    pub fn on_idle(&mut self) -> SmallVec<[OnIdleEvent; 32]> {
+        let mut events_out: SmallVec<[OnIdleEvent; 32]> = SmallVec::new();
+
+        if let Some(msg) = self.crash_msg.take() {
+            events_out
+                .push(OnIdleEvent::EngineDeactivated(EngineDeactivatedStatus::EngineCrashed(msg)));
+        }
+
+        if let Some(audio_graph) = &mut self.audio_graph {
+            let recompile = audio_graph.on_idle(&mut events_out);
+
+            if recompile {
+                self.compile_audio_graph();
+            }
+        }
+
+        events_out
+    }
+
+    /// Invoke the realtime-safe garbage collector to deallocate unused memory.
+    ///
+    /// This must be called periodically (i.e. once every 3 seconds).
+    pub fn collect_garbage(&mut self) {
+        self.collector.collect();
     }
 
     #[cfg(feature = "clap-host")]
-    fn add_clap_scan_directory<P: Into<PathBuf>>(&mut self, path: P) {
-        let path: PathBuf = path.into();
-        if self.plugin_scanner.add_clap_scan_directory(path.clone()) {
-            self.event_tx.send(PluginScannerEvent::ClapScanPathAdded(path).into()).unwrap();
-        }
+    /// Add a new directory for scanning CLAP plugins.
+    ///
+    /// This returns `false` if it failed to add the directory or if that
+    /// directory has already been added.
+    pub fn add_clap_scan_directory<P: Into<PathBuf>>(&mut self, path: P) -> bool {
+        self.plugin_scanner.add_clap_scan_directory(path.into())
     }
 
     #[cfg(feature = "clap-host")]
-    fn remove_clap_scan_directory<P: Into<PathBuf>>(&mut self, path: P) {
-        let path: PathBuf = path.into();
-        if self.plugin_scanner.remove_clap_scan_directory(path.clone()) {
-            self.event_tx.send(PluginScannerEvent::ClapScanPathRemoved(path).into()).unwrap();
-        }
+    /// Remove a directory for scanning CLAP plugins.
+    ///
+    /// This returns `false` if it failed to remove the directory or if that
+    /// directory has already been removed.
+    pub fn remove_clap_scan_directory<P: Into<PathBuf>>(&mut self, path: P) -> bool {
+        self.plugin_scanner.remove_clap_scan_directory(path.into())
     }
 
-    fn rescan_plugin_directories(&mut self) {
-        let res = self.plugin_scanner.rescan_plugin_directories();
-        self.event_tx.send(PluginScannerEvent::RescanFinished(res).into()).unwrap();
+    /// (Re)scan all external plugins.
+    ///
+    /// This will a return a new list of all the external plugins.
+    pub fn scan_external_plugins(&mut self) -> ScanExternalPluginsRes {
+        self.plugin_scanner.scan_external_plugins()
     }
 
-    fn activate_engine(&mut self, settings: &ActivateEngineSettings) {
+    /// Activate the engine.
+    ///
+    /// This will return `None` if the engine is already activated.
+    pub fn activate_engine(
+        &mut self,
+        settings: ActivateEngineSettings,
+    ) -> Option<(ActivatedEngineInfo, DSEngineAudioThread)> {
         if self.audio_graph.is_some() {
             log::warn!("Ignored request to activate RustyDAW engine: Engine is already activated");
-            return;
+            return None;
         }
 
         log::info!("Activating RustyDAW engine...");
@@ -215,8 +216,8 @@ impl DSEngineMainThread {
             transport_declick_time,
         );
 
-        let graph_in_node_id = audio_graph.graph_in_node_id().clone();
-        let graph_out_node_id = audio_graph.graph_out_node_id().clone();
+        let graph_in_node_id = audio_graph.graph_in_id().clone();
+        let graph_out_node_id = audio_graph.graph_out_id().clone();
 
         // TODO: Remove this once compiler is fixed.
         audio_graph
@@ -293,10 +294,9 @@ impl DSEngineMainThread {
             self.tempo_map_shared = Some(transport_handle.tempo_map_shared());
             let tempo_map = (*self.tempo_map_shared.as_ref().unwrap().get().0).clone();
 
-            let info = EngineActivatedInfo {
-                audio_thread,
-                graph_in_node_id: audio_graph.graph_in_node_id().clone(),
-                graph_out_node_id: audio_graph.graph_out_node_id().clone(),
+            let info = ActivatedEngineInfo {
+                graph_in_id: audio_graph.graph_in_id().clone(),
+                graph_out_id: audio_graph.graph_out_id().clone(),
                 sample_rate,
                 min_frames,
                 max_frames,
@@ -306,18 +306,21 @@ impl DSEngineMainThread {
                 tempo_map,
             };
 
-            self.event_tx.send(DSEngineEvent::EngineActivated(info)).unwrap();
+            Some((info, audio_thread))
         } else {
             // If this happens then we did something very wrong.
             panic!("Unexpected error: Empty audio graph failed to compile a schedule.");
         }
     }
 
-    fn modify_graph(&mut self, mut req: ModifyGraphRequest) {
+    /// Modify the audio graph.
+    ///
+    /// This will return `None` if the engine is deactivated.
+    pub fn modify_graph(&mut self, mut request: ModifyGraphRequest) -> Option<ModifyGraphRes> {
         if let Some(audio_graph) = &mut self.audio_graph {
             let mut affected_plugins: FnvHashSet<PluginInstanceID> = FnvHashSet::default();
 
-            for edge in req.disconnect_edges.iter() {
+            for edge in request.disconnect_edges.iter() {
                 if audio_graph.disconnect_edge(edge) {
                     let _ = affected_plugins.insert(edge.src_plugin_id.clone());
                     let _ = affected_plugins.insert(edge.dst_plugin_id.clone());
@@ -325,9 +328,9 @@ impl DSEngineMainThread {
             }
 
             let mut removed_plugins = audio_graph
-                .remove_plugin_instances(&req.remove_plugin_instances, &mut affected_plugins);
+                .remove_plugin_instances(&request.remove_plugin_instances, &mut affected_plugins);
 
-            let new_plugins_res: Vec<NewPluginRes> = req
+            let new_plugins_res: Vec<NewPluginRes> = request
                 .add_plugin_instances
                 .drain(..)
                 .map(|save_state| {
@@ -343,7 +346,7 @@ impl DSEngineMainThread {
                 })
                 .collect();
 
-            for edge in req.connect_new_edges.iter() {
+            for edge in request.connect_new_edges.iter() {
                 let src_plugin_id = match &edge.src_plugin_id {
                     PluginIDReq::Added(index) => {
                         if let Some(new_plugin_id) = new_plugin_ids.get(*index) {
@@ -393,8 +396,8 @@ impl DSEngineMainThread {
             }
 
             // Don't include the graph in/out "plugins" in the result.
-            let _ = affected_plugins.remove(audio_graph.graph_in_node_id());
-            let _ = affected_plugins.remove(audio_graph.graph_out_node_id());
+            let _ = affected_plugins.remove(audio_graph.graph_in_id());
+            let _ = affected_plugins.remove(audio_graph.graph_out_id());
 
             let updated_plugin_edges: Vec<(PluginInstanceID, PluginEdges)> = affected_plugins
                 .iter()
@@ -415,16 +418,20 @@ impl DSEngineMainThread {
             // TODO: Compile audio graph in a separate thread?
             self.compile_audio_graph();
 
-            self.event_tx.send(DSEngineEvent::AudioGraphModified(res)).unwrap();
+            Some(res)
         } else {
             log::warn!("Cannot modify audio graph: Engine is deactivated");
+            None
         }
     }
 
-    fn deactivate_engine(&mut self) {
+    /// Gracefully deactivate the engine.
+    ///
+    /// This will return `false` if the engine is already deactivated.
+    pub fn deactivate_engine(&mut self) -> bool {
         if self.audio_graph.is_none() {
             log::warn!("Ignored request to deactivate engine: Engine is already deactivated");
-            return;
+            return false;
         }
 
         log::info!("Deactivating RustyDAW engine");
@@ -437,25 +444,24 @@ impl DSEngineMainThread {
         self.process_thread_handle = None;
 
         self.tempo_map_shared = None;
+        self.crash_msg = None;
 
-        self.event_tx
-            .send(DSEngineEvent::EngineDeactivated(EngineDeactivatedInfo::DeactivatedGracefully))
-            .unwrap();
+        true
     }
 
-    fn request_latest_save_states(&mut self) {
+    /// Collect the latest save states for all plugins.
+    ///
+    /// This will only return the save states of plugins which have
+    /// changed since the last call to collect its save state.
+    pub fn collect_latest_save_states(&mut self) -> Vec<(PluginInstanceID, DSPluginSaveState)> {
         if self.audio_graph.is_none() {
             log::warn!("Ignored request for the latest save states: Engine is deactivated");
-            return;
+            return Vec::new();
         }
 
         log::trace!("Got request for latest plugin save states");
 
-        let res = self.audio_graph.as_mut().unwrap().collect_save_states();
-
-        if !res.is_empty() {
-            self.event_tx.send(DSEngineEvent::NewSaveStates(res)).unwrap();
-        }
+        self.audio_graph.as_mut().unwrap().collect_save_states()
     }
 
     fn compile_audio_graph(&mut self) {
@@ -472,16 +478,11 @@ impl DSEngineMainThread {
                     }
                     self.process_thread_handle = None;
 
-                    // TODO: Try to recover save state?
-                    self.event_tx
-                        .send(DSEngineEvent::EngineDeactivated(
-                            EngineDeactivatedInfo::EngineCrashed { error_msg: format!("{}", e) },
-                        ))
-                        .unwrap();
-
                     // Audio graph is in an invalid state. Drop it and have the user restore
                     // from the last working save state.
                     let _ = audio_graph;
+
+                    self.crash_msg = Some(EngineCrashError::CompilerError(e));
                 }
             }
         }
@@ -509,12 +510,32 @@ impl Drop for DSEngineMainThread {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ActivateEngineSettings {
+    /// The sample rate of the project.
     pub sample_rate: SampleRate,
+
+    /// The minimum number of frames (samples in a single audio channel)
+    /// the can be processed in a single process cycle.
     pub min_frames: u32,
+
+    /// The maximum number of frames (samples in a single audio channel)
+    /// the can be processed in a single process cycle.
     pub max_frames: u32,
+
+    /// The total number of input audio channels to the audio graph.
     pub num_audio_in_channels: u16,
+
+    /// The total number of output audio channels from the audio graph.
     pub num_audio_out_channels: u16,
+
+    /// The pre-allocated capacity for note buffers in the audio graph.
+    ///
+    /// By default this is set to `256`.
     pub note_buffer_size: usize,
+
+    /// The pre-allocated capacity for parameter event buffers in the audio
+    /// graph.
+    ///
+    /// By default this is set to `256`.
     pub event_buffer_size: usize,
 
     /// The time window for the transport's declick buffers.
@@ -540,63 +561,118 @@ impl Default for ActivateEngineSettings {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum PluginIDReq {
-    /// Use an existing plugin in the audio graph.
-    Existing(PluginInstanceID),
-    /// Use one of the new plugins defined in `ModifyGraphRequest::add_plugin_instances`
-    /// (the index into that Vec).
-    Added(usize),
+pub struct ActivatedEngineInfo {
+    /// The ID for the input to the audio graph. Use this to connect any
+    /// plugins to system inputs.
+    pub graph_in_id: PluginInstanceID,
+
+    /// The ID for the output to the audio graph. Use this to connect any
+    /// plugins to system outputs.
+    pub graph_out_id: PluginInstanceID,
+
+    /// The handle to the tranport.
+    pub transport_handle: TransportHandle,
+
+    /// The current tempo map of the transport.
+    pub tempo_map: TempoMap,
+
+    /// The sample rate of the project.
+    pub sample_rate: SampleRate,
+
+    /// The minimum number of frames (samples in a single audio channel)
+    /// the can be processed in a single process cycle.
+    pub min_frames: u32,
+
+    /// The maximum number of frames (samples in a single audio channel)
+    /// the can be processed in a single process cycle.
+    pub max_frames: u32,
+
+    /// The total number of input audio channels to the audio graph.
+    pub num_audio_in_channels: u16,
+
+    /// The total number of output audio channels from the audio graph.
+    pub num_audio_out_channels: u16,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum EdgeReqPortID {
-    /// Use the main port.
+impl std::fmt::Debug for ActivatedEngineInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut f = f.debug_struct("ActivatedEngineInfo");
+
+        f.field("graph_in_id", &self.graph_in_id);
+        f.field("graph_out_id", &self.graph_out_id);
+        f.field("sample_rate", &self.sample_rate);
+        f.field("min_frames", &self.min_frames);
+        f.field("max_frames", &self.max_frames);
+        f.field("num_audio_in_channels", &self.num_audio_in_channels);
+        f.field("num_audio_out_channels", &self.num_audio_out_channels);
+
+        f.finish()
+    }
+}
+
+#[derive(Debug)]
+/// Sent whenever the engine has become deactivated, whether gracefully
+/// or because of a crash.
+pub enum EngineDeactivatedStatus {
+    /// The engine was deactivated gracefully.
+    DeactivatedGracefully,
+    /// The engine has crashed.
+    EngineCrashed(EngineCrashError),
+}
+
+#[derive(Debug)]
+pub struct PluginActivatedStatus {
+    /// A new list of all the parameters on this plugin, along with their
+    /// current values.
     ///
-    /// This can be useful if you don't know the layout of the plugin's ports yet
-    /// (because the plugin hasn't been added to the graph yet and activated).
-    Main,
-    /// Use the port with this specific stable ID.
-    StableID(u32),
-}
+    /// `(parameter_info, current_parameter_value)`
+    pub new_parameters: Vec<(ParamInfo, f64)>,
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct EdgeReq {
-    pub edge_type: PortType,
-
-    pub src_plugin_id: PluginIDReq,
-    pub dst_plugin_id: PluginIDReq,
-
-    pub src_port_id: EdgeReqPortID,
-    pub src_port_channel: u16,
-
-    pub dst_port_id: EdgeReqPortID,
-    pub dst_port_channel: u16,
-
-    /// If true, then the engine should log the error if it failed to connect this edge
-    /// for any reason.
+    /// The new list of audio ports on this plugin.
     ///
-    /// If false, then the engine should not log the error if it failed to connect this
-    /// edge for any reason. This can be useful in the common case where when adding a
-    /// new plugin to the graph, and you don't know the layout of the plugin's ports yet
-    /// (because it hasn't been added to the graph yet and activated), yet you still want
-    /// to try and connect any main stereo inputs/outputs to the graph.
-    pub log_error_on_fail: bool,
+    /// If the audio port configuration has not changed since the last
+    /// time this plugin was activated, then this will be `None`.
+    pub new_audio_ports_ext: Option<PluginAudioPortsExt>,
+
+    /// The new list of note ports on this plugin.
+    ///
+    /// If the note port configuration has not changed since the last
+    /// time this plugin was activated, then this will be `None`.
+    pub new_note_ports_ext: Option<PluginNotePortsExt>,
+
+    /// If this is an internal plugin with a custom defined handle,
+    /// then this will be the new custom handle.
+    pub internal_handle: Option<Box<dyn std::any::Any + Send + 'static>>,
+
+    /// If `true`, then the plugin has a custom GUI that can be opened.
+    pub has_gui: bool,
 }
 
-#[derive(Debug, Clone)]
-pub struct ModifyGraphRequest {
-    /// Any new plugin instances to add.
-    pub add_plugin_instances: Vec<PluginSaveState>,
+#[derive(Debug)]
+pub enum PluginStatus {
+    /// This means the plugin successfully activated and returned
+    /// its new configurations.
+    Activated(PluginActivatedStatus),
 
-    /// Any plugins to remove.
-    pub remove_plugin_instances: Vec<PluginInstanceID>,
+    /// This means that the plugin loaded but did not activate yet. This
+    /// can happen when the user loads a project with a deactivated
+    /// plugin.
+    Inactive,
 
-    /// Any new connections between plugins to add.
-    pub connect_new_edges: Vec<EdgeReq>,
+    /// There was an error loading the plugin.
+    LoadError(NewPluginInstanceError),
 
-    /// Any connections between plugins to remove.
-    pub disconnect_edges: Vec<Edge>,
+    /// There was an error activating the plugin.
+    ActivationError(ActivatePluginError),
+}
+
+#[derive(Debug)]
+pub struct NewPluginRes {
+    /// The unique ID for this plugin instance.
+    pub plugin_id: PluginInstanceID,
+
+    /// The status of this plugin.
+    pub status: PluginStatus,
 }
 
 #[derive(Debug)]
@@ -607,50 +683,48 @@ pub struct ModifyGraphRes {
     /// Any plugins that were removed from the graph.
     pub removed_plugins: Vec<PluginInstanceID>,
 
-    ///
+    /// All of the plugins which have had their edges (port connections)
+    /// changed as a result of this request.
     pub updated_plugin_edges: Vec<(PluginInstanceID, PluginEdges)>,
 }
 
-pub struct EngineActivatedInfo {
-    /// The realtime-safe channel for the audio thread to interface with
-    /// the engine.
+#[derive(Debug)]
+pub enum OnIdleEvent {
+    /// The plugin's parameters have been modified via the plugin's custom
+    /// GUI.
     ///
-    /// Send this to the audio thread to be run.
+    /// Only the parameters which have changed will be returned in this
+    /// field.
+    PluginParamsModified {
+        plugin_id: PluginInstanceID,
+        modified_params: SmallVec<[ParamModifiedInfo; 4]>,
+    },
+
+    /// Sent when the plugin closed its own GUI by its own means. UI should
+    /// be updated accordingly so that the user could open the UI again.
+    PluginGuiClosed { plugin_id: PluginInstanceID },
+
+    /// Sent whenever a plugin becomes activated after being deactivated or
+    /// when the plugin restarts.
     ///
-    /// When a `DSEngineEvent::EngineDeactivated` event is recieved, send
-    /// a signal to the audio thread to drop this.
-    pub audio_thread: DSEngineAudioThread,
+    /// Make sure your UI updates the port configuration on this plugin, as
+    /// well as any custom handles.
+    PluginActivated { plugin_id: PluginInstanceID, status: PluginActivatedStatus },
 
-    /// The ID for the input to the audio graph. Use this to connect any
-    /// plugins to system inputs.
-    pub graph_in_node_id: PluginInstanceID,
+    /// Sent whenever a plugin has been deactivated. When a plugin is
+    /// deactivated, you cannot access any of its methods until it is
+    /// reactivated.
+    PluginDeactivated {
+        plugin_id: PluginInstanceID,
+        /// If this is `Ok(())`, then it means the plugin was gracefully
+        /// deactivated via user request.
+        ///
+        /// If this is `Err(e)`, then it means the plugin became deactivated
+        /// because it failed to restart.
+        status: Result<(), ActivatePluginError>,
+    },
 
-    /// The ID for the output to the audio graph. Use this to connect any
-    /// plugins to system outputs.
-    pub graph_out_node_id: PluginInstanceID,
-
-    pub transport_handle: TransportHandle,
-    pub tempo_map: TempoMap,
-
-    pub sample_rate: SampleRate,
-    pub min_frames: u32,
-    pub max_frames: u32,
-    pub num_audio_in_channels: u16,
-    pub num_audio_out_channels: u16,
-}
-
-impl std::fmt::Debug for EngineActivatedInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut f = f.debug_struct("EngineActivatedInfo");
-
-        f.field("graph_in_node_id", &self.graph_in_node_id);
-        f.field("graph_out_node_id", &self.graph_out_node_id);
-        f.field("sample_rate", &self.sample_rate);
-        f.field("min_frames", &self.min_frames);
-        f.field("max_frames", &self.max_frames);
-        f.field("num_audio_in_channels", &self.num_audio_in_channels);
-        f.field("num_audio_out_channels", &self.num_audio_out_channels);
-
-        f.finish()
-    }
+    /// Sent whenever the engine has been deactivated, whether gracefully or
+    /// because of a crash.
+    EngineDeactivated(EngineDeactivatedStatus),
 }

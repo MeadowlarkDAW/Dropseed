@@ -1,13 +1,20 @@
+use dropseed::graph::PortType;
+use dropseed::plugin_api::ext::audio_ports::PluginAudioPortsExt;
+use dropseed::plugin_api::ext::note_ports::PluginNotePortsExt;
 use dropseed::plugin_api::ext::params::ParamInfoFlags;
-use dropseed::plugin_api::{ParamID, PluginInstanceID, PluginSaveState};
+use dropseed::plugin_api::{DSPluginSaveState, ParamID, PluginInstanceID};
+use dropseed::plugin_host::ParamModifiedInfo;
 use dropseed::{
-    DSEngineHandle, DSEngineRequest, EdgeReq, EdgeReqPortID, ModifyGraphRequest, ParamModifiedInfo,
-    PluginHandle, PluginIDReq, PluginRequest, PortType,
+    engine::{
+        request::{EdgeReq, EdgeReqPortID, ModifyGraphRequest, PluginIDReq},
+        ActivatedEngineInfo, DSEngineMainThread, PluginActivatedStatus, PluginStatus,
+    },
+    plugin_api::plugin_scanner::ScannedPluginKey,
 };
 use eframe::egui;
 use fnv::FnvHashMap;
 
-use super::DSExampleGUI;
+use crate::ActivatedState;
 
 pub struct ParamState {
     id: ParamID,
@@ -26,33 +33,62 @@ pub struct ParamState {
     is_gesturing: bool,
 }
 
-pub struct ParamsState {
+pub struct EffectRackPluginState {
+    plugin_id: PluginInstanceID,
+    plugin_name: String,
+
+    has_gui: bool,
+    is_gui_open: bool,
+    activated: bool,
+
     params: FnvHashMap<ParamID, ParamState>,
+
+    audio_ports_ext: Option<PluginAudioPortsExt>,
+    note_ports_ext: Option<PluginNotePortsExt>,
+
+    internal_handle: Option<Box<dyn std::any::Any + Send + 'static>>,
 }
 
-impl ParamsState {
-    pub fn new(handle: &PluginHandle, param_values: FnvHashMap<ParamID, f64>) -> Self {
-        let mut new_self = Self { params: FnvHashMap::default() };
+impl EffectRackPluginState {
+    pub fn new(
+        plugin_id: PluginInstanceID,
+        plugin_name: String,
+        plugin_status: PluginStatus,
+    ) -> Self {
+        let mut new_self = Self {
+            plugin_id,
+            plugin_name,
+            has_gui: false,
+            is_gui_open: false,
+            activated: false,
+            audio_ports_ext: None,
+            note_ports_ext: None,
+            params: FnvHashMap::default(),
+            internal_handle: None,
+        };
 
-        new_self.update_handle(handle, param_values);
+        if let PluginStatus::Activated(status) = plugin_status {
+            new_self.on_activated(status);
+        }
 
         new_self
     }
 
-    pub fn update_handle(
-        &mut self,
-        new_handle: &PluginHandle,
-        param_values: FnvHashMap<ParamID, f64>,
-    ) {
+    pub fn on_activated(&mut self, mut status: PluginActivatedStatus) {
+        self.activated = true;
+
+        self.audio_ports_ext = status.new_audio_ports_ext.take();
+        self.note_ports_ext = status.new_note_ports_ext.take();
+
         self.params.clear();
 
-        for info in new_handle.params.params.values() {
+        for (info, value) in status.new_parameters.drain(..) {
             let _ = self.params.insert(
                 info.stable_id,
                 ParamState {
                     id: info.stable_id,
                     display_name: info.display_name.clone(),
-                    value: *param_values.get(&info.stable_id).unwrap(),
+                    value,
                     min_value: info.min_value,
                     max_value: info.max_value,
                     is_stepped: info.flags.contains(ParamInfoFlags::IS_STEPPED),
@@ -62,9 +98,19 @@ impl ParamsState {
                 },
             );
         }
+
+        self.internal_handle = status.internal_handle.take();
+
+        self.has_gui = status.has_gui;
     }
 
-    pub fn parameters_modified(&mut self, modified_params: &[ParamModifiedInfo]) {
+    pub fn on_deactivated(&mut self) {
+        self.activated = false;
+        self.has_gui = false;
+        self.params.clear();
+    }
+
+    pub fn on_params_modified(&mut self, modified_params: &[ParamModifiedInfo]) {
         for m_p in modified_params.iter() {
             let param = self.params.get_mut(&m_p.param_id).unwrap();
 
@@ -75,70 +121,67 @@ impl ParamsState {
             param.is_gesturing = m_p.is_gesturing;
         }
     }
-}
 
-pub struct EffectRackPluginActiveState {
-    pub handle: PluginHandle,
-    pub params_state: ParamsState,
-}
-
-impl EffectRackPluginActiveState {
-    pub fn new(handle: PluginHandle, param_values: FnvHashMap<ParamID, f64>) -> Self {
-        let params_state = ParamsState::new(&handle, param_values);
-
-        Self { handle, params_state }
-    }
-}
-
-pub struct EffectRackPluginState {
-    pub plugin_name: String,
-    pub plugin_id: PluginInstanceID,
-    pub supports_gui: bool,
-    pub is_gui_open: bool,
-
-    pub active_state: Option<EffectRackPluginActiveState>,
-}
-
-impl EffectRackPluginState {
-    pub fn set_inactive(&mut self) {
-        self.active_state = None;
+    pub fn on_plugin_gui_closed(&mut self) {
+        self.is_gui_open = false;
     }
 
-    pub fn update_handle(
-        &mut self,
-        new_handle: PluginHandle,
-        param_values: FnvHashMap<ParamID, f64>,
-    ) {
-        self.active_state = Some(EffectRackPluginActiveState::new(new_handle, param_values));
+    pub fn show_gui(&mut self, ds_engine: &mut DSEngineMainThread) {
+        if self.has_gui {
+            if let Some(plugin_host) = ds_engine.get_plugin_host_mut(&self.plugin_id) {
+                match plugin_host.show_gui() {
+                    Ok(()) => self.is_gui_open = true,
+                    Err(e) => {
+                        log::error!("Failed to open GUI for plugin {:?}: {}", &self.plugin_id, e);
+                        self.is_gui_open = false;
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn close_gui(&mut self, ds_engine: &mut DSEngineMainThread) {
+        if self.is_gui_open {
+            if let Some(plugin_host) = ds_engine.get_plugin_host_mut(&self.plugin_id) {
+                plugin_host.close_gui();
+            }
+
+            self.on_plugin_gui_closed();
+        }
     }
 }
 
 pub struct EffectRackState {
-    pub selected_to_add_plugin_i: Option<usize>,
+    selected_plugin_to_add_i: Option<usize>,
 
-    pub plugins: Vec<EffectRackPluginState>,
+    plugins: Vec<EffectRackPluginState>,
 }
 
 impl EffectRackState {
     pub fn new() -> Self {
-        Self { selected_to_add_plugin_i: None, plugins: Vec::new() }
+        Self { selected_plugin_to_add_i: None, plugins: Vec::new() }
     }
 
-    pub fn plugin(&self, id: &PluginInstanceID) -> Option<&EffectRackPluginState> {
+    /*
+    pub fn plugin(&self, plugin_id: &PluginInstanceID) -> Option<&EffectRackPluginState> {
         let mut found = None;
         for p in self.plugins.iter() {
-            if &p.plugin_id == id {
+            if &p.plugin_id == plugin_id {
                 found = Some(p);
                 break;
             }
         }
         found
     }
+    */
 
-    pub fn plugin_mut(&mut self, id: &PluginInstanceID) -> Option<&mut EffectRackPluginState> {
+    pub fn plugin_mut(
+        &mut self,
+        plugin_id: &PluginInstanceID,
+    ) -> Option<&mut EffectRackPluginState> {
         let mut found = None;
         for p in self.plugins.iter_mut() {
-            if &p.plugin_id == id {
+            if &p.plugin_id == plugin_id {
                 found = Some(p);
                 break;
             }
@@ -146,42 +189,128 @@ impl EffectRackState {
         found
     }
 
-    pub fn remove_plugin(&mut self, id: &PluginInstanceID) {
+    pub fn add_plugin(
+        &mut self,
+        plugin_key: ScannedPluginKey,
+        plugin_name: String,
+        engine_info: &ActivatedEngineInfo,
+        ds_engine: &mut DSEngineMainThread,
+    ) {
+        let request = ModifyGraphRequest {
+            add_plugin_instances: vec![DSPluginSaveState::new_with_default_state(plugin_key)],
+            remove_plugin_instances: vec![],
+            connect_new_edges: vec![
+                EdgeReq {
+                    edge_type: PortType::Audio,
+                    src_plugin_id: PluginIDReq::Existing(engine_info.graph_in_id.clone()),
+                    dst_plugin_id: PluginIDReq::Added(0),
+                    src_port_id: EdgeReqPortID::Main,
+                    src_port_channel: 0,
+                    dst_port_id: EdgeReqPortID::Main,
+                    dst_port_channel: 0,
+                    log_error_on_fail: true,
+                },
+                EdgeReq {
+                    edge_type: PortType::Audio,
+                    src_plugin_id: PluginIDReq::Existing(engine_info.graph_in_id.clone()),
+                    dst_plugin_id: PluginIDReq::Added(0),
+                    src_port_id: EdgeReqPortID::Main,
+                    src_port_channel: 1,
+                    dst_port_id: EdgeReqPortID::Main,
+                    dst_port_channel: 1,
+                    log_error_on_fail: true,
+                },
+                EdgeReq {
+                    edge_type: PortType::Audio,
+                    src_plugin_id: PluginIDReq::Added(0),
+                    dst_plugin_id: PluginIDReq::Existing(engine_info.graph_out_id.clone()),
+                    src_port_id: EdgeReqPortID::Main,
+                    src_port_channel: 0,
+                    dst_port_id: EdgeReqPortID::Main,
+                    dst_port_channel: 0,
+                    log_error_on_fail: true,
+                },
+                EdgeReq {
+                    edge_type: PortType::Audio,
+                    src_plugin_id: PluginIDReq::Added(0),
+                    dst_plugin_id: PluginIDReq::Existing(engine_info.graph_out_id.clone()),
+                    src_port_id: EdgeReqPortID::Main,
+                    src_port_channel: 1,
+                    dst_port_id: EdgeReqPortID::Main,
+                    dst_port_channel: 1,
+                    log_error_on_fail: true,
+                },
+            ],
+            disconnect_edges: vec![],
+        };
+
+        let mut result = ds_engine.modify_graph(request).unwrap();
+        let new_plugin_res = result.new_plugins.remove(0);
+
+        let new_plugin_state = EffectRackPluginState::new(
+            new_plugin_res.plugin_id,
+            plugin_name,
+            new_plugin_res.status,
+        );
+
+        self.plugins.push(new_plugin_state);
+    }
+
+    pub fn remove_plugin(
+        &mut self,
+        plugin_id: &PluginInstanceID,
+        ds_engine: &mut DSEngineMainThread,
+    ) {
         let mut found = None;
         for (i, p) in self.plugins.iter().enumerate() {
-            if &p.plugin_id == id {
+            if &p.plugin_id == plugin_id {
                 found = Some(i);
                 break;
             }
         }
         if let Some(i) = found {
+            let result = ds_engine.modify_graph(ModifyGraphRequest {
+                add_plugin_instances: vec![],
+                remove_plugin_instances: vec![plugin_id.clone()],
+                connect_new_edges: vec![],
+                disconnect_edges: vec![],
+            });
+
+            log::debug!("{:?}", &result);
+
             let _ = self.plugins.remove(i);
         }
     }
 }
 
-pub(crate) fn show(app: &mut DSExampleGUI, ui: &mut egui::Ui) {
-    if let Some(engine_state) = &mut app.engine_state {
+pub(crate) fn show(
+    ds_engine: &mut DSEngineMainThread,
+    activated_state: Option<&mut ActivatedState>,
+    ui: &mut egui::Ui,
+) {
+    if let Some(activated_state) = activated_state {
+        let ActivatedState { effect_rack_state, scanned_plugin_list, engine_info, .. } =
+            activated_state;
+
         ui.horizontal(|ui| {
-            let selected_text =
-                if let Some(plugin_i) = engine_state.effect_rack_state.selected_to_add_plugin_i {
-                    &app.plugin_list[plugin_i].1
-                } else {
-                    "<select a plugin>"
-                };
+            let selected_text = if let Some(plugin_i) = effect_rack_state.selected_plugin_to_add_i {
+                &scanned_plugin_list[plugin_i].1
+            } else {
+                "<select a plugin>"
+            };
 
             egui::ComboBox::from_id_source("plugin_to_add").selected_text(selected_text).show_ui(
                 ui,
                 |ui| {
                     ui.selectable_value(
-                        &mut engine_state.effect_rack_state.selected_to_add_plugin_i,
+                        &mut effect_rack_state.selected_plugin_to_add_i,
                         None,
                         "<select a plugin>",
                     );
 
-                    for (plugin_i, plugin) in app.plugin_list.iter().enumerate() {
+                    for (plugin_i, plugin) in scanned_plugin_list.iter().enumerate() {
                         ui.selectable_value(
-                            &mut engine_state.effect_rack_state.selected_to_add_plugin_i,
+                            &mut effect_rack_state.selected_plugin_to_add_i,
                             Some(plugin_i),
                             &plugin.1,
                         );
@@ -190,84 +319,38 @@ pub(crate) fn show(app: &mut DSExampleGUI, ui: &mut egui::Ui) {
             );
 
             if ui.button("Add Plugin").clicked() {
-                if let Some(plugin_i) = engine_state.effect_rack_state.selected_to_add_plugin_i {
-                    let key = app.plugin_list[plugin_i].0.key.clone();
+                if let Some(plugin_i) = effect_rack_state.selected_plugin_to_add_i {
+                    let plugin_key = scanned_plugin_list[plugin_i].0.key.clone();
+                    let plugin_name = scanned_plugin_list[plugin_i].0.description.name.clone();
 
-                    let request = ModifyGraphRequest {
-                        add_plugin_instances: vec![PluginSaveState::new_with_default_preset(key)],
-                        remove_plugin_instances: vec![],
-                        connect_new_edges: vec![
-                            EdgeReq {
-                                edge_type: PortType::Audio,
-                                src_plugin_id: PluginIDReq::Existing(
-                                    engine_state.graph_in_node_id.clone(),
-                                ),
-                                dst_plugin_id: PluginIDReq::Added(0),
-                                src_port_id: EdgeReqPortID::Main,
-                                src_port_channel: 0,
-                                dst_port_id: EdgeReqPortID::Main,
-                                dst_port_channel: 0,
-                                log_error_on_fail: true,
-                            },
-                            EdgeReq {
-                                edge_type: PortType::Audio,
-                                src_plugin_id: PluginIDReq::Existing(
-                                    engine_state.graph_in_node_id.clone(),
-                                ),
-                                dst_plugin_id: PluginIDReq::Added(0),
-                                src_port_id: EdgeReqPortID::Main,
-                                src_port_channel: 1,
-                                dst_port_id: EdgeReqPortID::Main,
-                                dst_port_channel: 1,
-                                log_error_on_fail: true,
-                            },
-                            EdgeReq {
-                                edge_type: PortType::Audio,
-                                src_plugin_id: PluginIDReq::Added(0),
-                                dst_plugin_id: PluginIDReq::Existing(
-                                    engine_state.graph_out_node_id.clone(),
-                                ),
-                                src_port_id: EdgeReqPortID::Main,
-                                src_port_channel: 0,
-                                dst_port_id: EdgeReqPortID::Main,
-                                dst_port_channel: 0,
-                                log_error_on_fail: true,
-                            },
-                            EdgeReq {
-                                edge_type: PortType::Audio,
-                                src_plugin_id: PluginIDReq::Added(0),
-                                dst_plugin_id: PluginIDReq::Existing(
-                                    engine_state.graph_out_node_id.clone(),
-                                ),
-                                src_port_id: EdgeReqPortID::Main,
-                                src_port_channel: 1,
-                                dst_port_id: EdgeReqPortID::Main,
-                                dst_port_channel: 1,
-                                log_error_on_fail: true,
-                            },
-                        ],
-                        disconnect_edges: vec![],
-                    };
-
-                    app.engine_handle.send(request.into());
+                    effect_rack_state.add_plugin(plugin_key, plugin_name, engine_info, ds_engine);
                 }
             }
         });
 
-        for (plugin_i, plugin) in engine_state.effect_rack_state.plugins.iter_mut().enumerate() {
-            show_effect_rack_plugin(ui, plugin_i, plugin, &mut app.engine_handle);
+        let mut plugins_to_remove: Vec<PluginInstanceID> = Vec::new();
+        for (plugin_i, plugin) in effect_rack_state.plugins.iter_mut().enumerate() {
+            if show_effect_rack_plugin(ui, plugin_i, plugin, ds_engine) {
+                plugins_to_remove.push(plugin.plugin_id.clone());
+            }
+        }
+
+        for plugin_id in plugins_to_remove.iter() {
+            effect_rack_state.remove_plugin(plugin_id, ds_engine)
         }
     } else {
         ui.label("Audio engine is deactivated");
     }
 }
 
-pub(crate) fn show_effect_rack_plugin(
+fn show_effect_rack_plugin(
     ui: &mut egui::Ui,
     plugin_i: usize,
     plugin: &mut EffectRackPluginState,
-    engine_handle: &mut DSEngineHandle,
-) {
+    ds_engine: &mut DSEngineMainThread,
+) -> bool {
+    let mut remove = false;
+
     egui::Frame::default()
         .inner_margin(egui::style::Margin::same(10.0))
         .outer_margin(egui::style::Margin::same(5.0))
@@ -278,40 +361,26 @@ pub(crate) fn show_effect_rack_plugin(
                 ui,
                 |ui| {
                     if ui.small_button("x").clicked() {
-                        let request = ModifyGraphRequest {
-                            add_plugin_instances: vec![],
-                            remove_plugin_instances: vec![plugin.plugin_id.clone()],
-                            connect_new_edges: vec![],
-                            disconnect_edges: vec![],
-                        };
-
-                        engine_handle.send(request.into());
+                        remove = true;
                     }
 
-                    if plugin.supports_gui {
+                    if plugin.has_gui {
                         if plugin.is_gui_open {
                             if ui.small_button("close ui").clicked() {
-                                engine_handle.send(DSEngineRequest::Plugin(
-                                    plugin.plugin_id.clone(),
-                                    PluginRequest::CloseGui,
-                                ));
-                                plugin.is_gui_open = false;
+                                plugin.show_gui(ds_engine);
                             }
                         } else if ui.small_button("ui").clicked() {
-                            engine_handle.send(DSEngineRequest::Plugin(
-                                plugin.plugin_id.clone(),
-                                PluginRequest::ShowGui,
-                            ));
-                            plugin.is_gui_open = true;
+                            plugin.close_gui(ds_engine);
                         }
                     }
 
                     // TODO: Let the user activate/deactive the plugin in this GUI.
 
-                    if plugin.active_state.is_some() {
+                    if plugin.activated {
                         ui.colored_label(egui::Color32::GREEN, "activated");
                     } else {
                         ui.colored_label(egui::Color32::RED, "deactivated");
+                        return;
                     }
 
                     ui.label(&plugin.plugin_name);
@@ -319,67 +388,73 @@ pub(crate) fn show_effect_rack_plugin(
 
                     ui.separator();
 
-                    if let Some(active_state) = &mut plugin.active_state {
-                        // TODO: plugin ports
+                    // TODO: plugin ports
 
-                        let mut values_to_set: Vec<(ParamID, f64)> = Vec::new();
+                    for param in plugin.params.values_mut() {
+                        if param.is_hidden {
+                            continue;
+                        }
 
-                        for param in active_state.params_state.params.values_mut() {
-                            if param.is_hidden {
-                                continue;
-                            }
-
-                            if param.is_read_only {
-                                ui.horizontal(|ui| {
-                                    ui.label(&format!(
-                                        "{}: {:.8}",
-                                        &param.display_name, param.value
-                                    ));
-                                });
-
-                                continue;
-                            }
-
+                        if param.is_read_only {
                             ui.horizontal(|ui| {
-                                if param.is_stepped {
-                                    let mut value: i64 = param.value.round() as i64;
-                                    let min_value: i64 = param.min_value.round() as i64;
-                                    let max_value: i64 = param.max_value.round() as i64;
+                                ui.label(&format!("{}: {:.8}", &param.display_name, param.value));
+                            });
 
-                                    if ui
-                                        .add(
-                                            egui::Slider::new(&mut value, min_value..=max_value)
-                                                .text(&param.display_name),
-                                        )
-                                        .changed()
-                                    {
-                                        values_to_set.push((param.id, value as f64));
-                                        param.value = value as f64;
-                                    }
-                                } else if ui
+                            continue;
+                        }
+
+                        ui.horizontal(|ui| {
+                            if param.is_stepped {
+                                let mut value: i64 = param.value.round() as i64;
+                                let min_value: i64 = param.min_value.round() as i64;
+                                let max_value: i64 = param.max_value.round() as i64;
+
+                                if ui
                                     .add(
-                                        egui::Slider::new(
-                                            &mut param.value,
-                                            param.min_value..=param.max_value,
-                                        )
-                                        .text(&param.display_name),
+                                        egui::Slider::new(&mut value, min_value..=max_value)
+                                            .text(&param.display_name),
                                     )
                                     .changed()
                                 {
-                                    values_to_set.push((param.id, param.value))
+                                    match ds_engine
+                                        .get_plugin_host_mut(&plugin.plugin_id)
+                                        .as_mut()
+                                        .unwrap()
+                                        .set_param_value(param.id, value as f64)
+                                    {
+                                        Ok(v) => param.value = v,
+                                        Err(e) => log::error!("{}", e),
+                                    }
                                 }
-
-                                if param.is_gesturing {
-                                    ui.colored_label(egui::Color32::GREEN, "Gesturing");
+                            } else if ui
+                                .add(
+                                    egui::Slider::new(
+                                        &mut param.value,
+                                        param.min_value..=param.max_value,
+                                    )
+                                    .text(&param.display_name),
+                                )
+                                .changed()
+                            {
+                                match ds_engine
+                                    .get_plugin_host_mut(&plugin.plugin_id)
+                                    .as_mut()
+                                    .unwrap()
+                                    .set_param_value(param.id, param.value)
+                                {
+                                    Ok(v) => param.value = v,
+                                    Err(e) => log::error!("{}", e),
                                 }
-                            });
-                        }
+                            }
 
-                        for (param_id, value) in values_to_set.drain(..) {
-                            active_state.handle.params.set_value(param_id, value);
-                        }
+                            if param.is_gesturing {
+                                ui.colored_label(egui::Color32::GREEN, "Gesturing");
+                            }
+                        });
                     }
                 },
             );
         });
+
+    remove
 }

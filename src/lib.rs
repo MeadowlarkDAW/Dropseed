@@ -1,28 +1,9 @@
-//mod clap_plugin_host;
+pub(crate) mod processor_schedule;
 
-mod engine;
-mod graph;
-
-#[cfg(feature = "clap-host")]
-mod clap;
-
+pub mod engine;
+pub mod graph;
+pub mod plugin_host;
+pub mod plugin_scanner;
 pub mod utils;
 
 pub use dropseed_plugin_api as plugin_api;
-
-pub use engine::audio_thread::DSEngineAudioThread;
-pub use engine::events::from_engine::{
-    DSEngineEvent, EngineDeactivatedInfo, PluginEvent, PluginScannerEvent,
-};
-pub use engine::events::to_engine::{DSEngineRequest, PluginRequest};
-pub use engine::handle::DSEngineHandle;
-pub use engine::main_thread::{
-    ActivateEngineSettings, EdgeReq, EdgeReqPortID, EngineActivatedInfo, ModifyGraphRequest,
-    ModifyGraphRes, PluginIDReq,
-};
-pub use engine::plugin_scanner::{RescanPluginDirectoriesRes, ScannedPlugin};
-pub use graph::schedule::transport_task::{TransportHandle, TransportSaveState};
-pub use graph::{
-    ActivatePluginError, Edge, NewPluginRes, ParamGestureInfo, ParamModifiedInfo,
-    PluginActivationStatus, PluginEdges, PluginHandle, PluginParamsExt, PortType,
-};

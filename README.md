@@ -1,8 +1,8 @@
-# dropseed
-The DAW audio graph engine used in Meadowlark
+# Dropseed
+The DAW audio graph and plugin host engine used in Meadowlark
 
 (WIP)
 
-Here is a [`simple example`] of how to use this DAW engine with a GUI (WIP)
+Here an example [`test host`] (with GUI) that illustrates how to use Dropseed.
 
-[`simple example`]: https://github.com/MeadowlarkDAW/dropseed-example
+[`test host`]: https://github.com/MeadowlarkDAW/dropseed/tree/main/examples/test-host

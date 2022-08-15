@@ -1,6 +1,6 @@
-# dropseed-example
-A basic example of how to use the [`dropseed`] DAW audio engine with a GUI
+# Dropseed Test Host
+An example test host (with GUI) that illustrates how to use [`Dropseed`].
 
 (WIP)
 
-[`dropseed`]: https://github.com/MeadowlarkDAW/dropseed
+[`Dropseed`]: https://github.com/MeadowlarkDAW/dropseed

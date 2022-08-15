@@ -11,9 +11,9 @@ dropseed = { path = "../../" }
 meadowlark-core-types = "0.3"
 eframe = "0.18"
 cpal = "0.13"
-crossbeam-channel = "0.5"
 ringbuf = "0.2"
 fnv = "1.0"
-fast_log = "1.5.16"
+fern = { version = "0.6", features = ["colored"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"]}
 log = "0.4"
 basedrop = "0.1"

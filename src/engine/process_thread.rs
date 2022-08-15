@@ -5,7 +5,7 @@ use std::sync::{
     Arc,
 };
 
-use crate::graph::schedule::SharedSchedule;
+use crate::graph::shared_pools::SharedProcessorSchedule;
 
 use super::audio_thread::AUDIO_THREAD_POLL_INTERVAL;
 
@@ -23,7 +23,7 @@ pub(crate) struct DSEngineProcessThread {
     in_channels: usize,
     out_channels: usize,
 
-    schedule: SharedSchedule,
+    schedule: SharedProcessorSchedule,
 }
 
 impl DSEngineProcessThread {
@@ -35,7 +35,7 @@ impl DSEngineProcessThread {
         out_temp_buffer: Owned<Vec<f32>>,
         in_channels: usize,
         out_channels: usize,
-        schedule: SharedSchedule,
+        schedule: SharedProcessorSchedule,
     ) -> Self {
         Self {
             to_audio_thread_audio_out_tx,
