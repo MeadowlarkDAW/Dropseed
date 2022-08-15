@@ -12,7 +12,7 @@ use fnv::FnvHashMap;
 use meadowlark_core_types::time::SampleRate;
 use smallvec::SmallVec;
 
-use crate::engine::{OnIdleEvent, PluginActivatedRes};
+use crate::engine::{OnIdleEvent, PluginActivatedStatus};
 use crate::graph::{PortChannelID, PortType};
 
 use super::channel::{
@@ -116,15 +116,22 @@ impl PluginHostMainThread {
         }
     }
 
+    /// Tell the plugin to load the given save state.
+    ///
+    /// This will return `Err(e)` if the plugin failed to load the given
+    /// save state.
     pub fn load_save_state(&mut self, state: Vec<u8>) -> Result<(), String> {
         self.save_state_dirty = true;
         self.plug_main_thread.load_save_state(state)
     }
 
+    /// This will return `true` if the plugin's save state has changed
+    /// since the last time its save state was collected.
     pub fn is_save_state_dirty(&self) -> bool {
         self.save_state_dirty
     }
 
+    /// Collect the save state of this plugin.
     pub fn collect_save_state(&mut self) -> DSPluginSaveState {
         if self.save_state_dirty {
             self.save_state_dirty = false;
@@ -144,6 +151,10 @@ impl PluginHostMainThread {
         self.save_state.clone()
     }
 
+    /// Set the value of the given parameter.
+    ///
+    /// If successful, this returns the actual (clamped) value that the
+    /// plugin accepted.
     pub fn set_param_value(
         &mut self,
         param_id: ParamID,
@@ -173,11 +184,15 @@ impl PluginHostMainThread {
         }
     }
 
+    /// Set the modulation amount on the given parameter.
+    ///
+    /// If successful, this returns the actual (clamped) modulation
+    /// amount that the plugin accepted.
     pub fn set_param_mod_amount(
         &mut self,
         param_id: ParamID,
         mod_amount: f64,
-    ) -> Result<(), SetParamValueError> {
+    ) -> Result<f64, SetParamValueError> {
         if let Some(param_queues) = &mut self.channel.param_queues {
             let params = self.params.as_ref().unwrap();
 
@@ -185,12 +200,14 @@ impl PluginHostMainThread {
                 if !param_info.flags.contains(ParamInfoFlags::IS_MODULATABLE) {
                     Err(SetParamValueError::ParamIsNotModulatable(param_id))
                 } else {
+                    // TODO: Clamp value?
+
                     param_queues
                         .to_proc_param_mod_tx
                         .set(param_id, MainToProcParamValue { value: mod_amount });
                     param_queues.to_proc_param_mod_tx.producer_done();
 
-                    Ok(())
+                    Ok(mod_amount)
                 }
             } else {
                 Err(SetParamValueError::ParamDoesNotExist(param_id))
@@ -200,14 +217,23 @@ impl PluginHostMainThread {
         }
     }
 
-    pub fn param_value_to_text(&self, param_id: ParamID, value: f64) -> Result<String, ()> {
-        self.plug_main_thread.param_value_to_text(param_id, value)
+    /// Get the display text for the given parameter with the given
+    /// value.
+    pub fn param_value_to_text(
+        &self,
+        param_id: ParamID,
+        value: f64,
+        text_buffer: &mut String,
+    ) -> Result<(), String> {
+        self.plug_main_thread.param_value_to_text(param_id, value, text_buffer)
     }
 
-    pub fn param_text_to_value(&self, param_id: ParamID, display: &str) -> Result<f64, ()> {
-        self.plug_main_thread.param_text_to_value(param_id, display)
+    /// Conver the given text input to a value for this parameter.
+    pub fn param_text_to_value(&self, param_id: ParamID, text_input: &str) -> Option<f64> {
+        self.plug_main_thread.param_text_to_value(param_id, text_input)
     }
 
+    /// Tell the plugin to open its custom GUI.
     pub fn show_gui(&mut self) -> Result<(), ShowGuiError> {
         if !self.plug_main_thread.is_gui_open() {
             if let Err(e) = self.plug_main_thread.open_gui(None) {
@@ -219,16 +245,20 @@ impl PluginHostMainThread {
         }
     }
 
+    /// Tell the plugin to close its custom GUI.
     pub fn close_gui(&mut self) {
         if self.plug_main_thread.is_gui_open() {
             self.plug_main_thread.close_gui();
         }
     }
 
-    pub fn supports_gui(&self) -> bool {
-        self.plug_main_thread.supports_gui()
+    /// Returns `true` if this plugin has a custom GUI that can be
+    /// opened in a floating window.
+    pub fn has_gui(&self) -> bool {
+        self.plug_main_thread.has_gui()
     }
 
+    /// Returns `Ok(())` if the plugin can be activated right now.
     pub fn can_activate(&self) -> Result<(), ActivatePluginError> {
         // TODO: without this check it seems something is attempting to activate the plugin twice
         if self.channel.shared_state.get_active_state() == PluginActiveState::Active {
@@ -237,14 +267,14 @@ impl PluginHostMainThread {
         Ok(())
     }
 
-    // TODO: method to let the user manually activate an inactive plugin
+    // TODO: let the user manually activate an inactive plugin
     pub(crate) fn activate(
         &mut self,
         sample_rate: SampleRate,
         min_frames: u32,
         max_frames: u32,
         coll_handle: &basedrop::Handle,
-    ) -> Result<PluginActivatedRes, ActivatePluginError> {
+    ) -> Result<PluginActivatedStatus, ActivatePluginError> {
         self.can_activate()?;
 
         let audio_ports = match self.plug_main_thread.audio_ports_ext() {
@@ -322,12 +352,13 @@ impl PluginHostMainThread {
 
                 self.params = Some(params);
 
-                Ok(PluginActivatedRes {
+                Ok(PluginActivatedStatus {
                     new_parameters: param_values,
                     // TODO: Only return the new extensions if they have changed.
                     new_audio_ports_ext: Some(self.audio_ports_ext.as_ref().unwrap().clone()),
                     new_note_ports_ext: Some(self.note_ports_ext.as_ref().unwrap().clone()),
                     internal_handle: info.internal_handle,
+                    has_gui: self.plug_main_thread.has_gui(),
                 })
             }
             Err(e) => {
@@ -339,29 +370,9 @@ impl PluginHostMainThread {
         }
     }
 
-    pub(crate) fn schedule_deactivate(&mut self) {
-        if self.channel.shared_state.get_active_state() != PluginActiveState::Active {
-            return;
-        }
-
-        // Allow the plugin's audio thread to be dropped when the new
-        // schedule is sent.
-        //
-        // Note this doesn't actually drop the process thread. It only
-        // drops this struct's pointer to the process thread.
-        self.channel.drop_process_thread_pointer();
-
-        // Wait for the audio thread part to go to sleep before
-        // deactivating.
-        self.channel.shared_state.set_active_state(PluginActiveState::WaitingToDrop);
-    }
-
-    pub(crate) fn schedule_remove(&mut self) {
-        self.remove_requested = true;
-
-        self.schedule_deactivate();
-    }
-
+    /// Get the audio port configuration on this plugin.
+    ///
+    /// This will return `None` if this plugin has no audio ports.
     pub fn audio_ports_ext(&self) -> Option<&PluginAudioPortsExt> {
         if self.audio_ports_ext.is_some() {
             self.audio_ports_ext.as_ref()
@@ -370,12 +381,30 @@ impl PluginHostMainThread {
         }
     }
 
+    /// Get the note port configuration on this plugin.
+    ///
+    /// This will return `None` if this plugin has no note ports.
     pub fn note_ports_ext(&self) -> Option<&PluginNotePortsExt> {
         if self.note_ports_ext.is_some() {
             self.note_ports_ext.as_ref()
         } else {
             self.save_state.backup_note_ports.as_ref()
         }
+    }
+
+    /// The total number of audio input channels on this plugin.
+    pub fn num_audio_in_channels(&self) -> usize {
+        self.num_audio_in_channels
+    }
+
+    /// The total number of audio output channels on this plugin.
+    pub fn num_audio_out_channels(&self) -> usize {
+        self.num_audio_out_channels
+    }
+
+    /// The unique ID for this plugin instance.
+    pub fn id(&self) -> &PluginInstanceID {
+        &self.id
     }
 
     pub(crate) fn on_idle(
@@ -491,24 +520,35 @@ impl PluginHostMainThread {
         (OnIdleResult::Ok, modified_params)
     }
 
+    pub(crate) fn schedule_deactivate(&mut self) {
+        if self.channel.shared_state.get_active_state() != PluginActiveState::Active {
+            return;
+        }
+
+        // Allow the plugin's audio thread to be dropped when the new
+        // schedule is sent.
+        //
+        // Note this doesn't actually drop the process thread. It only
+        // drops this struct's pointer to the process thread.
+        self.channel.drop_process_thread_pointer();
+
+        // Wait for the audio thread part to go to sleep before
+        // deactivating.
+        self.channel.shared_state.set_active_state(PluginActiveState::WaitingToDrop);
+    }
+
+    pub(crate) fn schedule_remove(&mut self) {
+        self.remove_requested = true;
+
+        self.schedule_deactivate();
+    }
+
     pub(crate) fn update_tempo_map(&mut self, new_tempo_map: &Shared<TempoMap>) {
         self.plug_main_thread.update_tempo_map(new_tempo_map);
     }
 
-    pub fn num_audio_in_channels(&self) -> usize {
-        self.num_audio_in_channels
-    }
-
-    pub fn num_audio_out_channels(&self) -> usize {
-        self.num_audio_out_channels
-    }
-
     pub(crate) fn shared_processor(&self) -> &Option<SharedPluginHostProcThread> {
         self.channel.shared_processor()
-    }
-
-    pub fn id(&self) -> &PluginInstanceID {
-        &self.id
     }
 
     pub(crate) fn port_refs(&self) -> &PluginHostPortRefs {
@@ -722,7 +762,7 @@ pub struct ParamModifiedInfo {
 pub(crate) enum OnIdleResult {
     Ok,
     PluginDeactivated,
-    PluginActivated(PluginActivatedRes),
+    PluginActivated(PluginActivatedStatus),
     PluginReadyToRemove,
     PluginFailedToActivate(ActivatePluginError),
 }

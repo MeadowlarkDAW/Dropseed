@@ -127,7 +127,7 @@ pub trait PluginMainThread {
         Err(())
     }
 
-    /// Formats the display text for the given parameter value.
+    /// Format the display text for the given parameter value.
     ///
     /// This will never be called if `PluginMainThread::num_params()` returned 0.
     ///
@@ -135,20 +135,25 @@ pub trait PluginMainThread {
     ///
     /// [main-thread]
     #[allow(unused)]
-    fn param_value_to_text(&self, param_id: ParamID, value: f64) -> Result<String, ()> {
-        Err(())
+    fn param_value_to_text(
+        &self,
+        param_id: ParamID,
+        value: f64,
+        text_buffer: &mut String,
+    ) -> Result<(), String> {
+        Err(String::new())
     }
 
-    /// Converts the display text to a parameter value.
+    /// Convert the text input to a parameter value.
     ///
     /// This will never be called if `PluginMainThread::num_params()` returned 0.
     ///
-    /// By default this returns `Err(())`
+    /// By default this returns `None`
     ///
     /// [main-thread]
     #[allow(unused)]
-    fn param_text_to_value(&self, param_id: ParamID, display: &str) -> Result<f64, ()> {
-        Err(())
+    fn param_text_to_value(&self, param_id: ParamID, text_input: &str) -> Option<f64> {
+        None
     }
 
     /// Called when the tempo map is updated.
@@ -191,7 +196,7 @@ pub trait PluginMainThread {
     // --- GUI ---------------------------------------------------------------------------------
 
     /// Returns whether or not this plugin instance supports opening a floating GUI window.
-    fn supports_gui(&self) -> bool {
+    fn has_gui(&self) -> bool {
         false
     }
 

@@ -15,7 +15,7 @@ use dropseed_plugin_api::transport::TempoMap;
 use dropseed_plugin_api::{DSPluginSaveState, PluginInstanceID, PluginInstanceType};
 
 use crate::engine::request::{EdgeReq, EdgeReqPortID};
-use crate::engine::{NewPluginRes, NewPluginStatus, OnIdleEvent};
+use crate::engine::{NewPluginRes, OnIdleEvent, PluginStatus};
 use crate::plugin_host::{OnIdleResult, PluginHostMainThread};
 use crate::plugin_scanner::PluginScanner;
 use crate::processor_schedule::tasks::{TransportHandle, TransportTask};
@@ -185,8 +185,6 @@ impl AudioGraph {
             }
         }
 
-        let supports_gui = res.plugin_host.supports_gui();
-
         if self.shared_pools.plugin_hosts.pool.insert(plugin_id.clone(), res.plugin_host).is_some()
         {
             panic!("Something went wrong when allocating a new slot for a plugin");
@@ -195,16 +193,13 @@ impl AudioGraph {
         let activation_status = if activate_plugin {
             self.activate_plugin_instance(&plugin_id).unwrap()
         } else {
-            NewPluginStatus::Inactive
+            PluginStatus::Inactive
         };
 
-        NewPluginRes { plugin_id, status: activation_status, supports_gui }
+        NewPluginRes { plugin_id, status: activation_status }
     }
 
-    pub fn activate_plugin_instance(
-        &mut self,
-        id: &PluginInstanceID,
-    ) -> Result<NewPluginStatus, ()> {
+    pub fn activate_plugin_instance(&mut self, id: &PluginInstanceID) -> Result<PluginStatus, ()> {
         let plugin_host = if let Some(plugin_host) = self.shared_pools.plugin_hosts.pool.get_mut(id)
         {
             plugin_host
@@ -213,7 +208,7 @@ impl AudioGraph {
         };
 
         if let Err(e) = plugin_host.can_activate() {
-            return Ok(NewPluginStatus::ActivationError(e));
+            return Ok(PluginStatus::ActivationError(e));
         }
 
         let activation_status = match plugin_host.activate(
@@ -222,11 +217,11 @@ impl AudioGraph {
             self.max_frames as u32,
             &self.coll_handle,
         ) {
-            Ok(res) => NewPluginStatus::Activated(res),
-            Err(e) => NewPluginStatus::ActivationError(e),
+            Ok(res) => PluginStatus::Activated(res),
+            Err(e) => PluginStatus::ActivationError(e),
         };
 
-        if let NewPluginStatus::Activated { .. } = &activation_status {
+        if let PluginStatus::Activated { .. } = &activation_status {
             plugin_host.sync_ports_in_graph(&mut self.abstract_graph);
         }
 
@@ -803,14 +798,14 @@ impl AudioGraph {
                         status: Ok(()),
                     });
                 }
-                OnIdleResult::PluginActivated(res) => {
+                OnIdleResult::PluginActivated(status) => {
                     plugin_host.sync_ports_in_graph(&mut self.abstract_graph);
 
                     recompile_graph = true;
 
                     events_out.push(OnIdleEvent::PluginActivated {
                         plugin_id: plugin_host.id().clone(),
-                        result: res,
+                        status,
                     });
                 }
                 OnIdleResult::PluginReadyToRemove => {

@@ -1,11 +1,11 @@
 use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::Stream;
-use crossbeam_channel::Receiver;
-use dropseed::plugin_api::{HostInfo, PluginInstanceID};
-use dropseed::{
-    ActivateEngineSettings, DSEngineAudioThread, DSEngineEvent, DSEngineHandle, DSEngineRequest,
-    EngineDeactivatedInfo, NewPluginStatus, PluginEvent, PluginScannerEvent, ScannedPlugin,
+use dropseed::engine::{
+    ActivateEngineSettings, ActivatedEngineInfo, DSEngineAudioThread, DSEngineMainThread,
+    EngineDeactivatedStatus, OnIdleEvent,
 };
+use dropseed::plugin_api::HostInfo;
+use dropseed::plugin_scanner::ScannedPluginInfo;
 use eframe::egui;
 use fern::colors::ColoredLevelConfig;
 use log::LevelFilter;
@@ -14,14 +14,16 @@ use meadowlark_core_types::time::SampleRate;
 mod effect_rack_page;
 mod scanned_plugins_page;
 
-//use effect_rack_page::{EffectRackPluginActiveState, EffectRackPluginState, EffectRackState};
+use effect_rack_page::EffectRackState;
 
-const MIN_BLOCK_SIZE: u32 = 1;
-const MAX_BLOCK_SIZE: u32 = 512;
+const MIN_FRAMES: u32 = 1;
+const MAX_FRAMES: u32 = 512;
 const GRAPH_IN_CHANNELS: u16 = 2;
 const GRAPH_OUT_CHANNELS: u16 = 2;
 
 fn main() {
+    // ---  Set up logging stuff  -------------------------------------------------
+
     // Prefer to use a logging crate that is wait-free for threads printing
     // out to the log.
     let log_colors = ColoredLevelConfig::default();
@@ -54,21 +56,19 @@ fn main() {
         .apply()
         .unwrap();
 
-    let (to_audio_thread_tx, mut from_gui_rx) =
-        ringbuf::RingBuffer::<UIToAudioThreadMsg>::new(10).split();
-
     // ---  Initialize cpal stream  -----------------------------------------------
 
     let cpal_host = cpal::default_host();
-
     let device = cpal_host.default_output_device().expect("no output device available");
-
     let config = device.default_output_config().expect("no default output config available");
 
     let num_out_channels = usize::from(config.channels());
     let sample_rate: SampleRate = config.sample_rate().0.into();
 
     let mut audio_thread: Option<DSEngineAudioThread> = None;
+
+    let (mut to_audio_thread_tx, mut from_gui_rx) =
+        ringbuf::RingBuffer::<UIToAudioThreadMsg>::new(10).split();
 
     let cpal_stream = device
         .build_output_stream(
@@ -88,6 +88,8 @@ fn main() {
                 if let Some(audio_thread) = &mut audio_thread {
                     audio_thread
                         .process_cpal_interleaved_output_only(num_out_channels, audio_buffer);
+                } else {
+                    audio_buffer.fill(0.0);
                 }
             },
             |e| {
@@ -98,24 +100,23 @@ fn main() {
 
     // ---  Initialize Dropseed Engine  -------------------------------------------
 
-    let (mut engine_handle, engine_rx) = DSEngineHandle::new(
-        HostInfo::new(String::from("Dropseed Example"), String::from("0.1.0"), None, None),
-        //vec![Box::new(NoiseGenPluginFactory {})],
-        vec![],
+    let (mut ds_engine, internal_plugins_scan_res) = DSEngineMainThread::new(
+        HostInfo::new(
+            "Dropseed Test Host".into(),                              // host name
+            env!("CARGO_PKG_VERSION").into(),                         // host version
+            Some("Meadowlark".into()),                                // vendor
+            Some("https://github.com/MeadowlarkDAW/dropseed".into()), // url
+        ),
+        vec![], // list of internal plugins
     );
 
-    //dbg!(&engine_handle.internal_plugins_res);
+    log::info!("{:?}", &internal_plugins_scan_res);
 
-    engine_handle.send(DSEngineRequest::ActivateEngine(Box::new(ActivateEngineSettings {
-        sample_rate,
-        min_frames: MIN_BLOCK_SIZE,
-        max_frames: MAX_BLOCK_SIZE,
-        num_audio_in_channels: GRAPH_IN_CHANNELS,
-        num_audio_out_channels: GRAPH_OUT_CHANNELS,
-        ..Default::default()
-    })));
+    let (activated_state, ds_engine_audio_thread) = activate_engine(&mut ds_engine, sample_rate);
 
-    engine_handle.send(DSEngineRequest::RescanPluginDirectories);
+    to_audio_thread_tx
+        .push(UIToAudioThreadMsg::NewEngineAudioThread(ds_engine_audio_thread))
+        .unwrap();
 
     // ---  Run the UI  -----------------------------------------------------------
 
@@ -126,9 +127,9 @@ fn main() {
         Box::new(move |cc| {
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
 
-            Box::new(DSExampleGUI::new(
-                engine_handle,
-                engine_rx,
+            Box::new(DSTestHostGUI::new(
+                ds_engine,
+                activated_state,
                 cpal_stream,
                 sample_rate,
                 to_audio_thread_tx,
@@ -143,308 +144,156 @@ enum UIToAudioThreadMsg {
     DropEngineAudioThread,
 }
 
-pub struct EngineState {
-    pub graph_in_node_id: PluginInstanceID,
-    pub graph_out_node_id: PluginInstanceID,
-    //pub effect_rack_state: EffectRackState,
+pub struct ActivatedState {
+    engine_info: ActivatedEngineInfo,
+
+    scanned_plugin_list: Vec<(ScannedPluginInfo, String)>,
+    scanned_failed_list: Vec<(String, String)>,
+
+    effect_rack_state: EffectRackState,
 }
 
-struct DSExampleGUI {
-    engine_handle: DSEngineHandle,
-    engine_rx: Receiver<DSEngineEvent>,
+struct DSTestHostGUI {
+    ds_engine: DSEngineMainThread,
+
+    activated_state: Option<ActivatedState>,
+
+    current_tab: Tab,
 
     to_audio_thread_tx: ringbuf::Producer<UIToAudioThreadMsg>,
     _cpal_stream: Option<Stream>,
 
     sample_rate: SampleRate,
-
-    plugin_list: Vec<(ScannedPlugin, String)>,
-
-    failed_plugins_text: Vec<(String, String)>,
-
-    engine_state: Option<EngineState>,
-
-    current_tab: Tab,
 }
 
-impl DSExampleGUI {
+impl DSTestHostGUI {
     fn new(
-        engine_handle: DSEngineHandle,
-        engine_rx: Receiver<DSEngineEvent>,
+        ds_engine: DSEngineMainThread,
+        activated_state: ActivatedState,
         cpal_stream: Stream,
         sample_rate: SampleRate,
         to_audio_thread_tx: ringbuf::Producer<UIToAudioThreadMsg>,
     ) -> Self {
         Self {
-            engine_handle,
-            engine_rx,
+            ds_engine,
+            activated_state: Some(activated_state),
+            current_tab: Tab::EffectRack,
             to_audio_thread_tx,
             _cpal_stream: Some(cpal_stream),
             sample_rate,
-            plugin_list: Vec::new(),
-            failed_plugins_text: Vec::new(),
-            engine_state: None,
-            current_tab: Tab::EffectRack,
         }
     }
 
-    fn poll_updates(&mut self) {
-        for msg in self.engine_rx.try_iter() {
-            //dbg!(&msg);
+    fn on_idle(&mut self) {
+        if self.activated_state.is_none() {
+            return;
+        }
 
-            match msg {
-                // Sent whenever the engine is deactivated.
+        // This must be called periodically (i.e. once every frame).
+        //
+        // This will return a list of events that have occured.
+        let mut events = self.ds_engine.on_idle();
+        for event in events.drain(..) {
+            match event {
+                // The plugin's parameters have been modified via the plugin's custom
+                // GUI.
                 //
-                // The DSEngineAudioThread sent in a previous EngineActivated event is now
-                // invalidated. Please drop it and wait for a new EngineActivated event to
-                // replace it.
+                // Only the parameters which have changed will be returned in this
+                // field.
+                OnIdleEvent::PluginParamsModified { plugin_id, modified_params } => {
+                    if let Some(plugin) = self
+                        .activated_state
+                        .as_mut()
+                        .unwrap()
+                        .effect_rack_state
+                        .plugin_mut(&plugin_id)
+                    {
+                        plugin.on_params_modified(&modified_params);
+                    }
+                }
+
+                // Sent when the plugin closed its own GUI by its own means. UI should
+                // be updated accordingly so that the user could open the UI again.
+                OnIdleEvent::PluginGuiClosed { plugin_id } => {
+                    if let Some(plugin) = self
+                        .activated_state
+                        .as_mut()
+                        .unwrap()
+                        .effect_rack_state
+                        .plugin_mut(&plugin_id)
+                    {
+                        plugin.on_plugin_gui_closed();
+                    }
+                }
+
+                // Sent whenever a plugin becomes activated after being deactivated or
+                // when the plugin restarts.
                 //
-                // To keep using the audio graph, you must reactivate the engine with
-                // `DSEngineRequest::ActivateEngine`, and then restore the audio graph
-                // from an existing save state if you wish using
-                // `DSEngineRequest::RestoreFromSaveState`.
-                DSEngineEvent::EngineDeactivated(res) => {
+                // Make sure your UI updates the port configuration on this plugin, as
+                // well as any custom handles.
+                OnIdleEvent::PluginActivated { plugin_id, status } => {
+                    if let Some(plugin) = self
+                        .activated_state
+                        .as_mut()
+                        .unwrap()
+                        .effect_rack_state
+                        .plugin_mut(&plugin_id)
+                    {
+                        plugin.on_activated(status);
+                    }
+                }
+
+                // Sent whenever a plugin has been deactivated. When a plugin is
+                // deactivated, you cannot access any of its methods until it is
+                // reactivated.
+                OnIdleEvent::PluginDeactivated { plugin_id, status } => {
+                    if let Some(plugin) = self
+                        .activated_state
+                        .as_mut()
+                        .unwrap()
+                        .effect_rack_state
+                        .plugin_mut(&plugin_id)
+                    {
+                        plugin.on_deactivated();
+                    }
+
+                    match status {
+                        Ok(()) => log::info!("Plugin {:?} was deactivated gracefully", &plugin_id),
+                        Err(e) => {
+                            log::info!("Plugin {:?} failed to reactivate: {}", &plugin_id, e);
+                        }
+                    }
+                }
+
+                // Sent whenever the engine has been deactivated, whether gracefully or
+                // because of a crash.
+                OnIdleEvent::EngineDeactivated(status) => {
+                    self.activated_state = None;
+
                     self.to_audio_thread_tx
                         .push(UIToAudioThreadMsg::DropEngineAudioThread)
                         .unwrap();
 
-                    match res {
-                        // The engine was deactivated gracefully after recieving a
-                        // `DSEngineRequest::DeactivateEngine` request.
-                        EngineDeactivatedInfo::DeactivatedGracefully { .. } => {
-                            println!("Engine deactivated gracefully");
+                    match status {
+                        EngineDeactivatedStatus::DeactivatedGracefully => {
+                            log::info!("Engine was deactivated gracefully");
                         }
-                        // The engine has crashed.
-                        EngineDeactivatedInfo::EngineCrashed { error_msg, .. } => {
-                            println!("Engine crashed: {}", error_msg);
+                        EngineDeactivatedStatus::EngineCrashed(e) => {
+                            log::error!("Engine crashed: {}", e);
                         }
                     }
-
-                    self.engine_state = None;
-                }
-
-                // This message is sent whenever the engine successfully activates.
-                DSEngineEvent::EngineActivated(info) => {
-                    self.engine_state = Some(EngineState {
-                        graph_in_node_id: info.graph_in_node_id,
-                        graph_out_node_id: info.graph_out_node_id,
-                        //effect_rack_state: EffectRackState::new(),
-                    });
-
-                    self.to_audio_thread_tx
-                        .push(UIToAudioThreadMsg::NewEngineAudioThread(info.audio_thread))
-                        .unwrap();
-                }
-
-                // This message is sent after the user requests the latest save states from
-                // calling `DSEngineRequest::RequestLatestSaveStates` or
-                // `PluginRequest::GetLatestSaveState`.
-                //
-                // This only returns the save states of the plugins which have changed their
-                // state.
-                //
-                // Use the latest save state as a backup in case a plugin crashes or a bug
-                // in the audio graph compiler causes the audio graph to be in an invalid
-                // state, resulting in the audio engine stopping.
-                DSEngineEvent::NewSaveStates(new_states) => {
-                    dbg!(&new_states);
-                }
-
-                // When this message is received, it means that the audio graph is starting
-                // the process of restoring from a save state.
-                //
-                // Reset your UI as if you are loading up a project for the first time, and
-                // wait for the `AudioGraphModified` event to repopulate the UI.
-                //
-                // If the audio graph is in an invalid state as a result of restoring from
-                // the save state, then the `EngineDeactivated` event will be sent instead.
-                DSEngineEvent::AudioGraphCleared => {
-                    if let Some(engine_state) = &mut self.engine_state {
-                        //engine_state.effect_rack_state.plugins.clear();
-                    }
-                }
-
-                // This message is sent whenever the audio graph has been modified.
-                //
-                // Be sure to update your UI from this new state.
-                DSEngineEvent::AudioGraphModified(mut res) => {
-                    if let Some(engine_state) = &mut self.engine_state {
-                        for plugin_id in res.removed_plugins.drain(..) {
-                            //engine_state.effect_rack_state.remove_plugin(&plugin_id);
-                        }
-
-                        for new_plugin_res in res.new_plugins.drain(..) {
-                            let found = self
-                                .plugin_list
-                                .iter()
-                                .find(|(p, _)| p.rdn() == new_plugin_res.plugin_id.rdn().as_str())
-                                .unwrap();
-
-                            let plugin_name = found.0.description.name.clone();
-
-                            /*
-                            let active_state = match new_plugin_res.status {
-                                NewPluginStatus::Activated {
-                                    new_param_values,
-                                    new_audio_ports_ext,
-                                    new_note_ports_ext,
-                                } => Some(EffectRackPluginActiveState::new(
-                                    new_param_values,
-                                )),
-                                NewPluginStatus::Inactive => None,
-                                NewPluginStatus::LoadError(e) => {
-                                    println!("Plugin failed to load: {}", e);
-                                    None
-                                }
-                                NewPluginStatus::ActivationError(e) => {
-                                    println!("Plugin failed to activate: {}", e);
-                                    None
-                                }
-                            };
-
-                            let effect_rack_plugin = EffectRackPluginState {
-                                plugin_name,
-                                plugin_id: new_plugin_res.plugin_id,
-                                active_state,
-                                supports_gui: new_plugin_res.supports_gui,
-                                is_gui_open: false,
-                            };
-
-                            engine_state.effect_rack_state.plugins.push(effect_rack_plugin);
-                            */
-                        }
-
-                        for (plugin_id, _) in res.updated_plugin_edges.drain(..) {
-                            /*
-                            let effect_rack_plugin =
-                                engine_state.effect_rack_state.plugin_mut(&plugin_id).unwrap();
-
-                            if effect_rack_plugin.active_state.is_some() {
-                                // TODO
-                            }
-                            */
-                        }
-                    }
-                }
-
-                DSEngineEvent::Plugin(event) => match event {
-                    // Sent whenever a plugin becomes activated after being deactivated or
-                    // when the plugin restarts.
-                    //
-                    // Make sure your UI updates the port configuration on this plugin.
-                    PluginEvent::Activated {
-                        plugin_id,
-                        new_param_values,
-                        new_audio_ports,
-                        new_note_ports,
-                    } => {
-                        if let Some(engine_state) = &mut self.engine_state {
-                            /*
-                            let effect_rack_plugin =
-                                engine_state.effect_rack_state.plugin_mut(&plugin_id).unwrap();
-                            */
-
-                            //effect_rack_plugin.update_handle(new_handle, new_param_values);
-                        }
-                    }
-
-                    // Sent whenever a plugin becomes deactivated. When a plugin is deactivated
-                    // you cannot access any of its methods until it is reactivated.
-                    PluginEvent::Deactivated {
-                        plugin_id,
-                        // If this is `Ok(())`, then it means the plugin was gracefully
-                        // deactivated from user request.
-                        //
-                        // If this is `Err(e)`, then it means the plugin became deactivated
-                        // because it failed to restart.
-                        status,
-                    } => {
-                        if let Some(engine_state) = &mut self.engine_state {
-                            /*
-                            let effect_rack_plugin =
-                                engine_state.effect_rack_state.plugin_mut(&plugin_id).unwrap();
-
-                            effect_rack_plugin.set_inactive();
-                            */
-
-                            if let Err(e) = status {
-                                println!("Plugin failed to activate: {}", e);
-                            }
-                        }
-                    }
-
-                    PluginEvent::ParamsModified { plugin_id, modified_params } => {
-                        if let Some(engine_state) = &mut self.engine_state {
-                            /*
-                            let effect_rack_plugin =
-                                engine_state.effect_rack_state.plugin_mut(&plugin_id).unwrap();
-
-                            if let Some(active_state) = &mut effect_rack_plugin.active_state {
-                                active_state.params_state.parameters_modified(&modified_params);
-                            }
-                            */
-                        }
-                    }
-
-                    PluginEvent::GuiClosed { plugin_id } => {
-                        if let Some(engine_state) = &mut self.engine_state {
-                            /*
-                            let effect_rack_plugin =
-                                engine_state.effect_rack_state.plugin_mut(&plugin_id).unwrap();
-                            effect_rack_plugin.is_gui_open = false;
-                            */
-                        }
-                    }
-
-                    unkown_event => {
-                        dbg!(unkown_event);
-                    }
-                },
-
-                DSEngineEvent::PluginScanner(event) => match event {
-                    // A new CLAP plugin scan path was added.
-                    PluginScannerEvent::ClapScanPathAdded(path) => {
-                        println!("Added clap scan path: {:?}", path);
-                    }
-                    // A CLAP plugin scan path was removed.
-                    PluginScannerEvent::ClapScanPathRemoved(path) => {
-                        println!("Removed clap scan path: {:?}", path);
-                    }
-                    // A request to rescan all plugin directories has finished. Update
-                    // the list of available plugins in your UI.
-                    PluginScannerEvent::RescanFinished(mut info) => {
-                        self.plugin_list = info
-                            .scanned_plugins
-                            .iter()
-                            .map(|plugin| {
-                                let display_choice =
-                                    format!("{} ({})", &plugin.description.name, &plugin.format);
-
-                                (plugin.clone(), display_choice)
-                            })
-                            .collect();
-
-                        self.failed_plugins_text = info
-                            .failed_plugins
-                            .drain(..)
-                            .map(|(path, error)| (path.to_string_lossy().to_string(), error))
-                            .collect();
-                    }
-                    unkown_event => {
-                        dbg!(unkown_event);
-                    }
-                },
-                unkown_event => {
-                    dbg!(unkown_event);
                 }
             }
         }
+
+        // TODO: Only call this every 3 seconds or so.
+        self.ds_engine.collect_garbage();
     }
 }
 
-impl eframe::App for DSExampleGUI {
+impl eframe::App for DSTestHostGUI {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.poll_updates();
+        self.on_idle();
 
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -452,29 +301,37 @@ impl eframe::App for DSExampleGUI {
                 ui.selectable_value(&mut self.current_tab, Tab::ScannedPlugins, "Scanned Plugins");
 
                 ui.with_layout(egui::Layout::right_to_left(), |ui| {
-                    if self.engine_state.is_some() {
+                    if self.activated_state.is_some() {
                         ui.label(format!("sample rate: {}", self.sample_rate.as_u16()));
                         ui.colored_label(egui::Color32::GREEN, "active");
                         ui.label("engine status:");
 
                         if ui.button("deactivate").clicked() {
-                            self.engine_handle.send(DSEngineRequest::DeactivateEngine);
+                            if self.ds_engine.deactivate_engine() {
+                                self.activated_state = None;
+
+                                self.to_audio_thread_tx
+                                    .push(UIToAudioThreadMsg::DropEngineAudioThread)
+                                    .unwrap();
+
+                                log::info!("Deactivated dropseed engine gracefully");
+                            }
                         }
                     } else {
                         ui.colored_label(egui::Color32::RED, "inactive");
                         ui.label("engine status:");
 
                         if ui.button("activate").clicked() {
-                            self.engine_handle.send(DSEngineRequest::ActivateEngine(Box::new(
-                                ActivateEngineSettings {
-                                    sample_rate: self.sample_rate,
-                                    min_frames: MIN_BLOCK_SIZE,
-                                    max_frames: MAX_BLOCK_SIZE,
-                                    num_audio_in_channels: GRAPH_IN_CHANNELS,
-                                    num_audio_out_channels: GRAPH_OUT_CHANNELS,
-                                    ..Default::default()
-                                },
-                            )));
+                            let (activated_state, ds_engine_audio_thread) =
+                                activate_engine(&mut self.ds_engine, self.sample_rate);
+
+                            self.to_audio_thread_tx
+                                .push(UIToAudioThreadMsg::NewEngineAudioThread(
+                                    ds_engine_audio_thread,
+                                ))
+                                .unwrap();
+
+                            self.activated_state = Some(activated_state);
                         }
                     }
                 });
@@ -482,7 +339,9 @@ impl eframe::App for DSExampleGUI {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| match self.current_tab {
-            Tab::EffectRack => effect_rack_page::show(self, ui),
+            Tab::EffectRack => {
+                effect_rack_page::show(&mut self.ds_engine, self.activated_state.as_mut(), ui)
+            }
             Tab::ScannedPlugins => scanned_plugins_page::show(self, ui),
         });
     }
@@ -490,6 +349,33 @@ impl eframe::App for DSExampleGUI {
     fn on_exit(&mut self, _gl: &eframe::glow::Context) {
         self._cpal_stream = None;
     }
+}
+
+fn activate_engine(
+    ds_engine: &mut DSEngineMainThread,
+    sample_rate: SampleRate,
+) -> (ActivatedState, DSEngineAudioThread) {
+    let (engine_info, ds_engine_audio_thread) = ds_engine
+        .activate_engine(ActivateEngineSettings {
+            sample_rate,
+            min_frames: MIN_FRAMES,
+            max_frames: MAX_FRAMES,
+            num_audio_in_channels: GRAPH_IN_CHANNELS,
+            num_audio_out_channels: GRAPH_OUT_CHANNELS,
+            ..Default::default()
+        })
+        .unwrap();
+
+    let mut activated_state = ActivatedState {
+        engine_info,
+        scanned_plugin_list: Vec::new(),
+        scanned_failed_list: Vec::new(),
+        effect_rack_state: EffectRackState::new(),
+    };
+
+    scanned_plugins_page::scan_external_plugins(ds_engine, &mut activated_state);
+
+    (activated_state, ds_engine_audio_thread)
 }
 
 #[derive(PartialEq)]

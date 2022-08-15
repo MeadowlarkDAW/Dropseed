@@ -267,33 +267,60 @@ impl PluginMainThread for ClapPluginMainThread {
         }
     }
 
-    fn param_value_to_text(&self, param_id: ParamID, value: f64) -> Result<String, ()> {
+    fn param_value_to_text(
+        &self,
+        param_id: ParamID,
+        value: f64,
+        text_buffer: &mut String,
+    ) -> Result<(), String> {
         if let Some(params_ext) = self.instance.shared_host_data().params_ext {
             let mut char_buf = [MaybeUninit::uninit(); 256];
 
-            let bytes = params_ext
-                .value_to_text(&self.instance, param_id.0, value, &mut char_buf)
-                .ok_or(())?;
+            let bytes = match params_ext.value_to_text(
+                &self.instance,
+                param_id.0,
+                value,
+                &mut char_buf,
+            ) {
+                Some(b) => b,
+                None => {
+                    return Err(format!("Failed to convert parameter value {} on parameter {:?} on plugin {} to a string: plugin returned false on call to value_to_text", value, &param_id, self.id()));
+                }
+            };
 
-            core::str::from_utf8(bytes).map_err(|_| ()).map(|s| s.to_string())
+            match core::str::from_utf8(bytes) {
+                Ok(s) => {
+                    text_buffer.push_str(s);
+                    Ok(())
+                }
+                Err(e) => {
+                    return Err(format!("Failed to convert parameter value {} on parameter {:?} on plugin {} to a string: {}", value, &param_id, self.id(), e));
+                }
+            }
         } else {
-            Err(())
+            Err(String::new())
         }
     }
 
-    fn param_text_to_value(&self, param_id: ParamID, display: &str) -> Result<f64, ()> {
+    fn param_text_to_value(&self, param_id: ParamID, display: &str) -> Option<f64> {
         if let Some(params_ext) = self.instance.shared_host_data().params_ext {
-            let c_string = CString::new(display).map_err(|_| ())?;
+            let c_string = match CString::new(display) {
+                Ok(s) => s,
+                Err(e) => {
+                    log::error!("Failed to convert text input to CString in call to param_text_to_value: {}", e);
+                    return None;
+                }
+            };
 
-            params_ext.text_to_value(&self.instance, param_id.0, &c_string).ok_or(())
+            params_ext.text_to_value(&self.instance, param_id.0, &c_string)
         } else {
-            Err(())
+            None
         }
     }
 
     // --- GUI stuff ---------------------------------------------------------------------------------
 
-    fn supports_gui(&self) -> bool {
+    fn has_gui(&self) -> bool {
         if let (Some(gui), Some(api)) =
             (self.instance.shared_host_data().gui_ext, GuiApiType::default_for_current_platform())
         {

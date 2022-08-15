@@ -1,17 +1,50 @@
+use dropseed::engine::DSEngineMainThread;
+use dropseed::plugin_scanner::ScannedPluginInfo;
 use eframe::egui;
 
-use dropseed::DSEngineRequest;
+use super::{ActivatedState, DSTestHostGUI};
 
-use super::DSExampleGUI;
+pub fn scan_external_plugins(
+    ds_engine: &mut DSEngineMainThread,
+    activated_state: &mut ActivatedState,
+) {
+    let scanned_plugins_info = ds_engine.scan_external_plugins();
 
-pub(crate) fn show(app: &mut DSExampleGUI, ui: &mut egui::Ui) {
+    let scanned_plugin_list: Vec<(ScannedPluginInfo, String)> = scanned_plugins_info
+        .scanned_plugins
+        .iter()
+        .map(|plugin| {
+            let dropdown_text = format!("{} ({})", &plugin.description.name, &plugin.format);
+
+            (plugin.clone(), dropdown_text)
+        })
+        .collect();
+
+    let scanned_failed_list: Vec<(String, String)> = scanned_plugins_info
+        .failed_plugins
+        .iter()
+        .map(|(path, error)| (path.to_string_lossy().to_string(), error.clone()))
+        .collect();
+
+    activated_state.scanned_plugin_list = scanned_plugin_list;
+    activated_state.scanned_failed_list = scanned_failed_list;
+}
+
+pub(crate) fn show(app: &mut DSTestHostGUI, ui: &mut egui::Ui) {
     // TODO: Add/remove plugin paths.
 
+    if app.activated_state.is_none() {
+        ui.label("Engine is deactivated");
+        return;
+    }
+
     if ui.button("Rescan all plugin directories").clicked() {
-        app.engine_handle.send(DSEngineRequest::RescanPluginDirectories);
+        scan_external_plugins(&mut app.ds_engine, &mut app.activated_state.as_mut().unwrap());
     }
 
     ui.separator();
+
+    let activated_state = app.activated_state.as_ref().unwrap();
 
     egui::ScrollArea::vertical().show(ui, |ui| {
         ui.heading("Available Plugins");
@@ -29,7 +62,7 @@ pub(crate) fn show(app: &mut DSExampleGUI, ui: &mut egui::Ui) {
                 ui.label("SUPPORT URL");
                 ui.end_row();
 
-                for plugin in app.plugin_list.iter() {
+                for plugin in activated_state.scanned_plugin_list.iter() {
                     ui.label(&plugin.0.description.name);
                     ui.label(&plugin.0.description.version);
                     ui.label(&plugin.0.description.vendor);
@@ -54,7 +87,7 @@ pub(crate) fn show(app: &mut DSExampleGUI, ui: &mut egui::Ui) {
                 ui.label("ERROR");
                 ui.end_row();
 
-                for (path, error) in app.failed_plugins_text.iter() {
+                for (path, error) in activated_state.scanned_failed_list.iter() {
                     ui.label(path);
                     ui.label(error);
                     ui.end_row();

@@ -38,7 +38,7 @@ impl From<PluginFormat> for PluginInstanceType {
     }
 }
 
-/// Used to uniquely identify a plugin instance and for debugging purposes.
+/// A unique ID for a plugin instance.
 pub struct PluginInstanceID {
     node_ref: usize,
     // To make sure that no two plugin instances ever have the same ID.

@@ -33,14 +33,14 @@ const DEFAULT_CLAP_SCAN_DIRECTORIES: [&'static str; 1] = ["C:/Program Files/Comm
 const MAX_SCAN_DEPTH: usize = 10;
 
 #[derive(Debug, Clone)]
-pub struct ScannedPlugin {
+pub struct ScannedPluginInfo {
     pub description: PluginDescriptor,
     pub format: PluginFormat,
     pub format_version: String,
     pub key: ScannedPluginKey,
 }
 
-impl ScannedPlugin {
+impl ScannedPluginInfo {
     pub fn rdn(&self) -> &str {
         &*self.key.rdn.as_str()
     }
@@ -147,7 +147,7 @@ impl PluginScanner {
         }
     }
 
-    pub fn rescan_plugin_directories(&mut self) -> RescanPluginDirectoriesRes {
+    pub fn scan_external_plugins(&mut self) -> ScanExternalPluginsRes {
         log::info!("(Re)scanning plugin directories...");
 
         // TODO: Detect duplicate plugins (both duplicates with different versions and with different formats)
@@ -155,9 +155,10 @@ impl PluginScanner {
         // TODO: Scan plugins in a separate thread?
 
         self.scanned_external_plugins.clear();
-        let mut scanned_plugins: Vec<ScannedPlugin> = Vec::new();
+        let mut scanned_plugins: Vec<ScannedPluginInfo> = Vec::new();
         let mut failed_plugins: Vec<(PathBuf, String)> = Vec::new();
 
+        /*
         for (key, f) in self.scanned_internal_plugins.iter() {
             scanned_plugins.push(ScannedPlugin {
                 description: f.factory.description(),
@@ -166,6 +167,7 @@ impl PluginScanner {
                 key: key.clone(),
             })
         }
+        */
 
         #[cfg(feature = "clap-host")]
         {
@@ -234,7 +236,7 @@ impl PluginScanner {
 
                             let description = f.description();
 
-                            scanned_plugins.push(ScannedPlugin {
+                            scanned_plugins.push(ScannedPluginInfo {
                                 description,
                                 format: PluginFormat::Clap,
                                 format_version,
@@ -271,7 +273,7 @@ impl PluginScanner {
             }
         }
 
-        RescanPluginDirectoriesRes { scanned_plugins, failed_plugins }
+        ScanExternalPluginsRes { scanned_plugins, failed_plugins }
     }
 
     pub fn scan_internal_plugin(
@@ -428,7 +430,7 @@ pub(crate) struct CreatePluginResult {
 }
 
 #[derive(Debug)]
-pub struct RescanPluginDirectoriesRes {
-    pub scanned_plugins: Vec<ScannedPlugin>,
+pub struct ScanExternalPluginsRes {
+    pub scanned_plugins: Vec<ScannedPluginInfo>,
     pub failed_plugins: Vec<(PathBuf, String)>,
 }
