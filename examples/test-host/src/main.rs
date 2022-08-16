@@ -122,7 +122,7 @@ fn main() {
 
     let options = eframe::NativeOptions::default();
     eframe::run_native(
-        "Dropseed Example",
+        "Dropseed Test Host",
         options,
         Box::new(move |cc| {
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
