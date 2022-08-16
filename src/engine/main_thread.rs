@@ -152,6 +152,7 @@ impl DSEngineMainThread {
     ///
     /// This must be called periodically (i.e. once every 3 seconds).
     pub fn collect_garbage(&mut self) {
+        self.plugin_scanner.unload_unused_binaries();
         self.collector.collect();
     }
 

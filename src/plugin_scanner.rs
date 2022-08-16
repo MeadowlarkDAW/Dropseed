@@ -1,4 +1,5 @@
 use basedrop::Shared;
+use fnv::FnvHashMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -46,18 +47,23 @@ impl ScannedPluginInfo {
     }
 }
 
-struct ScannedPluginFactory {
-    pub rdn: Shared<String>,
-    pub format: PluginFormat,
-
+struct LoadedPluginFactory {
     factory: Box<dyn PluginFactory>,
+    format: PluginFormat,
+    shared_rdn: Shared<String>,
+}
+
+struct ScannedPluginBundle {
+    binary_path: Option<PathBuf>,
+
+    loaded_factories: Option<HashMap<String, LoadedPluginFactory>>,
 }
 
 pub(crate) struct PluginScanner {
-    // TODO: Use a hashmap that performs better with strings that are around 10-30
-    // characters long?
-    scanned_internal_plugins: HashMap<ScannedPluginKey, ScannedPluginFactory>,
-    scanned_external_plugins: HashMap<ScannedPluginKey, ScannedPluginFactory>,
+    scanned_internal_plugins: HashMap<ScannedPluginKey, ScannedPluginBundle>,
+
+    scanned_external_plugins: HashMap<ScannedPluginKey, u32>,
+    external_plugin_bundles: FnvHashMap<u32, ScannedPluginBundle>,
 
     #[cfg(feature = "clap-host")]
     clap_scan_directories: Vec<PathBuf>,
@@ -80,6 +86,7 @@ impl PluginScanner {
         Self {
             scanned_internal_plugins: HashMap::default(),
             scanned_external_plugins: HashMap::default(),
+            external_plugin_bundles: FnvHashMap::default(),
 
             #[cfg(any(feature = "clap-host"))]
             clap_scan_directories: Vec::new(),
@@ -147,6 +154,37 @@ impl PluginScanner {
         }
     }
 
+    pub fn scan_internal_plugin(
+        &mut self,
+        factory: Box<dyn PluginFactory>,
+    ) -> Result<ScannedPluginKey, String> {
+        let description = factory.description();
+
+        let key =
+            ScannedPluginKey { rdn: description.id.to_string(), format: PluginFormat::Internal };
+
+        if self.scanned_internal_plugins.contains_key(&key) {
+            log::warn!("Already scanned internal plugin: {:?}", &key);
+        }
+
+        let mut loaded_factories: HashMap<String, LoadedPluginFactory> = HashMap::default();
+        loaded_factories.insert(
+            description.id.to_string(),
+            LoadedPluginFactory {
+                factory,
+                format: PluginFormat::Internal,
+                shared_rdn: Shared::new(&self.coll_handle, description.id.to_string()),
+            },
+        );
+
+        let scanned_plugin =
+            ScannedPluginBundle { binary_path: None, loaded_factories: Some(loaded_factories) };
+
+        let _ = self.scanned_internal_plugins.insert(key.clone(), scanned_plugin);
+
+        Ok(key)
+    }
+
     pub fn scan_external_plugins(&mut self) -> ScanExternalPluginsRes {
         log::info!("(Re)scanning plugin directories...");
 
@@ -155,8 +193,11 @@ impl PluginScanner {
         // TODO: Scan plugins in a separate thread?
 
         self.scanned_external_plugins.clear();
+        self.external_plugin_bundles.clear();
         let mut scanned_plugins: Vec<ScannedPluginInfo> = Vec::new();
         let mut failed_plugins: Vec<(PathBuf, String)> = Vec::new();
+
+        let mut next_external_factory_key: u32 = 0;
 
         /*
         for (key, f) in self.scanned_internal_plugins.iter() {
@@ -218,6 +259,15 @@ impl PluginScanner {
                     &self.coll_handle,
                 ) {
                     Ok(mut factories) => {
+                        let _ = self.external_plugin_bundles.insert(
+                            next_external_factory_key,
+                            ScannedPluginBundle {
+                                binary_path: Some(binary_path.clone()),
+                                // We will reload the factories once a plugin is added to the graph.
+                                loaded_factories: None,
+                            },
+                        );
+
                         for f in factories.drain(..) {
                             let id: String = f.description().id.clone();
                             let v = f.clap_version;
@@ -245,14 +295,7 @@ impl PluginScanner {
 
                             if self
                                 .scanned_external_plugins
-                                .insert(
-                                    key,
-                                    ScannedPluginFactory {
-                                        rdn: Shared::new(&self.coll_handle, id.clone()),
-                                        format: PluginFormat::Clap,
-                                        factory: Box::new(f),
-                                    },
-                                )
+                                .insert(key, next_external_factory_key)
                                 .is_some()
                             {
                                 // TODO: Handle this better
@@ -260,6 +303,8 @@ impl PluginScanner {
                                 let _ = scanned_plugins.pop();
                             }
                         }
+
+                        next_external_factory_key += 1;
                     }
                     Err(e) => {
                         log::error!(
@@ -276,30 +321,6 @@ impl PluginScanner {
         ScanExternalPluginsRes { scanned_plugins, failed_plugins }
     }
 
-    pub fn scan_internal_plugin(
-        &mut self,
-        factory: Box<dyn PluginFactory>,
-    ) -> Result<ScannedPluginKey, String> {
-        let description = factory.description();
-
-        let key =
-            ScannedPluginKey { rdn: description.id.to_string(), format: PluginFormat::Internal };
-
-        if self.scanned_internal_plugins.contains_key(&key) {
-            log::warn!("Already scanned internal plugin: {:?}", &key);
-        }
-
-        let scanned_plugin = ScannedPluginFactory {
-            factory,
-            rdn: Shared::new(&self.coll_handle, key.rdn.clone()),
-            format: PluginFormat::Internal,
-        };
-
-        let _ = self.scanned_internal_plugins.insert(key.clone(), scanned_plugin);
-
-        Ok(key)
-    }
-
     pub(crate) fn create_plugin(
         &mut self,
         mut save_state: DSPluginSaveState,
@@ -307,12 +328,12 @@ impl PluginScanner {
         fallback_to_other_formats: bool,
     ) -> CreatePluginResult {
         // TODO: return an actual result
-        let mut factory = None;
+        let mut plugin_bundle = None;
         let mut status = Ok(());
 
         // Always try to use internal plugins when available.
         if save_state.key.format == PluginFormat::Internal || fallback_to_other_formats {
-            let res = if save_state.key.format == PluginFormat::Internal {
+            let pb = if save_state.key.format == PluginFormat::Internal {
                 self.scanned_internal_plugins.get_mut(&save_state.key)
             } else {
                 let new_key = ScannedPluginKey {
@@ -322,8 +343,8 @@ impl PluginScanner {
                 self.scanned_internal_plugins.get_mut(&new_key)
             };
 
-            if let Some(f) = res {
-                factory = Some(f);
+            if let Some(pb) = pb {
+                plugin_bundle = Some(pb);
             } else {
                 status = Err(NewPluginInstanceError::FormatNotFound(
                     save_state.key.rdn.clone(),
@@ -334,21 +355,21 @@ impl PluginScanner {
 
         #[cfg(feature = "clap-host")]
         // Next try to use the clap version of the plugin.
-        if factory.is_none()
+        if plugin_bundle.is_none()
             && (save_state.key.format == PluginFormat::Clap || fallback_to_other_formats)
         {
-            let res = if save_state.key.format == PluginFormat::Clap {
-                self.scanned_external_plugins.get_mut(&save_state.key)
+            let pb = if save_state.key.format == PluginFormat::Clap {
+                self.scanned_external_plugins.get(&save_state.key)
             } else {
                 let new_key = ScannedPluginKey {
                     rdn: save_state.key.rdn.clone(),
                     format: PluginFormat::Clap,
                 };
-                self.scanned_external_plugins.get_mut(&new_key)
+                self.scanned_external_plugins.get(&new_key)
             };
 
-            if let Some(f) = res {
-                factory = Some(f);
+            if let Some(plugin_bundle_key) = pb {
+                plugin_bundle = self.external_plugin_bundles.get_mut(&plugin_bundle_key);
             } else {
                 status = Err(NewPluginInstanceError::FormatNotFound(
                     save_state.key.rdn.clone(),
@@ -361,20 +382,86 @@ impl PluginScanner {
 
         let (host_request_rx, channel_send) = HostRequestChannelReceiver::new_channel();
 
-        let plugin_host = if let Some(factory) = factory {
-            format = factory.format.into();
-            let rdn = factory.rdn.clone();
+        let plugin_factory = if let Some(plugin_bundle) = plugin_bundle {
+            let loaded_factories =
+                if let Some(loaded_factories) = plugin_bundle.loaded_factories.as_mut() {
+                    Some(loaded_factories)
+                } else {
+                    // Reload the plugin factories from disk.
+                    match crate::plugin_host::external::clap::factory::entry_init(
+                        plugin_bundle.binary_path.as_ref().unwrap(),
+                        self.thread_ids.clone(),
+                        &self.coll_handle,
+                    ) {
+                        Ok(mut factories) => {
+                            let mut loaded_factories: HashMap<String, LoadedPluginFactory> =
+                                HashMap::default();
+                            for f in factories.drain(..) {
+                                let rdn = f.description().id.clone();
 
-            if save_state.key.format != factory.format {
-                save_state.key =
-                    ScannedPluginKey { rdn: save_state.key.rdn.clone(), format: factory.format };
+                                let _ = loaded_factories.insert(
+                                    f.description().id.clone(),
+                                    LoadedPluginFactory {
+                                        factory: Box::new(f),
+                                        format: PluginFormat::Clap,
+                                        shared_rdn: Shared::new(&self.coll_handle, rdn),
+                                    },
+                                );
+                            }
+
+                            plugin_bundle.loaded_factories = Some(loaded_factories);
+
+                            plugin_bundle.loaded_factories.as_mut()
+                        }
+                        Err(e) => {
+                            log::error!(
+                                "Failed to load CLAP binary at path {:?}: {}",
+                                plugin_bundle.binary_path.as_ref().unwrap(),
+                                e
+                            );
+                            None
+                        }
+                    }
+                };
+
+            if let Some(loaded_factories) = loaded_factories {
+                match loaded_factories.get_mut(&save_state.key.rdn) {
+                    Some(f) => Some(f),
+                    None => {
+                        log::error!(
+                            "Failed to find plugin with ID {} in CLAP binary at path {:?}",
+                            &save_state.key.rdn,
+                            plugin_bundle.binary_path.as_ref().unwrap()
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let plugin_host = if let Some(plugin_factory) = plugin_factory {
+            format = plugin_factory.format.into();
+
+            if save_state.key.format != plugin_factory.format {
+                save_state.key = ScannedPluginKey {
+                    rdn: save_state.key.rdn.clone(),
+                    format: plugin_factory.format,
+                };
             }
 
-            let id =
-                PluginInstanceID::_new(node_ref.as_usize(), self.next_plug_unique_id, format, rdn);
+            let id = PluginInstanceID::_new(
+                node_ref.as_usize(),
+                self.next_plug_unique_id,
+                format,
+                Shared::clone(&plugin_factory.shared_rdn),
+            );
             self.next_plug_unique_id += 1;
 
-            let plug_main_thread = match factory.factory.instantiate(
+            let plug_main_thread = match plugin_factory.factory.instantiate(
                 channel_send,
                 self.host_info.clone(),
                 id.clone(),
@@ -387,7 +474,7 @@ impl PluginScanner {
                 }
                 Err(e) => {
                     status = Err(NewPluginInstanceError::FactoryFailedToCreateNewInstance(
-                        (*factory.rdn).clone(),
+                        (*plugin_factory.shared_rdn).clone(),
                         e,
                     ));
 
@@ -421,6 +508,12 @@ impl PluginScanner {
         };
 
         CreatePluginResult { plugin_host, status }
+    }
+
+    pub(crate) fn unload_unused_binaries(&mut self) {
+        // TODO: Unload all external plugin binaries that are no longer being
+        // used. (Perhaps by counting how many references are left in the `Shared`
+        // pointers?)
     }
 }
 
