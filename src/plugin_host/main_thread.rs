@@ -1,4 +1,4 @@
-use audio_graph::{Graph, NodeRef};
+use audio_graph::{AudioGraphHelper, NodeID, PortID};
 use basedrop::Shared;
 use dropseed_plugin_api::ext::audio_ports::{MainPortsLayout, PluginAudioPortsExt};
 use dropseed_plugin_api::ext::note_ports::PluginNotePortsExt;
@@ -13,7 +13,7 @@ use meadowlark_core_types::time::SampleRate;
 use smallvec::SmallVec;
 
 use crate::engine::{OnIdleEvent, PluginActivatedStatus};
-use crate::graph::{PortChannelID, PortType};
+use crate::graph::{ChannelID, PortType};
 
 use super::channel::{
     MainToProcParamValue, PlugHostChannelMainThread, PluginActiveState, SharedPluginHostProcThread,
@@ -22,25 +22,25 @@ use super::error::{ActivatePluginError, SetParamValueError, ShowGuiError};
 
 /// The references to this plugin's ports in the audio graph.
 pub(crate) struct PluginHostPortRefs {
-    pub port_channels_refs: FnvHashMap<PortChannelID, audio_graph::PortRef>,
-    pub main_audio_in_port_refs: Vec<audio_graph::PortRef>,
-    pub main_audio_out_port_refs: Vec<audio_graph::PortRef>,
-    pub automation_in_port_ref: Option<audio_graph::PortRef>,
-    pub automation_out_port_ref: Option<audio_graph::PortRef>,
-    pub main_note_in_port_ref: Option<audio_graph::PortRef>,
-    pub main_note_out_port_ref: Option<audio_graph::PortRef>,
+    pub channel_ids: FnvHashMap<ChannelID, PortID>,
+    pub main_audio_in_port_ids: Vec<PortID>,
+    pub main_audio_out_port_ids: Vec<PortID>,
+    pub main_note_in_port_id: Option<PortID>,
+    pub main_note_out_port_id: Option<PortID>,
+    pub automation_in_port_id: Option<PortID>,
+    pub automation_out_port_id: Option<PortID>,
 }
 
 impl PluginHostPortRefs {
     pub fn new() -> Self {
         Self {
-            port_channels_refs: FnvHashMap::default(),
-            main_audio_in_port_refs: Vec::new(),
-            main_audio_out_port_refs: Vec::new(),
-            automation_in_port_ref: None,
-            automation_out_port_ref: None,
-            main_note_in_port_ref: None,
-            main_note_out_port_ref: None,
+            channel_ids: FnvHashMap::default(),
+            main_audio_in_port_ids: Vec::new(),
+            main_audio_out_port_ids: Vec::new(),
+            main_note_in_port_id: None,
+            main_note_out_port_id: None,
+            automation_in_port_id: None,
+            automation_out_port_id: None,
         }
     }
 }
@@ -50,6 +50,7 @@ pub struct PluginHostMainThread {
 
     audio_ports_ext: Option<PluginAudioPortsExt>,
     note_ports_ext: Option<PluginNotePortsExt>,
+    latency: i64,
 
     num_audio_in_channels: usize,
     num_audio_out_channels: usize,
@@ -58,7 +59,7 @@ pub struct PluginHostMainThread {
 
     plug_main_thread: Box<dyn PluginMainThread>,
 
-    port_refs: PluginHostPortRefs,
+    port_ids: PluginHostPortRefs,
 
     channel: PlugHostChannelMainThread,
 
@@ -100,9 +101,10 @@ impl PluginHostMainThread {
         Self {
             id,
             plug_main_thread,
-            port_refs: PluginHostPortRefs::new(),
+            port_ids: PluginHostPortRefs::new(),
             audio_ports_ext: None,
             note_ports_ext: None,
+            latency: 0,
             num_audio_in_channels,
             num_audio_out_channels,
             params: None,
@@ -352,6 +354,10 @@ impl PluginHostMainThread {
 
                 self.params = Some(params);
 
+                let latency = self.plug_main_thread.latency();
+
+                self.latency = latency;
+
                 Ok(PluginActivatedStatus {
                     new_parameters: param_values,
                     // TODO: Only return the new extensions if they have changed.
@@ -359,6 +365,7 @@ impl PluginHostMainThread {
                     new_note_ports_ext: Some(self.note_ports_ext.as_ref().unwrap().clone()),
                     internal_handle: info.internal_handle,
                     has_gui: self.plug_main_thread.has_gui(),
+                    latency,
                 })
             }
             Err(e) => {
@@ -551,50 +558,55 @@ impl PluginHostMainThread {
         self.channel.shared_processor()
     }
 
-    pub(crate) fn port_refs(&self) -> &PluginHostPortRefs {
-        &self.port_refs
+    pub(crate) fn port_ids(&self) -> &PluginHostPortRefs {
+        &self.port_ids
     }
 
-    pub(crate) fn sync_ports_in_graph(
-        &mut self,
-        abstract_graph: &mut Graph<PluginInstanceID, PortChannelID, PortType>,
-    ) {
-        let mut prev_port_channel_refs = self.port_refs.port_channels_refs.clone();
-        self.port_refs.port_channels_refs.clear();
+    pub(crate) fn sync_ports_in_graph(&mut self, graph_helper: &mut AudioGraphHelper) {
+        graph_helper.set_node_latency(self.id._node_id().into(), self.latency).unwrap();
 
-        self.port_refs.main_audio_in_port_refs.clear();
-        self.port_refs.main_audio_out_port_refs.clear();
-        self.port_refs.main_note_in_port_ref = None;
-        self.port_refs.main_note_out_port_ref = None;
+        let mut prev_channel_ids = self.port_ids.channel_ids.clone();
+        self.port_ids.channel_ids.clear();
+
+        self.port_ids.main_audio_in_port_ids.clear();
+        self.port_ids.main_audio_out_port_ids.clear();
+        self.port_ids.main_note_in_port_id = None;
+        self.port_ids.main_note_out_port_id = None;
 
         if let Some(audio_ports) = &self.audio_ports_ext {
             for (audio_port_i, audio_in_port) in audio_ports.inputs.iter().enumerate() {
                 for i in 0..audio_in_port.channels {
-                    let port_id = PortChannelID {
+                    let channel_id = ChannelID {
+                        stable_id: audio_in_port.stable_id,
                         port_type: PortType::Audio,
-                        port_stable_id: audio_in_port.stable_id,
                         is_input: true,
-                        port_channel: i,
+                        channel: i,
                     };
 
-                    let port_ref = if let Some(port_ref) = prev_port_channel_refs.get(&port_id) {
-                        let port_ref = *port_ref;
-                        let _ = prev_port_channel_refs.remove(&port_id);
-                        port_ref
+                    let channel_id = if let Some(channel_id) = prev_channel_ids.get(&channel_id) {
+                        let channel_id = *channel_id;
+                        let _ = prev_channel_ids.remove(&channel_id);
+                        channel_id
                     } else {
-                        let port_ref = abstract_graph
-                            .port(NodeRef::new(self.id._node_ref()), PortType::Audio, port_id)
-                            .unwrap();
+                        if let Err(e) = graph_helper.add_port(
+                            self.id._node_id().into(),
+                            audio_in_port.stable_id,
+                            channel_id.port_type.as_type_idx(),
+                            true,
+                        ) {
+                            log::error!("Could not sync plugin ports: plugin with ID {:?} has more than one input port with ID {}", &self.id, audio_in_port.stable_id);
+                            self.schedule_deactivate();
+                        }
 
-                        let _ = self.port_refs.port_channels_refs.insert(port_id, port_ref);
+                        let _ = self.port_ids.channel_ids.insert(port_id, port_id);
 
-                        port_ref
+                        port_id
                     };
 
                     if audio_port_i == 0 {
                         match audio_ports.main_ports_layout {
                             MainPortsLayout::InOut | MainPortsLayout::InOnly => {
-                                self.port_refs.main_audio_in_port_refs.push(port_ref);
+                                self.port_ids.main_audio_in_port_ids.push(port_id);
                             }
                             _ => {}
                         }
@@ -604,31 +616,31 @@ impl PluginHostMainThread {
 
             for (audio_port_i, audio_out_port) in audio_ports.outputs.iter().enumerate() {
                 for i in 0..audio_out_port.channels {
-                    let port_id = PortChannelID {
+                    let port_id = ChannelID {
                         port_type: PortType::Audio,
                         port_stable_id: audio_out_port.stable_id,
                         is_input: false,
                         port_channel: i,
                     };
 
-                    let port_ref = if let Some(port_ref) = prev_port_channel_refs.get(&port_id) {
-                        let port_ref = *port_ref;
-                        let _ = prev_port_channel_refs.remove(&port_id);
-                        port_ref
+                    let port_id = if let Some(port_id) = prev_channel_ids.get(&port_id) {
+                        let port_id = *port_id;
+                        let _ = prev_channel_ids.remove(&port_id);
+                        port_id
                     } else {
-                        let port_ref = abstract_graph
+                        let port_id = graph_helper
                             .port(NodeRef::new(self.id._node_ref()), PortType::Audio, port_id)
                             .unwrap();
 
-                        let _ = self.port_refs.port_channels_refs.insert(port_id, port_ref);
+                        let _ = self.port_ids.channel_ids.insert(port_id, port_id);
 
-                        port_ref
+                        port_id
                     };
 
                     if audio_port_i == 0 {
                         match audio_ports.main_ports_layout {
                             MainPortsLayout::InOut | MainPortsLayout::OutOnly => {
-                                self.port_refs.main_audio_out_port_refs.push(port_ref);
+                                self.port_ids.main_audio_out_port_ids.push(port_id);
                             }
                             _ => {}
                         }
@@ -637,13 +649,13 @@ impl PluginHostMainThread {
             }
         }
 
-        const IN_AUTOMATION_PORT_ID: PortChannelID = PortChannelID {
+        const IN_AUTOMATION_PORT_ID: ChannelID = ChannelID {
             port_type: PortType::ParamAutomation,
             port_stable_id: 0,
             is_input: true,
             port_channel: 0,
         };
-        const OUT_AUTOMATION_PORT_ID: PortChannelID = PortChannelID {
+        const OUT_AUTOMATION_PORT_ID: ChannelID = ChannelID {
             port_type: PortType::ParamAutomation,
             port_stable_id: 1,
             is_input: false,
@@ -651,8 +663,8 @@ impl PluginHostMainThread {
         };
 
         // Plugins always have one automation in port.
-        if prev_port_channel_refs.get(&IN_AUTOMATION_PORT_ID).is_none() {
-            let in_port_ref = abstract_graph
+        if prev_channel_ids.get(&IN_AUTOMATION_PORT_ID).is_none() {
+            let in_port_id = graph_helper
                 .port(
                     NodeRef::new(self.id._node_ref()),
                     PortType::ParamAutomation,
@@ -660,16 +672,16 @@ impl PluginHostMainThread {
                 )
                 .unwrap();
 
-            let _ = self.port_refs.port_channels_refs.insert(IN_AUTOMATION_PORT_ID, in_port_ref);
+            let _ = self.port_ids.channel_ids.insert(IN_AUTOMATION_PORT_ID, in_port_id);
 
-            self.port_refs.automation_in_port_ref = Some(in_port_ref);
+            self.port_ids.automation_in_port_id = Some(in_port_id);
         } else {
-            let _ = prev_port_channel_refs.remove(&IN_AUTOMATION_PORT_ID);
+            let _ = prev_channel_ids.remove(&IN_AUTOMATION_PORT_ID);
         }
 
         if self.plug_main_thread.has_automation_out_port() {
-            if prev_port_channel_refs.get(&OUT_AUTOMATION_PORT_ID).is_none() {
-                let out_port_ref = abstract_graph
+            if prev_channel_ids.get(&OUT_AUTOMATION_PORT_ID).is_none() {
+                let out_port_id = graph_helper
                     .port(
                         NodeRef::new(self.id._node_ref()),
                         PortType::ParamAutomation,
@@ -677,77 +689,76 @@ impl PluginHostMainThread {
                     )
                     .unwrap();
 
-                let _ =
-                    self.port_refs.port_channels_refs.insert(OUT_AUTOMATION_PORT_ID, out_port_ref);
+                let _ = self.port_ids.channel_ids.insert(OUT_AUTOMATION_PORT_ID, out_port_id);
 
-                self.port_refs.automation_out_port_ref = Some(out_port_ref);
+                self.port_ids.automation_out_port_id = Some(out_port_id);
             } else {
-                let _ = prev_port_channel_refs.remove(&OUT_AUTOMATION_PORT_ID);
+                let _ = prev_channel_ids.remove(&OUT_AUTOMATION_PORT_ID);
             }
         } else {
-            self.port_refs.automation_out_port_ref = None;
+            self.port_ids.automation_out_port_id = None;
         }
 
         if let Some(note_ports) = &self.note_ports_ext {
             for (i, note_in_port) in note_ports.inputs.iter().enumerate() {
-                let port_id = PortChannelID {
+                let port_id = ChannelID {
                     port_type: PortType::Note,
                     port_stable_id: note_in_port.stable_id,
                     is_input: true,
                     port_channel: 0,
                 };
 
-                let port_ref = if let Some(port_ref) = prev_port_channel_refs.get(&port_id) {
-                    let port_ref = *port_ref;
-                    let _ = prev_port_channel_refs.remove(&port_id);
+                let port_id = if let Some(port_id) = prev_channel_ids.get(&port_id) {
+                    let port_id = *port_id;
+                    let _ = prev_channel_ids.remove(&port_id);
 
-                    port_ref
+                    port_id
                 } else {
-                    let port_ref = abstract_graph
+                    let port_id = graph_helper
                         .port(NodeRef::new(self.id._node_ref()), PortType::Note, port_id)
                         .unwrap();
 
-                    let _ = self.port_refs.port_channels_refs.insert(port_id, port_ref);
+                    let _ = self.port_ids.channel_ids.insert(port_id, port_id);
 
-                    port_ref
+                    port_id
                 };
 
                 if i == 0 {
-                    self.port_refs.main_note_in_port_ref = Some(port_ref);
+                    self.port_ids.main_note_in_port_id = Some(port_id);
                 }
             }
 
             for (i, note_out_port) in note_ports.outputs.iter().enumerate() {
-                let port_id = PortChannelID {
+                let port_id = ChannelID {
                     port_type: PortType::Note,
                     port_stable_id: note_out_port.stable_id,
                     is_input: false,
                     port_channel: 0,
                 };
 
-                let port_ref = if let Some(port_ref) = prev_port_channel_refs.get(&port_id) {
-                    let port_ref = *port_ref;
-                    let _ = prev_port_channel_refs.remove(&port_id);
+                let port_id = if let Some(port_id) = prev_channel_ids.get(&port_id) {
+                    let port_id = *port_id;
+                    let _ = prev_channel_ids.remove(&port_id);
 
-                    port_ref
+                    port_id
                 } else {
-                    let port_ref = abstract_graph
+                    let port_id = graph_helper
                         .port(NodeRef::new(self.id._node_ref()), PortType::Note, port_id)
                         .unwrap();
 
-                    let _ = self.port_refs.port_channels_refs.insert(port_id, port_ref);
+                    let _ = self.port_ids.channel_ids.insert(port_id, port_id);
 
-                    port_ref
+                    port_id
                 };
 
                 if i == 0 {
-                    self.port_refs.main_note_out_port_ref = Some(port_ref);
+                    self.port_ids.main_note_out_port_id = Some(port_id);
                 }
             }
         }
 
-        for (_, removed_port) in prev_port_channel_refs.drain() {
-            abstract_graph.delete_port(removed_port).unwrap();
+        for (_, removed_port) in prev_channel_ids.drain() {
+            graph_helper.delete_port(removed_port).unwrap();
         }
     }
 }

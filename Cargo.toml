@@ -25,9 +25,10 @@ cpal-asio = ["cpal/asio"]
 [dependencies]
 dropseed-plugin-api = { path = "./plugin-api" }
 meadowlark-core-types = "0.3"
-audio-graph = { git = "https://github.com/MeadowlarkDAW/audio-graph", branch = "main" }
-clack-host = { git = "https://github.com/prokopyl/clack", rev = "782bbfce72f6b3505dc70807bbebadcb3dc5ac1b" }
-clack-extensions = { git = "https://github.com/prokopyl/clack", features = ["clack-host", "audio-ports", "log", "note-ports", "params", "state", "thread-check"], rev = "782bbfce72f6b3505dc70807bbebadcb3dc5ac1b" }
+#audio-graph = { git = "https://github.com/MeadowlarkDAW/audio-graph", branch = "main" }
+audio-graph = { path = "../audio-graph" }
+clack-host = { git = "https://github.com/prokopyl/clack", rev = "8bff84025756fcfe411ef849555caf9fb59e412c" }
+clack-extensions = { git = "https://github.com/prokopyl/clack", features = ["clack-host", "audio-ports", "log", "note-ports", "params", "state", "thread-check"], rev = "8bff84025756fcfe411ef849555caf9fb59e412c" }
 dirs = { version = "4.0", optional = true }
 basedrop = "0.1"
 smallvec = { version = "1.9.0", features = ["const_generics", "union"] }
@@ -36,8 +37,8 @@ rtrb = "0.2"
 atomic_refcell = "0.1"
 fnv = "1.0"
 log = "0.4"
-thread-priority = "0.8"
-cpal = { version = "0.13", optional = true }
+thread-priority = "0.9"
+cpal = { version = "0.14", optional = true }
 walkdir = { version = "2.3.2", optional = true }
 
 [target.'cfg(windows)'.dependencies]

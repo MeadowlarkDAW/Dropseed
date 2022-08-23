@@ -647,6 +647,9 @@ pub struct PluginActivatedStatus {
 
     /// If `true`, then the plugin has a custom GUI that can be opened.
     pub has_gui: bool,
+
+    /// The latency this plugin adds in frames.
+    pub latency: i64,
 }
 
 #[derive(Debug)]

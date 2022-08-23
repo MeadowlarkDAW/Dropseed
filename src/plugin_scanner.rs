@@ -1,3 +1,4 @@
+use audio_graph::NodeID;
 use basedrop::Shared;
 use fnv::FnvHashMap;
 use std::collections::HashMap;
@@ -324,7 +325,7 @@ impl PluginScanner {
     pub(crate) fn create_plugin(
         &mut self,
         mut save_state: DSPluginSaveState,
-        node_ref: audio_graph::NodeRef,
+        node_id: NodeID,
         fallback_to_other_formats: bool,
     ) -> CreatePluginResult {
         // TODO: return an actual result
@@ -454,7 +455,7 @@ impl PluginScanner {
             }
 
             let id = PluginInstanceID::_new(
-                node_ref.as_usize(),
+                node_id.as_usize(),
                 self.next_plug_unique_id,
                 format,
                 Shared::clone(&plugin_factory.shared_rdn),
@@ -491,7 +492,7 @@ impl PluginScanner {
             let rdn = Shared::new(&self.coll_handle, save_state.key.rdn.clone());
 
             let id =
-                PluginInstanceID::_new(node_ref.as_usize(), self.next_plug_unique_id, format, rdn);
+                PluginInstanceID::_new(node_id.as_usize(), self.next_plug_unique_id, format, rdn);
             self.next_plug_unique_id += 1;
 
             if status.is_ok() {

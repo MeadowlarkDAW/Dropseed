@@ -158,7 +158,7 @@ impl PluginMainThread for ClapPluginMainThread {
             Ok(p) => p,
             Err(e) => return Err(format!("{}", e)),
         };
-
+        
         Ok(PluginActivatedInfo {
             processor: Box::new(ClapPluginProcessThread {
                 audio_processor: audio_processor.into(),
@@ -214,6 +214,12 @@ impl PluginMainThread for ClapPluginMainThread {
         self.instance
             .try_deactivate()
             .expect("Called deactivate() before the plugin's AudioProcessor was dropped");
+    }
+
+    fn latency(&self) -> i64 {
+        // TODO: Get latency from plugin
+
+        0
     }
 
     // --- Parameters ---------------------------------------------------------------------------------
