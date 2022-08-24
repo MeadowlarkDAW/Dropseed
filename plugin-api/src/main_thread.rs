@@ -221,11 +221,11 @@ pub trait PluginMainThread {
     fn close_gui(&mut self) {}
 
     /// The latency in frames this plugin adds.
-    /// 
+    ///
     /// The plugin is only allowed to change its latency when it is deactivated.
-    /// 
+    ///
     /// By default this returns `0` (no latency).
-    /// 
+    ///
     /// [main-thread & !active_state]
     fn latency(&self) -> i64 {
         0

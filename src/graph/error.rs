@@ -14,6 +14,7 @@ pub enum ConnectEdgeErrorType {
     DstPluginDoesNotExist,
     SrcPortDoesNotExist,
     DstPortDoesNotExist,
+    EdgeAlreadyExists,
     Cycle,
     Unkown,
 }
@@ -56,6 +57,9 @@ impl std::fmt::Display for ConnectEdgeError {
                     "Could not add edge {:?} to graph: Destination port does not exist",
                     &self.edge
                 )
+            }
+            ConnectEdgeErrorType::EdgeAlreadyExists => {
+                write!(f, "Could not add edge {:?} to graph: Edge already exists", &self.edge)
             }
             ConnectEdgeErrorType::Cycle => {
                 write!(f, "Could not add edge {:?} to graph: Cycle detected", &self.edge)

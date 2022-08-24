@@ -1,3 +1,4 @@
+use audio_graph::EdgeID;
 use basedrop::{Collector, Shared, SharedCell};
 use fnv::FnvHashSet;
 use meadowlark_core_types::time::{SampleRate, Seconds};
@@ -649,7 +650,14 @@ pub struct PluginActivatedStatus {
     pub has_gui: bool,
 
     /// The latency this plugin adds in frames.
-    pub latency: i64,
+    ///
+    /// If the latency has not changed since the last time this plugin
+    /// was activated, then this will be `None`.
+    pub new_latency: Option<i64>,
+
+    /// Any edges that were removed as a result of the plugin removing
+    /// some of its ports.
+    pub removed_edges: Vec<EdgeID>,
 }
 
 #[derive(Debug)]

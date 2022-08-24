@@ -158,7 +158,7 @@ impl PluginMainThread for ClapPluginMainThread {
             Ok(p) => p,
             Err(e) => return Err(format!("{}", e)),
         };
-        
+
         Ok(PluginActivatedInfo {
             processor: Box::new(ClapPluginProcessThread {
                 audio_processor: audio_processor.into(),
