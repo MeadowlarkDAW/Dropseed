@@ -19,13 +19,14 @@ use super::channel::ProcToMainParamValue;
 
 // TODO: remove pubs
 pub(crate) struct PluginEventIoBuffers {
-    pub unmixed_param_in_buffers: Option<SmallVec<[SharedBuffer<ParamIoEvent>; 2]>>,
-    /// Only for internal plugin (e.g. timeline or macros)
-    pub param_out_buffer: Option<SharedBuffer<ParamIoEvent>>,
+    pub note_in_buffers: SmallVec<[SharedBuffer<NoteIoEvent>; 2]>,
+    pub note_out_buffers: SmallVec<[SharedBuffer<NoteIoEvent>; 2]>,
 
-    // TODO: remove options
-    pub unmixed_note_in_buffers: SmallVec<[Option<SmallVec<[SharedBuffer<NoteIoEvent>; 2]>>; 2]>,
-    pub note_out_buffers: SmallVec<[Option<SharedBuffer<NoteIoEvent>>; 2]>,
+    pub clear_note_in_buffers: SmallVec<[SharedBuffer<NoteIoEvent>; 2]>,
+
+    pub param_event_in_buffer: Option<(SharedBuffer<ParamIoEvent>, bool)>,
+    /// Only for internal plugin (e.g. timeline or macros)
+    pub param_event_out_buffer: Option<SharedBuffer<ParamIoEvent>>,
 }
 
 impl PluginEventIoBuffers {

@@ -14,9 +14,6 @@ use tasks::Task;
 pub struct ProcessorSchedule {
     tasks: Vec<Task>,
 
-    graph_audio_in: SmallVec<[SharedBuffer<f32>; 4]>,
-    graph_audio_out: SmallVec<[SharedBuffer<f32>; 4]>,
-
     transport_task: SharedTransportTask,
 
     max_block_size: usize,
@@ -25,22 +22,14 @@ pub struct ProcessorSchedule {
 impl ProcessorSchedule {
     pub(crate) fn new(
         tasks: Vec<Task>,
-        graph_audio_in: SmallVec<[SharedBuffer<f32>; 4]>,
-        graph_audio_out: SmallVec<[SharedBuffer<f32>; 4]>,
         transport_task: SharedTransportTask,
         max_block_size: usize,
     ) -> Self {
-        Self { tasks, graph_audio_in, graph_audio_out, transport_task, max_block_size }
+        Self { tasks, transport_task, max_block_size }
     }
 
     pub(crate) fn new_empty(max_block_size: usize, transport_task: SharedTransportTask) -> Self {
-        Self {
-            tasks: Vec::new(),
-            graph_audio_in: SmallVec::new(),
-            graph_audio_out: SmallVec::new(),
-            transport_task,
-            max_block_size,
-        }
+        Self { tasks: Vec::new(), transport_task, max_block_size }
     }
 
     pub(crate) fn tasks(&self) -> &[Task] {
@@ -54,21 +43,9 @@ impl std::fmt::Debug for ProcessorSchedule {
 
         s.push_str("ProcessorSchedule {\n");
 
-        let mut g_s = String::new();
-        for b in self.graph_audio_in.iter() {
-            g_s.push_str(&format!("{:?}, ", b.id()))
-        }
-        s.push_str(format!("    graph_audio_in: {:?},\n", &g_s).as_str());
-
         for t in self.tasks.iter() {
             s.push_str(format!("    {:?},\n", t).as_str());
         }
-
-        let mut g_s = String::new();
-        for b in self.graph_audio_out.iter() {
-            g_s.push_str(&format!("{:?}, ", b.id()))
-        }
-        s.push_str(format!("    graph_audio_out: {:?},\n}}", &g_s).as_str());
 
         write!(f, "{}", s)
     }
