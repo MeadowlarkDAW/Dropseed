@@ -1,10 +1,10 @@
-use dropseed_plugin_api::PluginInstanceID;
+use audio_graph::NodeID;
 use fnv::FnvHashMap;
 
 use crate::plugin_host::PluginHostMainThread;
 
 pub(crate) struct PluginHostPool {
-    pub pool: FnvHashMap<PluginInstanceID, PluginHostMainThread>,
+    pub pool: FnvHashMap<NodeID, PluginHostMainThread>,
 }
 
 impl PluginHostPool {

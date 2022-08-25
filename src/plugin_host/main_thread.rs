@@ -21,9 +21,9 @@ use super::channel::{
 use super::error::{ActivatePluginError, SetParamValueError, ShowGuiError};
 
 /// The references to this plugin's ports in the audio graph.
-pub(crate) struct PluginHostPortRefs {
+pub(crate) struct PluginHostPortIDs {
     pub channel_id_to_port_id: FnvHashMap<ChannelID, PortID>,
-    pub port_id_to_channel_id: FnvHashMap<ChannelID, PortID>,
+    pub port_id_to_channel_id: FnvHashMap<PortID, ChannelID>,
     pub main_audio_in_port_ids: Vec<PortID>,
     pub main_audio_out_port_ids: Vec<PortID>,
     pub main_note_in_port_id: Option<PortID>,
@@ -32,7 +32,7 @@ pub(crate) struct PluginHostPortRefs {
     pub automation_out_port_id: Option<PortID>,
 }
 
-impl PluginHostPortRefs {
+impl PluginHostPortIDs {
     pub fn new() -> Self {
         Self {
             channel_id_to_port_id: FnvHashMap::default(),
@@ -61,7 +61,7 @@ pub struct PluginHostMainThread {
 
     plug_main_thread: Box<dyn PluginMainThread>,
 
-    port_ids: PluginHostPortRefs,
+    port_ids: PluginHostPortIDs,
     next_port_id: u32,
     free_port_ids: Vec<PortID>,
 
@@ -105,7 +105,7 @@ impl PluginHostMainThread {
         Self {
             id,
             plug_main_thread,
-            port_ids: PluginHostPortRefs::new(),
+            port_ids: PluginHostPortIDs::new(),
             next_port_id: 0,
             free_port_ids: Vec::new(),
             audio_ports_ext: None,
@@ -586,7 +586,7 @@ impl PluginHostMainThread {
         self.channel.shared_processor()
     }
 
-    pub(crate) fn port_ids(&self) -> &PluginHostPortRefs {
+    pub(crate) fn port_ids(&self) -> &PluginHostPortIDs {
         &self.port_ids
     }
 
@@ -594,9 +594,46 @@ impl PluginHostMainThread {
         &mut self,
         graph_helper: &mut AudioGraphHelper,
     ) -> Vec<EdgeID> {
-        graph_helper.set_node_latency(self.id._node_id().into(), self.latency).unwrap();
+        let mut id_alias_check: FnvHashSet<u32> = FnvHashSet::default();
+        if let Some(audio_ports) = &self.audio_ports_ext {
+            for audio_in_port in audio_ports.inputs.iter() {
+                if !id_alias_check.insert(audio_in_port.stable_id) {
+                    log::error!("Could not sync plugin ports: plugin with ID {:?} has more than one input audio port with ID {}", &self.id, audio_in_port.stable_id);
+                    self.schedule_deactivate();
+                    return Vec::new();
+                }
+            }
+            id_alias_check.clear();
+            for audio_out_port in audio_ports.outputs.iter() {
+                if !id_alias_check.insert(audio_out_port.stable_id) {
+                    log::error!("Could not sync plugin ports: plugin with ID {:?} has more than one output audio port with ID {}", &self.id, audio_out_port.stable_id);
+                    self.schedule_deactivate();
+                    return Vec::new();
+                }
+            }
+        }
+        id_alias_check.clear();
+        if let Some(note_ports) = &self.note_ports_ext {
+            for note_in_port in note_ports.inputs.iter() {
+                if !id_alias_check.insert(note_in_port.stable_id) {
+                    log::error!("Could not sync plugin ports: plugin with ID {:?} has more than one input note port with ID {}", &self.id, note_in_port.stable_id);
+                    self.schedule_deactivate();
+                    return Vec::new();
+                }
+            }
+            id_alias_check.clear();
+            for note_out_port in note_ports.outputs.iter() {
+                if !id_alias_check.insert(note_out_port.stable_id) {
+                    log::error!("Could not sync plugin ports: plugin with ID {:?} has more than one output note port with ID {}", &self.id, note_out_port.stable_id);
+                    self.schedule_deactivate();
+                    return Vec::new();
+                }
+            }
+        }
 
-        let mut prev_channel_ids = self.port_ids.channel_ids.clone();
+        graph_helper.set_node_latency(self.id._node_id().into(), self.latency as f64).unwrap();
+
+        let mut prev_channel_ids = self.port_ids.channel_id_to_port_id.clone();
 
         self.port_ids.channel_id_to_port_id.clear();
         self.port_ids.port_id_to_channel_id.clear();
@@ -607,21 +644,14 @@ impl PluginHostMainThread {
         self.port_ids.main_note_in_port_id = None;
         self.port_ids.main_note_out_port_id = None;
 
-        let mut id_alias_check: FnvHashSet<u32> = FnvHashSet::default();
-
         if let Some(audio_ports) = &self.audio_ports_ext {
             for (audio_port_i, audio_in_port) in audio_ports.inputs.iter().enumerate() {
-                if !id_alias_check.insert(audio_in_port.stable_id) {
-                    log::error!("Could not sync plugin ports: plugin with ID {:?} has more than one input audio port with ID {}", &self.id, audio_in_port.stable_id);
-                    self.schedule_deactivate();
-                }
-
-                for i in 0..audio_in_port.channels {
+                for channel_i in 0..audio_in_port.channels {
                     let channel_id = ChannelID {
                         stable_id: audio_in_port.stable_id,
                         port_type: PortType::Audio,
                         is_input: true,
-                        channel: i,
+                        channel: channel_i,
                     };
 
                     let port_id = if let Some(port_id) = prev_channel_ids.remove(&channel_id) {
@@ -658,20 +688,13 @@ impl PluginHostMainThread {
                 }
             }
 
-            id_alias_check.clear();
-
             for (audio_port_i, audio_out_port) in audio_ports.outputs.iter().enumerate() {
-                if !id_alias_check.insert(audio_out_port.stable_id) {
-                    log::error!("Could not sync plugin ports: plugin with ID {:?} has more than one output audio port with ID {}", &self.id, audio_out_port.stable_id);
-                    self.schedule_deactivate();
-                }
-
-                for i in 0..audio_out_port.channels {
+                for channel_i in 0..audio_out_port.channels {
                     let channel_id = ChannelID {
                         stable_id: audio_out_port.stable_id,
                         port_type: PortType::Audio,
                         is_input: false,
-                        channel: i,
+                        channel: channel_i,
                     };
 
                     let port_id = if let Some(port_id) = prev_channel_ids.remove(&channel_id) {
@@ -711,15 +734,15 @@ impl PluginHostMainThread {
 
         const IN_AUTOMATION_CHANNEL_ID: ChannelID = ChannelID {
             port_type: PortType::ParamAutomation,
-            port_stable_id: 0,
+            stable_id: 0,
             is_input: true,
-            port_channel: 0,
+            channel: 0,
         };
         const OUT_AUTOMATION_CHANNEL_ID: ChannelID = ChannelID {
             port_type: PortType::ParamAutomation,
-            port_stable_id: 1,
+            stable_id: 0,
             is_input: false,
-            port_channel: 0,
+            channel: 0,
         };
 
         // Plugins always have one automation in port.
@@ -778,14 +801,7 @@ impl PluginHostMainThread {
         }
 
         if let Some(note_ports) = &self.note_ports_ext {
-            id_alias_check.clear();
-
             for (i, note_in_port) in note_ports.inputs.iter().enumerate() {
-                if !id_alias_check.insert(note_in_port.stable_id) {
-                    log::error!("Could not sync plugin ports: plugin with ID {:?} has more than one input note port with ID {}", &self.id, note_in_port.stable_id);
-                    self.schedule_deactivate();
-                }
-
                 let channel_id = ChannelID {
                     port_type: PortType::Note,
                     stable_id: note_in_port.stable_id,
@@ -821,14 +837,7 @@ impl PluginHostMainThread {
                 }
             }
 
-            id_alias_check.clear();
-
             for (i, note_out_port) in note_ports.outputs.iter().enumerate() {
-                if !id_alias_check.insert(note_out_port.stable_id) {
-                    log::error!("Could not sync plugin ports: plugin with ID {:?} has more than one output note port with ID {}", &self.id, note_out_port.stable_id);
-                    self.schedule_deactivate();
-                }
-
                 let channel_id = ChannelID {
                     port_type: PortType::Note,
                     stable_id: note_out_port.stable_id,

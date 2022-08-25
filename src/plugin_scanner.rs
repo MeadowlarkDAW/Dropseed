@@ -455,7 +455,7 @@ impl PluginScanner {
             }
 
             let id = PluginInstanceID::_new(
-                node_id.as_usize(),
+                node_id.into(),
                 self.next_plug_unique_id,
                 format,
                 Shared::clone(&plugin_factory.shared_rdn),
@@ -491,8 +491,7 @@ impl PluginScanner {
         } else {
             let rdn = Shared::new(&self.coll_handle, save_state.key.rdn.clone());
 
-            let id =
-                PluginInstanceID::_new(node_id.as_usize(), self.next_plug_unique_id, format, rdn);
+            let id = PluginInstanceID::_new(node_id.into(), self.next_plug_unique_id, format, rdn);
             self.next_plug_unique_id += 1;
 
             if status.is_ok() {

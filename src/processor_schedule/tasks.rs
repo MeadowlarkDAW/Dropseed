@@ -3,6 +3,7 @@ use std::fmt::{Debug, Error, Formatter, Write};
 
 mod deactivated_plug_task;
 mod delay_comp_task;
+mod graph_in_out_task;
 mod plugin_task;
 mod sum_task;
 mod transport_task;
@@ -11,6 +12,7 @@ pub use transport_task::TransportHandle;
 
 pub(crate) use deactivated_plug_task::DeactivatedPluginTask;
 pub(crate) use delay_comp_task::{DelayCompNode, DelayCompTask};
+pub(crate) use graph_in_out_task::{GraphInTask, GraphOutTask};
 pub(crate) use plugin_task::PluginTask;
 pub(crate) use sum_task::SumTask;
 pub(crate) use transport_task::TransportTask;
@@ -20,6 +22,8 @@ pub(crate) enum Task {
     DelayComp(DelayCompTask),
     Sum(SumTask),
     DeactivatedPlugin(DeactivatedPluginTask),
+    GraphIn(GraphInTask),
+    GraphOut(GraphOutTask),
 }
 
 impl Debug for Task {
@@ -155,6 +159,28 @@ impl Debug for Task {
 
                 f.finish()
             }
+            Task::GraphIn(t) => {
+                let mut f = f.debug_struct("GraphIn");
+
+                let mut s = String::new();
+                for b in t.audio_out.iter() {
+                    s.push_str(&format!("{:?}, ", b.id()))
+                }
+                f.field("audio_out", &s);
+
+                f.finish()
+            }
+            Task::GraphOut(t) => {
+                let mut f = f.debug_struct("GraphOut");
+
+                let mut s = String::new();
+                for b in t.audio_in.iter() {
+                    s.push_str(&format!("{:?}, ", b.id()))
+                }
+                f.field("audio_in", &s);
+
+                f.finish()
+            }
         }
     }
 }
@@ -166,6 +192,8 @@ impl Task {
             Task::DelayComp(task) => task.process(proc_info),
             Task::Sum(task) => task.process(proc_info),
             Task::DeactivatedPlugin(task) => task.process(proc_info),
+            Task::GraphIn(task) => task.process(proc_info),
+            Task::GraphOut(task) => task.process(proc_info),
         }
     }
 }

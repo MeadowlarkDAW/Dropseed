@@ -1,12 +1,16 @@
-use audio_graph::{Graph, PortRef};
+use audio_graph::{
+    AudioGraphHelper, InsertedDelay, InsertedSum, NodeID, PortID, ScheduleEntry, ScheduledNode,
+};
 use dropseed_plugin_api::buffer::{AudioPortBuffer, AudioPortBufferMut, SharedBuffer};
 use dropseed_plugin_api::ext::audio_ports::MainPortsLayout;
 use dropseed_plugin_api::ProcBuffers;
-use smallvec::SmallVec;
+use fnv::FnvHashMap;
+use smallvec::{smallvec, SmallVec};
 
-use crate::plugin_host::event_io_buffers::PluginEventIoBuffers;
+use crate::plugin_host::event_io_buffers::{NoteIoEvent, ParamIoEvent, PluginEventIoBuffers};
 use crate::processor_schedule::tasks::{
-    DeactivatedPluginTask, DelayCompNode, DelayCompTask, PluginTask, SumTask, Task,
+    DeactivatedPluginTask, DelayCompNode, DelayCompTask, GraphInTask, GraphOutTask, PluginTask,
+    SumTask, Task,
 };
 
 pub(super) mod verifier;
@@ -15,15 +19,338 @@ use verifier::Verifier;
 
 use super::error::GraphCompilerError;
 use super::shared_pools::{DelayCompKey, GraphSharedPools, SharedDelayCompNode};
-use super::{PluginInstanceID, PortChannelID, PortType, ProcessorSchedule};
+use super::{ChannelID, PluginInstanceID, PortType, ProcessorSchedule};
+
+fn schedule_graph_in_node(
+    scheduled_node: &ScheduledNode,
+    shared_pool: &mut GraphSharedPools,
+    graph_in_id: &PluginInstanceID,
+    num_graph_in_audio_ports: usize,
+) -> Result<Task, GraphCompilerError> {
+    // --- Construct a map that maps the index (channel) of each port to its assigned buffer
+
+    let mut audio_out_slots: SmallVec<[Option<SharedBuffer<f32>>; 4]> =
+        smallvec![None; num_graph_in_audio_ports];
+    for output_buffer in scheduled_node.output_buffers.iter() {
+        match output_buffer.type_index {
+            PortType::AUDIO_TYPE_IDX => {
+                let buffer = shared_pool
+                    .buffers
+                    .audio_buffer_pool
+                    .initialized_buffer_at_index(output_buffer.buffer_index.0);
+
+                let buffer_slot = audio_out_slots.get_mut(output_buffer.port_id.0 as usize).ok_or(
+                    GraphCompilerError::UnexpectedError(format!(
+                    "Abstract schedule assigned buffer to graph in node with invalid port id {:?}",
+                    output_buffer
+                )),
+                )?;
+
+                *buffer_slot = Some(buffer);
+            }
+            PortType::NOTE_TYPE_IDX => {
+                // TODO: Note buffers in graph input.
+            }
+            _ => {
+                return Err(GraphCompilerError::UnexpectedError(format!(
+                    "Abstract schedule assigned buffer with invalid type index on graph in node {:?}",
+                    output_buffer
+                )));
+            }
+        }
+    }
+
+    // --- Construct the final task using the constructed map from above --------------------
+
+    let mut audio_out: SmallVec<[SharedBuffer<f32>; 4]> =
+        SmallVec::with_capacity(num_graph_in_audio_ports);
+    for buffer_slot in audio_out_slots.drain(..) {
+        let buffer = buffer_slot.ok_or(GraphCompilerError::UnexpectedError(format!(
+            "Abstract schedule did not assign a buffer to all ports on graph in node {:?}",
+            scheduled_node
+        )))?;
+
+        audio_out.push(buffer);
+    }
+
+    Ok(Task::GraphIn(GraphInTask { audio_out }))
+}
+
+fn schedule_graph_out_node(
+    scheduled_node: &ScheduledNode,
+    shared_pool: &mut GraphSharedPools,
+    graph_out_id: &PluginInstanceID,
+    num_graph_out_audio_ports: usize,
+) -> Result<Task, GraphCompilerError> {
+    // --- Construct a map that maps the index (channel) of each port to its assigned buffer
+
+    let mut audio_in_slots: SmallVec<[Option<SharedBuffer<f32>>; 4]> =
+        smallvec![None; num_graph_out_audio_ports];
+    for input_buffer in scheduled_node.input_buffers.iter() {
+        match input_buffer.type_index {
+            PortType::AUDIO_TYPE_IDX => {
+                let buffer = shared_pool
+                    .buffers
+                    .audio_buffer_pool
+                    .initialized_buffer_at_index(input_buffer.buffer_index.0);
+
+                let buffer_slot = audio_in_slots.get_mut(input_buffer.port_id.0 as usize).ok_or(
+                    GraphCompilerError::UnexpectedError(format!(
+                    "Abstract schedule assigned buffer to graph out node with invalid port id {:?}",
+                    input_buffer
+                )),
+                )?;
+
+                *buffer_slot = Some(buffer);
+            }
+            PortType::NOTE_TYPE_IDX => {
+                // TODO: Note buffers in graph input.
+            }
+            _ => {
+                return Err(GraphCompilerError::UnexpectedError(format!(
+                    "Abstract schedule assigned buffer with invalid type index on graph out node {:?}",
+                    input_buffer
+                )));
+            }
+        }
+    }
+
+    // --- Construct the final task using the constructed map from above --------------------
+
+    let mut audio_in: SmallVec<[SharedBuffer<f32>; 4]> =
+        SmallVec::with_capacity(num_graph_out_audio_ports);
+    for buffer_slot in audio_in_slots.drain(..) {
+        let buffer = buffer_slot.ok_or(GraphCompilerError::UnexpectedError(format!(
+            "Abstract schedule did not assign a buffer to all ports on graph out node {:?}",
+            scheduled_node
+        )))?;
+
+        audio_in.push(buffer);
+    }
+
+    Ok(Task::GraphOut(GraphOutTask { audio_in }))
+}
+
+fn schedule_node(
+    scheduled_node: &ScheduledNode,
+    shared_pool: &mut GraphSharedPools,
+    graph_in_id: &PluginInstanceID,
+    graph_out_id: &PluginInstanceID,
+    num_graph_in_audio_ports: usize,
+    num_graph_out_audio_ports: usize,
+) -> Result<Task, GraphCompilerError> {
+    // Special case for the graph in/out nodes
+    if scheduled_node.id.0 == graph_in_id._node_id() {
+        return schedule_graph_in_node(
+            scheduled_node,
+            shared_pool,
+            graph_in_id,
+            num_graph_in_audio_ports,
+        );
+    } else if scheduled_node.id.0 == graph_out_id._node_id() {
+        return schedule_graph_out_node(
+            scheduled_node,
+            shared_pool,
+            graph_out_id,
+            num_graph_out_audio_ports,
+        );
+    }
+
+    // --- Get port info and processor from the plugin host ---------------------------------
+
+    let plugin_host = shared_pool.plugin_hosts.pool.get(&scheduled_node.id).ok_or(
+        GraphCompilerError::UnexpectedError(format!(
+            "Abstract schedule assigned a node that doesn't exist: {:?}",
+            scheduled_node
+        )),
+    )?;
+
+    let plugin_id = plugin_host.id();
+    let port_ids = plugin_host.port_ids();
+    let num_audio_in_channels = plugin_host.num_audio_in_channels();
+    let num_audio_out_channels = plugin_host.num_audio_out_channels();
+    let maybe_shared_processor = plugin_host.shared_processor();
+    let maybe_audio_ports_ext = plugin_host.audio_ports_ext();
+    let maybe_note_ports_ext = plugin_host.note_ports_ext();
+
+    // --- Construct a map that maps the ChannelID of each port to its assigned buffer ------
+
+    enum SharedBufferType {
+        Audio(SharedBuffer<f32>),
+        Note(SharedBuffer<NoteIoEvent>),
+        ParamEvent(SharedBuffer<ParamIoEvent>),
+    }
+
+    let mut buffer_slots: FnvHashMap<ChannelID, Option<SharedBufferType>> =
+        port_ids.channel_id_to_port_id.keys().map(|channel_id| (*channel_id, None)).collect();
+
+    for assigned_buffer in
+        scheduled_node.input_buffers.iter().chain(scheduled_node.output_buffers.iter())
+    {
+        let channel_id = port_ids.port_id_to_channel_id.get(&assigned_buffer.port_id).ok_or(
+            GraphCompilerError::UnexpectedError(format!(
+                "Abstract schedule assigned a buffer for port that doesn't exist {:?}",
+                scheduled_node
+            )),
+        )?;
+
+        if assigned_buffer.type_index != channel_id.port_type.as_type_idx() {
+            return Err(GraphCompilerError::UnexpectedError(format!(
+                "Abstract schedule assigned the wrong type of buffer for port {:?}",
+                scheduled_node
+            )));
+        }
+
+        match channel_id.port_type {
+            PortType::Audio => {
+                let buffer = shared_pool
+                    .buffers
+                    .audio_buffer_pool
+                    .initialized_buffer_at_index(assigned_buffer.buffer_index.0);
+
+                if buffer_slots.insert(*channel_id, Some(SharedBufferType::Audio(buffer))).is_some()
+                {
+                    return Err(GraphCompilerError::UnexpectedError(format!(
+                        "Abstract schedule assigned multiple buffers to the same port {:?}",
+                        scheduled_node
+                    )));
+                }
+            }
+            PortType::Note => {
+                let buffer = shared_pool
+                    .buffers
+                    .note_buffer_pool
+                    .buffer_at_index(assigned_buffer.buffer_index.0);
+
+                if buffer_slots.insert(*channel_id, Some(SharedBufferType::Note(buffer))).is_some()
+                {
+                    return Err(GraphCompilerError::UnexpectedError(format!(
+                        "Abstract schedule assigned multiple buffers to the same port {:?}",
+                        scheduled_node
+                    )));
+                }
+            }
+            PortType::ParamAutomation => {
+                let buffer = shared_pool
+                    .buffers
+                    .param_event_buffer_pool
+                    .buffer_at_index(assigned_buffer.buffer_index.0);
+
+                if buffer_slots
+                    .insert(*channel_id, Some(SharedBufferType::ParamEvent(buffer)))
+                    .is_some()
+                {
+                    return Err(GraphCompilerError::UnexpectedError(format!(
+                        "Abstract schedule assigned multiple buffers to the same port {:?}",
+                        scheduled_node
+                    )));
+                }
+            }
+        }
+    }
+
+    // --- Construct the final task using the constructed map from above --------------------
+
+    if maybe_shared_processor.is_none() {
+        // Plugin is deactivated
+
+        let mut audio_through: SmallVec<[(SharedBuffer<f32>, SharedBuffer<f32>); 4]> =
+            SmallVec::new();
+        let mut extra_audio_out: SmallVec<[SharedBuffer<f32>; 4]> = SmallVec::new();
+
+        // Plugin is unloaded/deactivated.
+        let mut port_i = 0;
+
+        if let Some(audio_ports_ext) = audio_ports_ext {
+            if let MainPortsLayout::InOut = audio_ports_ext.main_ports_layout {
+                let n_main_channels =
+                    audio_ports_ext.inputs[0].channels.min(audio_ports_ext.outputs[0].channels);
+
+                for _ in 0..n_main_channels {
+                    audio_through.push((
+                        audio_in_channel_buffers[port_i].clone(),
+                        audio_out_channel_buffers[port_i].clone(),
+                    ));
+                    port_i += 1;
+                }
+            }
+        }
+
+        for i in port_i..audio_out_channel_buffers.len() {
+            extra_audio_out.push(audio_out_channel_buffers[i].clone());
+        }
+
+        tasks.push(Task::DeactivatedPlugin(DeactivatedPluginTask {
+            audio_through,
+            extra_audio_out,
+            automation_out_buffer,
+            note_out_buffers,
+        }));
+
+        continue;
+    }
+
+    let shared_processor = shared_processor.as_ref().unwrap();
+    let audio_ports_ext = audio_ports_ext.as_ref().unwrap();
+
+    let mut audio_in: SmallVec<[AudioPortBuffer; 2]> = SmallVec::new();
+    let mut audio_out: SmallVec<[AudioPortBufferMut; 2]> = SmallVec::new();
+
+    let mut port_i = 0;
+    for in_port in audio_ports_ext.inputs.iter() {
+        let mut buffers: SmallVec<[SharedBuffer<f32>; 2]> =
+            SmallVec::with_capacity(usize::from(in_port.channels));
+        for _ in 0..in_port.channels {
+            buffers.push(audio_in_channel_buffers[port_i].clone());
+            port_i += 1;
+        }
+
+        audio_in.push(AudioPortBuffer::_new(
+            buffers,
+            shared_pool.buffers.audio_buffer_pool.buffer_size() as u32,
+        ));
+        // TODO: proper latency?
+    }
+    port_i = 0;
+    for out_port in audio_ports_ext.outputs.iter() {
+        let mut buffers: SmallVec<[SharedBuffer<f32>; 2]> =
+            SmallVec::with_capacity(usize::from(out_port.channels));
+        for _ in 0..out_port.channels {
+            buffers.push(audio_out_channel_buffers[port_i].clone());
+            port_i += 1;
+        }
+
+        audio_out.push(AudioPortBufferMut::_new(
+            buffers,
+            shared_pool.buffers.audio_buffer_pool.buffer_size() as u32,
+        ));
+        // TODO: proper latency?
+    }
+
+    let shared_processor = shared_processor.clone();
+
+    tasks.push(Task::Plugin(PluginTask {
+        plugin_id: plugin_id.clone(),
+        shared_processor,
+        buffers: ProcBuffers { audio_in, audio_out },
+        event_buffers: PluginEventIoBuffers {
+            unmixed_param_in_buffers: automation_in_buffers,
+            param_out_buffer: automation_out_buffer,
+            unmixed_note_in_buffers: note_in_buffers,
+            note_out_buffers,
+        },
+    }));
+
+    todo!()
+}
 
 pub(super) fn compile_graph(
     shared_pool: &mut GraphSharedPools,
-    abstract_graph: &mut Graph<PluginInstanceID, PortChannelID, PortType>,
+    graph_helper: &mut AudioGraphHelper,
     graph_in_id: &PluginInstanceID,
     graph_out_id: &PluginInstanceID,
-    graph_in_audio_out_port_refs: &[PortRef],
-    graph_out_audio_in_port_refs: &[PortRef],
+    graph_in_audio_out_port_refs: &[PortID],
+    graph_out_audio_in_port_refs: &[PortID],
     verifier: &mut Verifier,
     coll_handle: &basedrop::Handle,
 ) -> Result<ProcessorSchedule, GraphCompilerError> {
@@ -34,17 +361,25 @@ pub(super) fn compile_graph(
     let mut graph_audio_in: SmallVec<[SharedBuffer<f32>; 4]> = SmallVec::new();
     let mut graph_audio_out: SmallVec<[SharedBuffer<f32>; 4]> = SmallVec::new();
 
-    let mut total_intermediary_buffers = 0;
-    let mut max_graph_audio_buffer_index = 0;
-    let mut max_graph_note_buffer_index = 0;
-    let mut max_graph_automation_buffer_index = 0;
-
     for node in shared_pool.delay_comp_nodes.pool.values_mut() {
         node.active = false;
     }
 
-    let abstract_tasks = abstract_graph.compile();
-    for abstract_task in abstract_tasks.iter() {
+    let abstract_schedule = graph_helper.compile()?;
+
+    shared_pool.buffers.set_num_buffers(
+        abstract_schedule.num_buffers[PortType::Audio.into()],
+        abstract_schedule.num_buffers[PortType::Note.into()],
+        abstract_schedule.num_buffers[PortType::ParamAutomation.into()],
+    );
+
+    for schedule_entry in abstract_schedule.schedule.iter() {
+        match schedule_entry {
+            ScheduleEntry::Node(scheduled_node) => {}
+            ScheduleEntry::Delay(inserted_delay) => {}
+            ScheduleEntry::Sum(inserted_sum) => {}
+        }
+
         let (
             plugin_id,
             num_audio_in_channels,

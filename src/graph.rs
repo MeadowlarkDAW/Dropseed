@@ -39,6 +39,10 @@ pub enum PortType {
 
 impl PortType {
     pub const NUM_TYPES: usize = 3;
+    pub const AUDIO_TYPE_IDX: TypeIdx = TypeIdx(PortType::Audio as u32 as usize);
+    pub const NOTE_TYPE_IDX: TypeIdx = TypeIdx(PortType::Note as u32 as usize);
+    pub const PARAM_AUTOMATION_TYPE_IDX: TypeIdx =
+        TypeIdx(PortType::ParamAutomation as u32 as usize);
 
     pub fn from_type_idx(p: TypeIdx) -> Option<Self> {
         match p.0 {
@@ -50,8 +54,7 @@ impl PortType {
     }
 
     pub fn as_type_idx(&self) -> TypeIdx {
-        let t: u32 = self.into();
-        TypeIdx(t)
+        TypeIdx(*self as u32 as usize)
     }
 }
 
