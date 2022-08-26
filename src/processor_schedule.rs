@@ -1,6 +1,3 @@
-use smallvec::SmallVec;
-
-use dropseed_plugin_api::buffer::SharedBuffer;
 use dropseed_plugin_api::ProcInfo;
 
 pub(crate) mod tasks;
@@ -91,51 +88,8 @@ impl ProcessorSchedule {
                 transport,
             };
 
-            for (ch_i, in_buffer) in self.graph_audio_in.iter().enumerate() {
-                if ch_i < audio_in_channels {
-                    let mut buffer_ref = in_buffer.borrow_mut();
-
-                    let buffer = &mut buffer_ref[0..frames];
-
-                    for i in 0..proc_info.frames {
-                        buffer[i] = audio_in[(i * audio_in_channels) + ch_i];
-                    }
-
-                    let mut is_constant = true;
-                    let first_val = buffer[0];
-                    for frame in &buffer[0..frames] {
-                        if *frame != first_val {
-                            is_constant = false;
-                            break;
-                        }
-                    }
-
-                    in_buffer.set_constant(is_constant);
-                } else {
-                    in_buffer.clear_until(frames);
-                }
-            }
-
             for task in self.tasks.iter_mut() {
                 task.process(&proc_info)
-            }
-
-            let out_part = &mut audio_out[(processed_frames * audio_out_channels)
-                ..((processed_frames + frames) * audio_out_channels)];
-            for ch_i in 0..audio_out_channels {
-                if let Some(buffer) = self.graph_audio_out.get(ch_i) {
-                    let mut buffer_ref = buffer.borrow_mut();
-
-                    let buffer = &mut buffer_ref[0..frames];
-
-                    for i in 0..frames {
-                        out_part[(i * audio_out_channels) + ch_i] = buffer[i];
-                    }
-                } else {
-                    for i in 0..frames {
-                        out_part[(i * audio_out_channels) + ch_i] = 0.0;
-                    }
-                }
             }
 
             processed_frames += frames;

@@ -3,12 +3,12 @@ use smallvec::SmallVec;
 use dropseed_plugin_api::buffer::SharedBuffer;
 use dropseed_plugin_api::ProcInfo;
 
-pub(crate) struct SumTask {
+pub(crate) struct AudioSumTask {
     pub audio_in: SmallVec<[SharedBuffer<f32>; 4]>,
     pub audio_out: SharedBuffer<f32>,
 }
 
-impl SumTask {
+impl AudioSumTask {
     pub fn process(&mut self, proc_info: &ProcInfo) {
         let mut out_ref = self.audio_out.borrow_mut();
 

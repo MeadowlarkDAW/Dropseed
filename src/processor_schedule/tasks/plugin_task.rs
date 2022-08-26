@@ -3,7 +3,7 @@ use dropseed_plugin_api::ProcInfo;
 use dropseed_plugin_api::{PluginInstanceID, ProcBuffers};
 use smallvec::SmallVec;
 
-use crate::plugin_host::event_io_buffers::{NoteIoEvent, ParamIoEvent, PluginEventIoBuffers};
+use crate::plugin_host::event_io_buffers::PluginEventIoBuffers;
 use crate::plugin_host::SharedPluginHostProcThread;
 
 pub(crate) struct PluginTask {

@@ -11,16 +11,23 @@ mod transport_task;
 pub use transport_task::TransportHandle;
 
 pub(crate) use deactivated_plug_task::DeactivatedPluginTask;
-pub(crate) use delay_comp_task::{DelayCompNode, DelayCompTask};
+pub(crate) use delay_comp_task::{
+    AudioDelayCompNode, AudioDelayCompTask, NoteDelayCompNode, NoteDelayCompTask,
+    ParamEventDelayCompNode, ParamEventDelayCompTask,
+};
 pub(crate) use graph_in_out_task::{GraphInTask, GraphOutTask};
 pub(crate) use plugin_task::PluginTask;
-pub(crate) use sum_task::SumTask;
+pub(crate) use sum_task::{AudioSumTask, NoteSumTask, ParamEventSumTask};
 pub(crate) use transport_task::TransportTask;
 
 pub(crate) enum Task {
     Plugin(PluginTask),
-    DelayComp(DelayCompTask),
-    Sum(SumTask),
+    AudioSum(AudioSumTask),
+    NoteSum(NoteSumTask),
+    ParamEventSum(ParamEventSumTask),
+    AudioDelayComp(AudioDelayCompTask),
+    NoteDelayComp(NoteDelayCompTask),
+    ParamEventDelayComp(ParamEventDelayCompTask),
     DeactivatedPlugin(DeactivatedPluginTask),
     GraphIn(GraphInTask),
     GraphOut(GraphOutTask),
@@ -102,17 +109,8 @@ impl Debug for Task {
 
                 f.finish()
             }
-            Task::DelayComp(t) => {
-                let mut f = f.debug_struct("DelayComp");
-
-                f.field("audio_in", &t.audio_in.id());
-                f.field("audio_out", &t.audio_out.id());
-                f.field("delay", &t.shared_node.delay);
-
-                f.finish()
-            }
-            Task::Sum(t) => {
-                let mut f = f.debug_struct("Sum");
+            Task::AudioSum(t) => {
+                let mut f = f.debug_struct("AudioSum");
 
                 let mut s = String::new();
                 for b in t.audio_in.iter() {
@@ -121,6 +119,59 @@ impl Debug for Task {
                 f.field("audio_in", &s);
 
                 f.field("audio_out", &format!("{:?}", t.audio_out.id()));
+
+                f.finish()
+            }
+            Task::NoteSum(t) => {
+                let mut f = f.debug_struct("NoteSum");
+
+                let mut s = String::new();
+                for b in t.note_in.iter() {
+                    write!(s, "{:?}, ", b.id())?;
+                }
+                f.field("note_in", &s);
+
+                f.field("note_out", &format!("{:?}", t.note_out.id()));
+
+                f.finish()
+            }
+            Task::ParamEventSum(t) => {
+                let mut f = f.debug_struct("ParamEventSum");
+
+                let mut s = String::new();
+                for b in t.event_in.iter() {
+                    write!(s, "{:?}, ", b.id())?;
+                }
+                f.field("event_in", &s);
+
+                f.field("event_out", &format!("{:?}", t.event_out.id()));
+
+                f.finish()
+            }
+            Task::AudioDelayComp(t) => {
+                let mut f = f.debug_struct("AudioDelayComp");
+
+                f.field("audio_in", &t.audio_in.id());
+                f.field("audio_out", &t.audio_out.id());
+                f.field("delay", &t.shared_node.delay);
+
+                f.finish()
+            }
+            Task::NoteDelayComp(t) => {
+                let mut f = f.debug_struct("NoteDelayComp");
+
+                f.field("note_in", &t.note_in.id());
+                f.field("note_out", &t.note_out.id());
+                f.field("delay", &t.shared_node.delay);
+
+                f.finish()
+            }
+            Task::ParamEventDelayComp(t) => {
+                let mut f = f.debug_struct("ParamEventDelayComp");
+
+                f.field("event_in", &t.event_in.id());
+                f.field("event_out", &t.event_out.id());
+                f.field("delay", &t.shared_node.delay);
 
                 f.finish()
             }
@@ -189,8 +240,10 @@ impl Task {
     pub fn process(&mut self, proc_info: &ProcInfo) {
         match self {
             Task::Plugin(task) => task.process(proc_info),
-            Task::DelayComp(task) => task.process(proc_info),
             Task::Sum(task) => task.process(proc_info),
+            Task::AudioDelayComp(task) => task.process(proc_info),
+            Task::NoteDelayComp(task) => task.process(proc_info),
+            Task::ParamEventDelayComp(task) => task.process(proc_info),
             Task::DeactivatedPlugin(task) => task.process(proc_info),
             Task::GraphIn(task) => task.process(proc_info),
             Task::GraphOut(task) => task.process(proc_info),

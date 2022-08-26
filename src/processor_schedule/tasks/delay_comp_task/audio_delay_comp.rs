@@ -1,16 +1,16 @@
 use dropseed_plugin_api::buffer::SharedBuffer;
 use dropseed_plugin_api::ProcInfo;
 
-use crate::graph::shared_pools::SharedDelayCompNode;
+use crate::graph::shared_pools::SharedAudioDelayCompNode;
 
-pub(crate) struct DelayCompTask {
-    pub shared_node: SharedDelayCompNode,
+pub(crate) struct AudioDelayCompTask {
+    pub shared_node: SharedAudioDelayCompNode,
 
     pub audio_in: SharedBuffer<f32>,
     pub audio_out: SharedBuffer<f32>,
 }
 
-impl DelayCompTask {
+impl AudioDelayCompTask {
     pub fn process(&mut self, proc_info: &ProcInfo) {
         let mut delay_comp_node = self.shared_node.borrow_mut();
 
@@ -18,12 +18,12 @@ impl DelayCompTask {
     }
 }
 
-pub(crate) struct DelayCompNode {
+pub(crate) struct AudioDelayCompNode {
     buf: Vec<f32>,
     read_pointer: usize,
 }
 
-impl DelayCompNode {
+impl AudioDelayCompNode {
     pub fn new(delay: u32) -> Self {
         Self { buf: vec![0.0; delay as usize], read_pointer: 0 }
     }
