@@ -2,8 +2,8 @@ use audio_graph::InsertedSum;
 use dropseed_plugin_api::buffer::SharedBuffer;
 use smallvec::SmallVec;
 
-use crate::plugin_host::event_io_buffers::{NoteIoEvent, ParamIoEvent};
-use crate::processor_schedule::tasks::{AudioSumTask, NoteSumTask, ParamEventSumTask, Task};
+use crate::plugin_host::event_io_buffers::{AutomationIoEvent, NoteIoEvent};
+use crate::processor_schedule::tasks::{AudioSumTask, AutomationSumTask, NoteSumTask, Task};
 
 use super::super::error::GraphCompilerError;
 use super::super::shared_pools::GraphSharedPools;
@@ -50,23 +50,23 @@ pub(super) fn construct_sum_task(
 
             Task::NoteSum(NoteSumTask { note_in, note_out })
         }
-        PortType::PARAM_AUTOMATION_TYPE_IDX => {
-            let event_in: SmallVec<[SharedBuffer<ParamIoEvent>; 4]> = inserted_sum
+        PortType::AUTOMATION_TYPE_IDX => {
+            let input: SmallVec<[SharedBuffer<AutomationIoEvent>; 4]> = inserted_sum
                 .input_buffers
                 .iter()
                 .map(|assigned_buffer| {
                     shared_pool
                         .buffers
-                        .param_event_buffer_pool
+                        .automation_buffer_pool
                         .buffer_at_index(assigned_buffer.buffer_index.0)
                 })
                 .collect();
-            let event_out = shared_pool
+            let output = shared_pool
                 .buffers
-                .param_event_buffer_pool
+                .automation_buffer_pool
                 .buffer_at_index(inserted_sum.output_buffer.buffer_index.0);
 
-            Task::ParamEventSum(ParamEventSumTask { event_in, event_out })
+            Task::AutomationSum(AutomationSumTask { input, output })
         }
         _ => {
             return Err(GraphCompilerError::UnexpectedError(format!(

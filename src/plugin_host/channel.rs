@@ -16,7 +16,7 @@ use crate::utils::reducing_queue::{
     ReducFnvConsumer, ReducFnvProducer, ReducFnvValue, ReducingFnvQueue,
 };
 
-use super::event_io_buffers::ParamIoEventType;
+use super::event_io_buffers::AutomationIoEventType;
 use super::process_thread::PluginHostProcThread;
 
 pub(super) struct PlugHostChannelMainThread {
@@ -194,14 +194,14 @@ impl ReducFnvValue for ProcToMainParamValue {
 }
 
 impl ProcToMainParamValue {
-    pub fn from_param_event(event: ParamIoEventType) -> Option<Self> {
+    pub fn from_param_event(event: AutomationIoEventType) -> Option<Self> {
         match event {
-            ParamIoEventType::Value(value) => Some(Self { value: Some(value), gesture: None }),
-            ParamIoEventType::Modulation(_) => None, // TODO: handle mod events
-            ParamIoEventType::BeginGesture => {
+            AutomationIoEventType::Value(value) => Some(Self { value: Some(value), gesture: None }),
+            AutomationIoEventType::Modulation(_) => None, // TODO: handle mod events
+            AutomationIoEventType::BeginGesture => {
                 Some(Self { value: None, gesture: Some(ParamGestureInfo { is_begin: true }) })
             }
-            ParamIoEventType::EndGesture => {
+            AutomationIoEventType::EndGesture => {
                 Some(Self { value: None, gesture: Some(ParamGestureInfo { is_begin: false }) })
             }
         }

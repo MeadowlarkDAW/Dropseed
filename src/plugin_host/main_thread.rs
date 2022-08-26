@@ -732,14 +732,10 @@ impl PluginHostMainThread {
             }
         }
 
-        const IN_AUTOMATION_CHANNEL_ID: ChannelID = ChannelID {
-            port_type: PortType::ParamAutomation,
-            stable_id: 0,
-            is_input: true,
-            channel: 0,
-        };
+        const IN_AUTOMATION_CHANNEL_ID: ChannelID =
+            ChannelID { port_type: PortType::Automation, stable_id: 0, is_input: true, channel: 0 };
         const OUT_AUTOMATION_CHANNEL_ID: ChannelID = ChannelID {
-            port_type: PortType::ParamAutomation,
+            port_type: PortType::Automation,
             stable_id: 0,
             is_input: false,
             channel: 0,
@@ -759,7 +755,7 @@ impl PluginHostMainThread {
                     .add_port(
                         self.id._node_id().into(),
                         new_port_id,
-                        PortType::ParamAutomation.as_type_idx(),
+                        PortType::Automation.as_type_idx(),
                         true,
                     )
                     .unwrap();
@@ -784,7 +780,7 @@ impl PluginHostMainThread {
                         .add_port(
                             self.id._node_id().into(),
                             new_port_id,
-                            PortType::ParamAutomation.as_type_idx(),
+                            PortType::Automation.as_type_idx(),
                             false,
                         )
                         .unwrap();

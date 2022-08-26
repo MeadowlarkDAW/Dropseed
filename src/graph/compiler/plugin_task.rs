@@ -2,7 +2,7 @@ use audio_graph::ScheduledNode;
 use dropseed_plugin_api::buffer::SharedBuffer;
 use fnv::FnvHashMap;
 
-use crate::plugin_host::event_io_buffers::{NoteIoEvent, ParamIoEvent};
+use crate::plugin_host::event_io_buffers::{AutomationIoEvent, NoteIoEvent};
 use crate::processor_schedule::tasks::Task;
 
 use super::super::error::GraphCompilerError;
@@ -39,8 +39,8 @@ pub(super) fn construct_plugin_task(
         FnvHashMap::default();
     let mut assigned_note_buffers: FnvHashMap<ChannelID, (SharedBuffer<NoteIoEvent>, bool)> =
         FnvHashMap::default();
-    let mut assigned_param_event_in_buffer: Option<(SharedBuffer<ParamIoEvent>, bool)> = None;
-    let mut assigned_param_event_out_buffer: Option<SharedBuffer<ParamIoEvent>> = None;
+    let mut assigned_automation_in_buffer: Option<(SharedBuffer<AutomationIoEvent>, bool)> = None;
+    let mut assigned_automation_out_buffer: Option<SharedBuffer<AutomationIoEvent>> = None;
 
     for assigned_buffer in
         scheduled_node.input_buffers.iter().chain(scheduled_node.output_buffers.iter())
@@ -92,28 +92,28 @@ pub(super) fn construct_plugin_task(
                     )));
                 }
             }
-            PortType::ParamAutomation => {
+            PortType::Automation => {
                 let buffer = shared_pool
                     .buffers
-                    .param_event_buffer_pool
+                    .automation_buffer_pool
                     .buffer_at_index(assigned_buffer.buffer_index.0);
 
                 if channel_id.is_input {
-                    if assigned_param_event_in_buffer.is_some() {
+                    if assigned_automation_in_buffer.is_some() {
                         return Err(GraphCompilerError::UnexpectedError(format!(
                             "Abstract schedule assigned multiple buffers to the param automation in port {:?}",
                             scheduled_node
                         )));
                     }
-                    assigned_param_event_in_buffer = Some((buffer, assigned_buffer.should_clear));
+                    assigned_automation_in_buffer = Some((buffer, assigned_buffer.should_clear));
                 } else {
-                    if assigned_param_event_out_buffer.is_some() {
+                    if assigned_automation_out_buffer.is_some() {
                         return Err(GraphCompilerError::UnexpectedError(format!(
                             "Abstract schedule assigned multiple buffers to the param automation out port {:?}",
                             scheduled_node
                         )));
                     }
-                    assigned_param_event_out_buffer = Some(buffer);
+                    assigned_automation_out_buffer = Some(buffer);
                 }
             }
         }
@@ -129,7 +129,7 @@ pub(super) fn construct_plugin_task(
             maybe_note_ports_ext,
             assigned_audio_buffers,
             assigned_note_buffers,
-            assigned_param_event_out_buffer,
+            assigned_automation_out_buffer,
         )
     } else {
         activated_plugin_task::construct_activated_plugin_task(
@@ -141,8 +141,8 @@ pub(super) fn construct_plugin_task(
             maybe_note_ports_ext.as_ref().unwrap(),
             assigned_audio_buffers,
             assigned_note_buffers,
-            assigned_param_event_in_buffer,
-            assigned_param_event_out_buffer,
+            assigned_automation_in_buffer,
+            assigned_automation_out_buffer,
         )
     }
 }

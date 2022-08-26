@@ -34,7 +34,7 @@ pub enum PortType {
     /// Audio ports
     Audio = 0,
     Note = 1,
-    ParamAutomation = 2,
+    Automation = 2,
 }
 
 impl PortType {
@@ -42,18 +42,17 @@ impl PortType {
 
     pub const AUDIO_TYPE_IDX: TypeIdx = TypeIdx(PortType::Audio as u32 as usize);
     pub const NOTE_TYPE_IDX: TypeIdx = TypeIdx(PortType::Note as u32 as usize);
-    pub const PARAM_AUTOMATION_TYPE_IDX: TypeIdx =
-        TypeIdx(PortType::ParamAutomation as u32 as usize);
+    pub const AUTOMATION_TYPE_IDX: TypeIdx = TypeIdx(PortType::Automation as u32 as usize);
 
     pub const AUDIO_IDX: usize = 0;
     pub const NOTE_IDX: usize = 1;
-    pub const PARAM_AUTOMATION_IDX: usize = 2;
+    pub const AUTOMATION_IDX: usize = 2;
 
     pub fn from_type_idx(p: TypeIdx) -> Option<Self> {
         match p.0 {
             0 => Some(PortType::Audio),
             1 => Some(PortType::Note),
-            2 => Some(PortType::ParamAutomation),
+            2 => Some(PortType::Automation),
             _ => None,
         }
     }
@@ -312,7 +311,7 @@ impl AudioGraph {
                             });
                         }
                     }
-                    PortType::ParamAutomation => {
+                    PortType::Automation => {
                         return Err(ConnectEdgeError {
                             error_type: ConnectEdgeErrorType::SrcPortDoesNotExist,
                             edge: edge.clone(),
@@ -351,7 +350,7 @@ impl AudioGraph {
                             });
                         }
                     }
-                    PortType::ParamAutomation => {
+                    PortType::Automation => {
                         if let Some(port_id) = plugin_host.port_ids().automation_out_port_id {
                             port_id
                         } else {
@@ -414,7 +413,7 @@ impl AudioGraph {
                             });
                         }
                     }
-                    PortType::ParamAutomation => {
+                    PortType::Automation => {
                         return Err(ConnectEdgeError {
                             error_type: ConnectEdgeErrorType::DstPortDoesNotExist,
                             edge: edge.clone(),
@@ -453,7 +452,7 @@ impl AudioGraph {
                             });
                         }
                     }
-                    PortType::ParamAutomation => {
+                    PortType::Automation => {
                         if let Some(port_id) = plugin_host.port_ids().automation_in_port_id {
                             port_id
                         } else {

@@ -6,8 +6,8 @@ mod transport_pool;
 
 pub(crate) use buffer_pool::SharedBufferPool;
 pub(crate) use delay_comp_node_pool::{
-    DelayCompKey, DelayCompNodePool, SharedAudioDelayCompNode, SharedNoteDelayCompNode,
-    SharedParamEventDelayCompNode,
+    DelayCompKey, DelayCompNodePool, SharedAudioDelayCompNode, SharedAutomationDelayCompNode,
+    SharedNoteDelayCompNode,
 };
 pub(crate) use plugin_host_pool::PluginHostPool;
 pub(crate) use shared_schedule::SharedProcessorSchedule;

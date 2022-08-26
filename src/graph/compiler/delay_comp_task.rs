@@ -1,14 +1,14 @@
 use audio_graph::InsertedDelay;
 
 use crate::processor_schedule::tasks::{
-    AudioDelayCompNode, AudioDelayCompTask, NoteDelayCompNode, NoteDelayCompTask,
-    ParamEventDelayCompNode, ParamEventDelayCompTask, Task,
+    AudioDelayCompNode, AudioDelayCompTask, AutomationDelayCompNode, AutomationDelayCompTask,
+    NoteDelayCompNode, NoteDelayCompTask, Task,
 };
 
 use super::super::error::GraphCompilerError;
 use super::super::shared_pools::{
-    DelayCompKey, GraphSharedPools, SharedAudioDelayCompNode, SharedNoteDelayCompNode,
-    SharedParamEventDelayCompNode,
+    DelayCompKey, GraphSharedPools, SharedAudioDelayCompNode, SharedAutomationDelayCompNode,
+    SharedNoteDelayCompNode,
 };
 use super::super::PortType;
 
@@ -73,31 +73,31 @@ pub(super) fn construct_delay_comp_task(
                 note_out,
             })
         }
-        PortType::PARAM_AUTOMATION_TYPE_IDX => {
-            let event_in = shared_pool
+        PortType::AUTOMATION_TYPE_IDX => {
+            let input = shared_pool
                 .buffers
-                .param_event_buffer_pool
+                .automation_buffer_pool
                 .buffer_at_index(inserted_delay.input_buffer.buffer_index.0);
-            let event_out = shared_pool
+            let output = shared_pool
                 .buffers
-                .param_event_buffer_pool
+                .automation_buffer_pool
                 .buffer_at_index(inserted_delay.output_buffer.buffer_index.0);
 
             let shared_node =
-                shared_pool.delay_comp_nodes.param_event.entry(delay_comp_key).or_insert_with(
+                shared_pool.delay_comp_nodes.automation.entry(delay_comp_key).or_insert_with(
                     || {
-                        SharedParamEventDelayCompNode::new(
-                            ParamEventDelayCompNode::new(delay),
+                        SharedAutomationDelayCompNode::new(
+                            AutomationDelayCompNode::new(delay),
                             coll_handle,
                         )
                     },
                 );
             shared_node.active = true;
 
-            Task::ParamEventDelayComp(ParamEventDelayCompTask {
+            Task::AutomationDelayComp(AutomationDelayCompTask {
                 shared_node: shared_node.clone(),
-                event_in,
-                event_out,
+                input,
+                output,
             })
         }
         _ => {

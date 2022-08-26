@@ -2,7 +2,7 @@ use dropseed_plugin_api::ParamID;
 use fnv::FnvHashMap;
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 
-use super::{ParamIoEvent, ParamIoEventType, PluginIoEvent};
+use super::{AutomationIoEvent, AutomationIoEventType, PluginIoEvent};
 
 /// Sanitizes a plugin's event output stream, by wrapping an event iterator.
 ///
@@ -47,14 +47,14 @@ where
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         for event in self.iterator.by_ref() {
-            if let PluginIoEvent::ParamEvent {
+            if let PluginIoEvent::AutomationEvent {
                 cookie: _,
-                event: ParamIoEvent { parameter_id, event_type, .. },
+                event: AutomationIoEvent { parameter_id, event_type, .. },
             } = &event
             {
                 let is_beginning = match event_type {
-                    ParamIoEventType::BeginGesture => true,
-                    ParamIoEventType::EndGesture => false,
+                    AutomationIoEventType::BeginGesture => true,
+                    AutomationIoEventType::EndGesture => false,
                     _ => return Some(event),
                 };
 

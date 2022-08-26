@@ -4,7 +4,7 @@ use basedrop::Shared;
 use fnv::FnvHashMap;
 
 use crate::processor_schedule::tasks::{
-    AudioDelayCompNode, NoteDelayCompNode, ParamEventDelayCompNode,
+    AudioDelayCompNode, AutomationDelayCompNode, NoteDelayCompNode,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -58,15 +58,15 @@ impl SharedNoteDelayCompNode {
 }
 
 #[derive(Clone)]
-pub(crate) struct SharedParamEventDelayCompNode {
+pub(crate) struct SharedAutomationDelayCompNode {
     pub active: bool,
     pub delay: u32,
 
-    shared: Shared<AtomicRefCell<ParamEventDelayCompNode>>,
+    shared: Shared<AtomicRefCell<AutomationDelayCompNode>>,
 }
 
-impl SharedParamEventDelayCompNode {
-    pub fn new(d: ParamEventDelayCompNode, coll_handle: &basedrop::Handle) -> Self {
+impl SharedAutomationDelayCompNode {
+    pub fn new(d: AutomationDelayCompNode, coll_handle: &basedrop::Handle) -> Self {
         Self {
             active: true,
             delay: d.delay(),
@@ -74,7 +74,7 @@ impl SharedParamEventDelayCompNode {
         }
     }
 
-    pub fn borrow_mut<'a>(&'a self) -> AtomicRefMut<'a, ParamEventDelayCompNode> {
+    pub fn borrow_mut<'a>(&'a self) -> AtomicRefMut<'a, AutomationDelayCompNode> {
         self.shared.borrow_mut()
     }
 }
@@ -82,7 +82,7 @@ impl SharedParamEventDelayCompNode {
 pub(crate) struct DelayCompNodePool {
     pub audio: FnvHashMap<DelayCompKey, SharedAudioDelayCompNode>,
     pub note: FnvHashMap<DelayCompKey, SharedNoteDelayCompNode>,
-    pub param_event: FnvHashMap<DelayCompKey, SharedParamEventDelayCompNode>,
+    pub automation: FnvHashMap<DelayCompKey, SharedAutomationDelayCompNode>,
 }
 
 impl DelayCompNodePool {
@@ -90,7 +90,7 @@ impl DelayCompNodePool {
         Self {
             audio: FnvHashMap::default(),
             note: FnvHashMap::default(),
-            param_event: FnvHashMap::default(),
+            automation: FnvHashMap::default(),
         }
     }
 }

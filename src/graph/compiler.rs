@@ -45,7 +45,7 @@ pub(super) fn compile_graph(
     for node in shared_pool.delay_comp_nodes.note.values_mut() {
         node.active = false;
     }
-    for node in shared_pool.delay_comp_nodes.param_event.values_mut() {
+    for node in shared_pool.delay_comp_nodes.automation.values_mut() {
         node.active = false;
     }
 
@@ -54,7 +54,7 @@ pub(super) fn compile_graph(
     shared_pool.buffers.set_num_buffers(
         abstract_schedule.num_buffers[PortType::AUDIO_IDX],
         abstract_schedule.num_buffers[PortType::NOTE_IDX],
-        abstract_schedule.num_buffers[PortType::PARAM_AUTOMATION_IDX],
+        abstract_schedule.num_buffers[PortType::AUTOMATION_IDX],
     );
 
     for schedule_entry in abstract_schedule.schedule.iter() {
@@ -121,8 +121,8 @@ pub(super) fn compile_graph(
         shared_pool.delay_comp_nodes.audio.drain().filter(|(_, node)| node.active).collect();
     shared_pool.delay_comp_nodes.note =
         shared_pool.delay_comp_nodes.note.drain().filter(|(_, node)| node.active).collect();
-    shared_pool.delay_comp_nodes.param_event =
-        shared_pool.delay_comp_nodes.param_event.drain().filter(|(_, node)| node.active).collect();
+    shared_pool.delay_comp_nodes.automation =
+        shared_pool.delay_comp_nodes.automation.drain().filter(|(_, node)| node.active).collect();
 
     // Construct the new schedule object.
     let new_schedule = ProcessorSchedule::new(

@@ -5,7 +5,7 @@ use dropseed_plugin_api::ext::note_ports::PluginNotePortsExt;
 use fnv::FnvHashMap;
 use smallvec::SmallVec;
 
-use crate::plugin_host::event_io_buffers::{NoteIoEvent, ParamIoEvent};
+use crate::plugin_host::event_io_buffers::{AutomationIoEvent, NoteIoEvent};
 use crate::processor_schedule::tasks::{DeactivatedPluginTask, Task};
 
 use super::super::super::error::GraphCompilerError;
@@ -19,13 +19,13 @@ pub(super) fn construct_deactivated_plugin_task(
     maybe_note_ports_ext: Option<&PluginNotePortsExt>,
     mut assigned_audio_buffers: FnvHashMap<ChannelID, (SharedBuffer<f32>, bool)>,
     mut assigned_note_buffers: FnvHashMap<ChannelID, (SharedBuffer<NoteIoEvent>, bool)>,
-    assigned_param_event_out_buffer: Option<SharedBuffer<ParamIoEvent>>,
+    assigned_automation_out_buffer: Option<SharedBuffer<AutomationIoEvent>>,
 ) -> Result<Task, GraphCompilerError> {
     let mut audio_through: SmallVec<[(SharedBuffer<f32>, SharedBuffer<f32>); 4]> = SmallVec::new();
     let mut note_through: Option<(SharedBuffer<NoteIoEvent>, SharedBuffer<NoteIoEvent>)> = None;
     let mut clear_audio_out: SmallVec<[SharedBuffer<f32>; 4]> = SmallVec::new();
     let mut clear_note_out: SmallVec<[SharedBuffer<NoteIoEvent>; 2]> = SmallVec::new();
-    let mut clear_param_event_out: Option<SharedBuffer<ParamIoEvent>> = None;
+    let mut clear_automation_out: Option<SharedBuffer<AutomationIoEvent>> = None;
 
     if let Some(audio_ports_ext) = maybe_audio_ports_ext {
         if let MainPortsLayout::InOut = audio_ports_ext.main_ports_layout {
@@ -108,8 +108,8 @@ pub(super) fn construct_deactivated_plugin_task(
             clear_note_out.push(buffer.clone());
         }
     }
-    if let Some(buffer) = assigned_param_event_out_buffer {
-        clear_param_event_out = Some(buffer.clone());
+    if let Some(buffer) = assigned_automation_out_buffer {
+        clear_automation_out = Some(buffer.clone());
     }
 
     Ok(Task::DeactivatedPlugin(DeactivatedPluginTask {
@@ -117,6 +117,6 @@ pub(super) fn construct_deactivated_plugin_task(
         note_through,
         clear_audio_out,
         clear_note_out,
-        clear_param_event_out,
+        clear_automation_out,
     }))
 }

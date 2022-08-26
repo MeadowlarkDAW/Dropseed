@@ -3,7 +3,7 @@ use smallvec::SmallVec;
 use dropseed_plugin_api::buffer::SharedBuffer;
 use dropseed_plugin_api::ProcInfo;
 
-use crate::plugin_host::event_io_buffers::{NoteIoEvent, ParamIoEvent};
+use crate::plugin_host::event_io_buffers::{AutomationIoEvent, NoteIoEvent};
 
 pub(crate) struct DeactivatedPluginTask {
     pub audio_through: SmallVec<[(SharedBuffer<f32>, SharedBuffer<f32>); 4]>,
@@ -11,7 +11,7 @@ pub(crate) struct DeactivatedPluginTask {
 
     pub clear_audio_out: SmallVec<[SharedBuffer<f32>; 4]>,
     pub clear_note_out: SmallVec<[SharedBuffer<NoteIoEvent>; 2]>,
-    pub clear_param_event_out: Option<SharedBuffer<ParamIoEvent>>,
+    pub clear_automation_out: Option<SharedBuffer<AutomationIoEvent>>,
 }
 
 impl DeactivatedPluginTask {
@@ -45,7 +45,7 @@ impl DeactivatedPluginTask {
         for out_buf in self.clear_note_out.iter() {
             out_buf.truncate();
         }
-        if let Some(out_buf) = &self.clear_param_event_out {
+        if let Some(out_buf) = &self.clear_automation_out {
             out_buf.truncate();
         }
     }

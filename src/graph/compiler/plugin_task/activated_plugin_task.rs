@@ -6,7 +6,7 @@ use dropseed_plugin_api::{PluginInstanceID, ProcBuffers};
 use fnv::FnvHashMap;
 use smallvec::SmallVec;
 
-use crate::plugin_host::event_io_buffers::{NoteIoEvent, ParamIoEvent, PluginEventIoBuffers};
+use crate::plugin_host::event_io_buffers::{AutomationIoEvent, NoteIoEvent, PluginEventIoBuffers};
 use crate::plugin_host::SharedPluginHostProcThread;
 use crate::processor_schedule::tasks::{PluginTask, Task};
 
@@ -23,8 +23,8 @@ pub(super) fn construct_activated_plugin_task(
     note_ports_ext: &PluginNotePortsExt,
     mut assigned_audio_buffers: FnvHashMap<ChannelID, (SharedBuffer<f32>, bool)>,
     mut assigned_note_buffers: FnvHashMap<ChannelID, (SharedBuffer<NoteIoEvent>, bool)>,
-    assigned_param_event_in_buffer: Option<(SharedBuffer<ParamIoEvent>, bool)>,
-    assigned_param_event_out_buffer: Option<SharedBuffer<ParamIoEvent>>,
+    assigned_automation_in_buffer: Option<(SharedBuffer<AutomationIoEvent>, bool)>,
+    assigned_automation_out_buffer: Option<SharedBuffer<AutomationIoEvent>>,
 ) -> Result<Task, GraphCompilerError> {
     let mut audio_in: SmallVec<[AudioPortBuffer; 2]> = SmallVec::new();
     let mut audio_out: SmallVec<[AudioPortBufferMut; 2]> = SmallVec::new();
@@ -139,8 +139,8 @@ pub(super) fn construct_activated_plugin_task(
             note_in_buffers,
             note_out_buffers,
             clear_note_in_buffers,
-            param_event_in_buffer: assigned_param_event_in_buffer,
-            param_event_out_buffer: assigned_param_event_out_buffer,
+            automation_in_buffer: assigned_automation_in_buffer,
+            automation_out_buffer: assigned_automation_out_buffer,
         },
         clear_audio_in_buffers,
     }))

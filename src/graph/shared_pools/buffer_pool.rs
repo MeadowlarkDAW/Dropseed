@@ -1,6 +1,6 @@
 use dropseed_plugin_api::buffer::{DebugBufferID, DebugBufferType, SharedBuffer};
 
-use crate::plugin_host::event_io_buffers::{NoteIoEvent, ParamIoEvent};
+use crate::plugin_host::event_io_buffers::{AutomationIoEvent, NoteIoEvent};
 
 pub(crate) struct BufferPool<T: Clone + Copy + Send + Sync + 'static> {
     pool: Vec<SharedBuffer<T>>,
@@ -67,7 +67,7 @@ impl<T: Clone + Copy + Send + Sync + 'static + Default> BufferPool<T> {
 pub(crate) struct SharedBufferPool {
     pub audio_buffer_pool: BufferPool<f32>,
     pub note_buffer_pool: BufferPool<NoteIoEvent>,
-    pub param_event_buffer_pool: BufferPool<ParamIoEvent>,
+    pub automation_buffer_pool: BufferPool<AutomationIoEvent>,
 }
 
 impl SharedBufferPool {
@@ -88,7 +88,7 @@ impl SharedBufferPool {
                 DebugBufferType::Note,
                 coll_handle.clone(),
             ),
-            param_event_buffer_pool: BufferPool::new(
+            automation_buffer_pool: BufferPool::new(
                 event_buffer_size,
                 DebugBufferType::Event,
                 coll_handle,
@@ -100,7 +100,7 @@ impl SharedBufferPool {
         &mut self,
         num_audio_buffers: usize,
         num_note_buffers: usize,
-        num_param_event_buffers: usize,
+        num_automation_buffers: usize,
     ) {
         if num_audio_buffers > self.audio_buffer_pool.pool.len() {
             // Cause the pool to allocate enough slots.
@@ -110,13 +110,13 @@ impl SharedBufferPool {
             // Cause the pool to allocate enough slots.
             let _ = self.note_buffer_pool.buffer_at_index(num_note_buffers - 1);
         }
-        if num_param_event_buffers > self.param_event_buffer_pool.pool.len() {
+        if num_automation_buffers > self.automation_buffer_pool.pool.len() {
             // Cause the pool to allocate enough slots.
-            let _ = self.param_event_buffer_pool.buffer_at_index(num_param_event_buffers - 1);
+            let _ = self.automation_buffer_pool.buffer_at_index(num_automation_buffers - 1);
         }
 
         self.audio_buffer_pool.pool.truncate(num_audio_buffers);
         self.note_buffer_pool.pool.truncate(num_note_buffers);
-        self.param_event_buffer_pool.pool.truncate(num_param_event_buffers);
+        self.automation_buffer_pool.pool.truncate(num_automation_buffers);
     }
 }

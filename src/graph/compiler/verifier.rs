@@ -160,17 +160,17 @@ impl Verifier {
                         });
                     }
                 }
-                Task::ParamEventSum(t) => {
+                Task::AutomationSum(t) => {
                     // This could be made just a warning and not an error, but it's still not what
                     // we want to happen.
-                    if t.event_in.len() < 2 {
+                    if t.input.len() < 2 {
                         return Err(VerifyScheduleError::SumNodeWithLessThanTwoInputs {
-                            num_inputs: t.event_in.len(),
+                            num_inputs: t.input.len(),
                             task_info: format!("{:?}", &task),
                         });
                     }
 
-                    for b in t.event_in.iter() {
+                    for b in t.input.iter() {
                         if !self.buffer_instances.insert(b.id()) {
                             return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
                                 buffer_id: b.id(),
@@ -178,9 +178,9 @@ impl Verifier {
                             });
                         }
                     }
-                    if !self.buffer_instances.insert(t.event_out.id()) {
+                    if !self.buffer_instances.insert(t.output.id()) {
                         return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                            buffer_id: t.event_out.id(),
+                            buffer_id: t.output.id(),
                             task_info: format!("{:?}", &task),
                         });
                     }
@@ -201,10 +201,10 @@ impl Verifier {
                         });
                     }
                 }
-                Task::ParamEventDelayComp(t) => {
-                    if t.event_in.id() == t.event_out.id() {
+                Task::AutomationDelayComp(t) => {
+                    if t.input.id() == t.output.id() {
                         return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                            buffer_id: t.event_in.id(),
+                            buffer_id: t.input.id(),
                             task_info: format!("{:?}", &task),
                         });
                     }
@@ -255,7 +255,7 @@ impl Verifier {
                             });
                         }
                     }
-                    if let Some(b) = &t.clear_param_event_out {
+                    if let Some(b) = &t.clear_automation_out {
                         if !self.buffer_instances.insert(b.id()) {
                             return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
                                 buffer_id: b.id(),
