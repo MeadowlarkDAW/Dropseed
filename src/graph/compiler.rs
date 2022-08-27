@@ -25,8 +25,7 @@ pub(super) fn compile_graph(
     verifier: &mut Verifier,
     coll_handle: &basedrop::Handle,
 ) -> Result<ProcessorSchedule, GraphCompilerError> {
-    let num_plugins = shared_pool.plugin_hosts.pool.len();
-    let mut tasks: Vec<Task> = Vec::with_capacity(num_plugins * 2);
+    let mut tasks: Vec<Task> = Vec::with_capacity(shared_pool.plugin_hosts.num_plugins() * 2);
 
     // The `audio_graph` crate compiles a schedule for us in its purest
     // "abstract" form (as a list of Node IDs with their corresponding
@@ -67,7 +66,6 @@ pub(super) fn compile_graph(
                     graph_in_out_task::construct_graph_in_task(
                         scheduled_node,
                         shared_pool,
-                        graph_in_id,
                         num_graph_in_audio_ports,
                     )?
                 } else if scheduled_node.id.0 == graph_out_id._node_id() {
@@ -77,7 +75,6 @@ pub(super) fn compile_graph(
                     graph_in_out_task::construct_graph_out_task(
                         scheduled_node,
                         shared_pool,
-                        graph_out_id,
                         num_graph_out_audio_ports,
                     )?
                 } else {

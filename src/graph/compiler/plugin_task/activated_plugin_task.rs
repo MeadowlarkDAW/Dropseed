@@ -17,12 +17,12 @@ use super::super::super::{ChannelID, PortType};
 pub(super) fn construct_activated_plugin_task(
     scheduled_node: &ScheduledNode,
     shared_pool: &GraphSharedPools,
-    plugin_id: PluginInstanceID,
+    plugin_id: &PluginInstanceID,
     shared_processor: &SharedPluginHostProcThread,
     audio_ports_ext: &PluginAudioPortsExt,
     note_ports_ext: &PluginNotePortsExt,
-    mut assigned_audio_buffers: FnvHashMap<ChannelID, (SharedBuffer<f32>, bool)>,
-    mut assigned_note_buffers: FnvHashMap<ChannelID, (SharedBuffer<NoteIoEvent>, bool)>,
+    assigned_audio_buffers: FnvHashMap<ChannelID, (SharedBuffer<f32>, bool)>,
+    assigned_note_buffers: FnvHashMap<ChannelID, (SharedBuffer<NoteIoEvent>, bool)>,
     assigned_automation_in_buffer: Option<(SharedBuffer<AutomationIoEvent>, bool)>,
     assigned_automation_out_buffer: Option<SharedBuffer<AutomationIoEvent>>,
 ) -> Result<Task, GraphCompilerError> {
@@ -132,7 +132,7 @@ pub(super) fn construct_activated_plugin_task(
     }
 
     Ok(Task::Plugin(PluginTask {
-        plugin_id,
+        plugin_id: plugin_id.clone(),
         shared_processor: shared_processor.clone(),
         buffers: ProcBuffers { audio_in, audio_out },
         event_buffers: PluginEventIoBuffers {

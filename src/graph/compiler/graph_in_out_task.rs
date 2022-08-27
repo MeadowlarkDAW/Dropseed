@@ -1,6 +1,5 @@
 use audio_graph::ScheduledNode;
 use dropseed_plugin_api::buffer::SharedBuffer;
-use dropseed_plugin_api::PluginInstanceID;
 use smallvec::{smallvec, SmallVec};
 
 use crate::processor_schedule::tasks::{GraphInTask, GraphOutTask, Task};
@@ -12,7 +11,6 @@ use super::super::PortType;
 pub(super) fn construct_graph_in_task(
     scheduled_node: &ScheduledNode,
     shared_pool: &mut GraphSharedPools,
-    graph_in_id: &PluginInstanceID,
     num_graph_in_audio_ports: usize,
 ) -> Result<Task, GraphCompilerError> {
     // --- Construct a map that maps the index (channel) of each port to its assigned buffer
@@ -67,7 +65,6 @@ pub(super) fn construct_graph_in_task(
 pub(super) fn construct_graph_out_task(
     scheduled_node: &ScheduledNode,
     shared_pool: &mut GraphSharedPools,
-    graph_out_id: &PluginInstanceID,
     num_graph_out_audio_ports: usize,
 ) -> Result<Task, GraphCompilerError> {
     // --- Construct a map that maps the index (channel) of each port to its assigned buffer

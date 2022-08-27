@@ -13,7 +13,7 @@ use meadowlark_core_types::time::SampleRate;
 use smallvec::SmallVec;
 
 use crate::engine::{OnIdleEvent, PluginActivatedStatus};
-use crate::graph::{ChannelID, PortType};
+use crate::graph::{ChannelID, DSEdgeID, PortType};
 
 use super::channel::{
     MainToProcParamValue, PlugHostChannelMainThread, PluginActiveState, SharedPluginHostProcThread,
@@ -282,6 +282,7 @@ impl PluginHostMainThread {
         min_frames: u32,
         max_frames: u32,
         graph_helper: &mut AudioGraphHelper,
+        edge_id_to_ds_edge_id: &mut FnvHashMap<EdgeID, DSEdgeID>,
         coll_handle: &basedrop::Handle,
     ) -> Result<PluginActivatedStatus, ActivatePluginError> {
         self.can_activate()?;
@@ -370,7 +371,7 @@ impl PluginHostMainThread {
                     None
                 };
 
-                let removed_edges = self.sync_ports_in_graph(graph_helper);
+                let removed_edges = self.sync_ports_in_graph(graph_helper, edge_id_to_ds_edge_id);
 
                 Ok(PluginActivatedStatus {
                     new_parameters: param_values,
@@ -437,6 +438,7 @@ impl PluginHostMainThread {
         coll_handle: &basedrop::Handle,
         graph_helper: &mut AudioGraphHelper,
         events_out: &mut SmallVec<[OnIdleEvent; 32]>,
+        edge_id_to_ds_edge_id: &mut FnvHashMap<EdgeID, DSEdgeID>,
     ) -> (OnIdleResult, SmallVec<[ParamModifiedInfo; 4]>) {
         let mut modified_params: SmallVec<[ParamModifiedInfo; 4]> = SmallVec::new();
 
@@ -511,6 +513,7 @@ impl PluginHostMainThread {
                         min_frames,
                         max_frames,
                         graph_helper,
+                        edge_id_to_ds_edge_id,
                         coll_handle,
                     ) {
                         Ok(r) => {
@@ -538,6 +541,7 @@ impl PluginHostMainThread {
                     min_frames,
                     max_frames,
                     graph_helper,
+                    edge_id_to_ds_edge_id,
                     coll_handle,
                 ) {
                     Ok(r) => {
@@ -593,7 +597,8 @@ impl PluginHostMainThread {
     pub(crate) fn sync_ports_in_graph(
         &mut self,
         graph_helper: &mut AudioGraphHelper,
-    ) -> Vec<EdgeID> {
+        edge_id_to_ds_edge_id: &mut FnvHashMap<EdgeID, DSEdgeID>,
+    ) -> Vec<DSEdgeID> {
         let mut id_alias_check: FnvHashSet<u32> = FnvHashSet::default();
         if let Some(audio_ports) = &self.audio_ports_ext {
             for audio_in_port in audio_ports.inputs.iter() {
@@ -870,14 +875,21 @@ impl PluginHostMainThread {
             }
         }
 
-        let mut removed_edges: Vec<EdgeID> = Vec::new();
-
+        let mut removed_edges: Vec<DSEdgeID> = Vec::new();
         for (_, port_to_remove_id) in prev_channel_ids.drain() {
-            removed_edges.append(
-                &mut graph_helper
-                    .remove_port(self.id._node_id().into(), port_to_remove_id)
-                    .unwrap(),
-            );
+            let removed_edges_res =
+                graph_helper.remove_port(self.id._node_id().into(), port_to_remove_id).unwrap();
+
+            for edge_id in removed_edges_res.iter() {
+                if let Some(ds_edge_id) = edge_id_to_ds_edge_id.remove(edge_id) {
+                    removed_edges.push(ds_edge_id);
+                } else {
+                    panic!(
+                        "Helper disconnected an edge that doesn't exist in graph: {:?}",
+                        edge_id
+                    );
+                }
+            }
 
             self.free_port_ids.push(port_to_remove_id);
         }

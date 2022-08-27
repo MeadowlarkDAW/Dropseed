@@ -1,4 +1,3 @@
-use audio_graph::EdgeID;
 use basedrop::{Collector, Shared, SharedCell};
 use fnv::FnvHashSet;
 use meadowlark_core_types::time::{SampleRate, Seconds};
@@ -19,7 +18,7 @@ use dropseed_plugin_api::transport::TempoMap;
 use dropseed_plugin_api::{DSPluginSaveState, HostInfo, PluginFactory, PluginInstanceID};
 
 use crate::engine::audio_thread::DSEngineAudioThread;
-use crate::graph::{AudioGraph, PluginEdges, PortType};
+use crate::graph::{AudioGraph, DSEdgeID, Edge};
 use crate::plugin_host::error::ActivatePluginError;
 use crate::plugin_host::{ParamModifiedInfo, PluginHostMainThread};
 use crate::plugin_scanner::{PluginScanner, ScanExternalPluginsRes};
@@ -27,7 +26,7 @@ use crate::processor_schedule::TransportHandle;
 use crate::utils::thread_id::SharedThreadIDs;
 
 use super::error::{EngineCrashError, NewPluginInstanceError};
-use super::request::{EdgeReq, EdgeReqPortID, ModifyGraphRequest, PluginIDReq};
+use super::request::{ModifyGraphRequest, PluginIDReq};
 
 pub struct DSEngineMainThread {
     audio_graph: Option<AudioGraph>,
@@ -205,10 +204,10 @@ impl DSEngineMainThread {
         let event_buffer_size = settings.event_buffer_size;
         let transport_declick_time = settings.transport_declick_time;
 
-        let (mut audio_graph, shared_schedule, transport_handle) = AudioGraph::new(
+        let (audio_graph, shared_schedule, transport_handle) = AudioGraph::new(
             self.collector.handle(),
-            num_audio_in_channels,
-            num_audio_out_channels,
+            usize::from(num_audio_in_channels),
+            usize::from(num_audio_out_channels),
             sample_rate,
             min_frames,
             max_frames,
@@ -217,43 +216,6 @@ impl DSEngineMainThread {
             self.thread_ids.clone(),
             transport_declick_time,
         );
-
-        let graph_in_node_id = audio_graph.graph_in_id().clone();
-        let graph_out_node_id = audio_graph.graph_out_id().clone();
-
-        // TODO: Remove this once compiler is fixed.
-        audio_graph
-            .connect_edge(
-                &EdgeReq {
-                    edge_type: PortType::Audio,
-                    src_plugin_id: PluginIDReq::Added(0),
-                    dst_plugin_id: PluginIDReq::Added(0),
-                    src_port_id: EdgeReqPortID::Main,
-                    src_port_channel: 0,
-                    dst_port_id: EdgeReqPortID::Main,
-                    dst_port_channel: 0,
-                    log_error_on_fail: true,
-                },
-                &graph_in_node_id,
-                &graph_out_node_id,
-            )
-            .unwrap();
-        audio_graph
-            .connect_edge(
-                &EdgeReq {
-                    edge_type: PortType::Audio,
-                    src_plugin_id: PluginIDReq::Added(0),
-                    dst_plugin_id: PluginIDReq::Added(0),
-                    src_port_id: EdgeReqPortID::Main,
-                    src_port_channel: 1,
-                    dst_port_id: EdgeReqPortID::Main,
-                    dst_port_channel: 1,
-                    log_error_on_fail: true,
-                },
-                &graph_in_node_id,
-                &graph_out_node_id,
-            )
-            .unwrap();
 
         self.audio_graph = Some(audio_graph);
 
@@ -320,17 +282,17 @@ impl DSEngineMainThread {
     /// This will return `None` if the engine is deactivated.
     pub fn modify_graph(&mut self, mut request: ModifyGraphRequest) -> Option<ModifyGraphRes> {
         if let Some(audio_graph) = &mut self.audio_graph {
-            let mut affected_plugins: FnvHashSet<PluginInstanceID> = FnvHashSet::default();
+            let mut removed_edges: FnvHashSet<DSEdgeID> = FnvHashSet::default();
+            let mut new_edges: Vec<Edge> = Vec::new();
 
-            for edge in request.disconnect_edges.iter() {
-                if audio_graph.disconnect_edge(edge) {
-                    let _ = affected_plugins.insert(edge.src_plugin_id.clone());
-                    let _ = affected_plugins.insert(edge.dst_plugin_id.clone());
+            for ds_edge_id in request.disconnect_edges.iter() {
+                if audio_graph.disconnect_edge(*ds_edge_id) {
+                    removed_edges.insert(*ds_edge_id);
                 }
             }
 
-            let mut removed_plugins = audio_graph
-                .remove_plugin_instances(&request.remove_plugin_instances, &mut affected_plugins);
+            let (mut removed_plugins, removed_edges) =
+                audio_graph.remove_plugin_instances(&request.remove_plugin_instances);
 
             let new_plugins_res: Vec<NewPluginRes> = request
                 .add_plugin_instances
@@ -340,13 +302,8 @@ impl DSEngineMainThread {
                 })
                 .collect();
 
-            let new_plugin_ids: Vec<PluginInstanceID> = new_plugins_res
-                .iter()
-                .map(|res| {
-                    let _ = affected_plugins.insert(res.plugin_id.clone());
-                    res.plugin_id.clone()
-                })
-                .collect();
+            let new_plugin_ids: Vec<PluginInstanceID> =
+                new_plugins_res.iter().map(|res| res.plugin_id.clone()).collect();
 
             for edge in request.connect_new_edges.iter() {
                 let src_plugin_id = match &edge.src_plugin_id {
@@ -379,42 +336,24 @@ impl DSEngineMainThread {
                     PluginIDReq::Existing(id) => id,
                 };
 
-                if let Err(e) = audio_graph.connect_edge(edge, src_plugin_id, dst_plugin_id) {
-                    if edge.log_error_on_fail {
-                        log::error!("Could not connect edge: {}", e);
-                    } else {
-                        #[cfg(debug_assertions)]
-                        log::debug!("Could not connect edge: {}", e);
-                    }
-                } else {
-                    // These will always be true.
-                    if let PluginIDReq::Existing(id) = &edge.src_plugin_id {
-                        let _ = affected_plugins.insert(id.clone());
-                    }
-                    if let PluginIDReq::Existing(id) = &edge.dst_plugin_id {
-                        let _ = affected_plugins.insert(id.clone());
+                match audio_graph.connect_edge(edge, src_plugin_id, dst_plugin_id) {
+                    Ok(new_edge) => new_edges.push(new_edge),
+                    Err(e) => {
+                        if edge.log_error_on_fail {
+                            log::error!("Could not connect edge: {}", e);
+                        } else {
+                            #[cfg(debug_assertions)]
+                            log::debug!("Could not connect edge: {}", e);
+                        }
                     }
                 }
             }
 
-            // Don't include the graph in/out "plugins" in the result.
-            let _ = affected_plugins.remove(audio_graph.graph_in_id());
-            let _ = affected_plugins.remove(audio_graph.graph_out_id());
-
-            let updated_plugin_edges: Vec<(PluginInstanceID, PluginEdges)> = affected_plugins
-                .iter()
-                .filter(|plugin_id| !removed_plugins.contains(plugin_id))
-                .map(|plugin_id| {
-                    (plugin_id.clone(), audio_graph.get_plugin_edges(plugin_id).unwrap())
-                })
-                .collect();
-
-            let removed_plugins = removed_plugins.drain().collect();
-
             let res = ModifyGraphRes {
                 new_plugins: new_plugins_res,
-                removed_plugins,
-                updated_plugin_edges,
+                removed_plugins: removed_plugins.drain().collect(),
+                new_edges,
+                removed_edges,
             };
 
             // TODO: Compile audio graph in a separate thread?
@@ -657,7 +596,7 @@ pub struct PluginActivatedStatus {
 
     /// Any edges that were removed as a result of the plugin removing
     /// some of its ports.
-    pub removed_edges: Vec<EdgeID>,
+    pub removed_edges: Vec<DSEdgeID>,
 }
 
 #[derive(Debug)]
@@ -692,12 +631,16 @@ pub struct ModifyGraphRes {
     /// Any new plugins that were added to the graph.
     pub new_plugins: Vec<NewPluginRes>,
 
-    /// Any plugins that were removed from the graph.
+    /// Any plugins that were successfully removed from the graph.
     pub removed_plugins: Vec<PluginInstanceID>,
 
-    /// All of the plugins which have had their edges (port connections)
-    /// changed as a result of this request.
-    pub updated_plugin_edges: Vec<(PluginInstanceID, PluginEdges)>,
+    /// All of the edges (port connections) that have been successfully
+    /// connected as a result of this operation.
+    pub new_edges: Vec<Edge>,
+
+    /// All of the edges (port connections) that have been removed as
+    /// a result of this operation.
+    pub removed_edges: Vec<DSEdgeID>,
 }
 
 #[derive(Debug)]

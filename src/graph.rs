@@ -1,6 +1,8 @@
-use audio_graph::{error::AddEdgeError, AudioGraphHelper, EdgeID, NodeID, PortID, TypeIdx};
+use std::hash::Hash;
+
+use audio_graph::{error::AddEdgeError, AudioGraphHelper, EdgeID, PortID, TypeIdx};
 use basedrop::Shared;
-use fnv::FnvHashSet;
+use fnv::{FnvHashMap, FnvHashSet};
 use meadowlark_core_types::time::SampleRate;
 use meadowlark_core_types::time::Seconds;
 use smallvec::SmallVec;
@@ -14,7 +16,7 @@ pub(crate) mod shared_pools;
 use dropseed_plugin_api::transport::TempoMap;
 use dropseed_plugin_api::{DSPluginSaveState, PluginInstanceID, PluginInstanceType};
 
-use crate::engine::request::{EdgeReq, EdgeReqPortID};
+use crate::engine::request::{ConnectEdgeReq, EdgeReqPortID};
 use crate::engine::{NewPluginRes, OnIdleEvent, PluginStatus};
 use crate::plugin_host::{OnIdleResult, PluginHostMainThread};
 use crate::plugin_scanner::PluginScanner;
@@ -83,15 +85,13 @@ pub(crate) struct AudioGraph {
     graph_helper: AudioGraphHelper,
     coll_handle: basedrop::Handle,
 
-    graph_in_channels: u16,
-    graph_out_channels: u16,
-
     graph_in_id: PluginInstanceID,
     graph_out_id: PluginInstanceID,
-    graph_in_audio_out_port_ids: Vec<PortID>,
-    graph_out_audio_in_port_ids: Vec<PortID>,
+    graph_in_num_audio_channels: usize,
+    graph_out_num_audio_channels: usize,
 
-    temp_rdn: Shared<String>,
+    edge_id_to_ds_edge_id: FnvHashMap<EdgeID, DSEdgeID>,
+    next_ds_edge_id: u64,
 
     sample_rate: SampleRate,
     min_frames: u32,
@@ -101,8 +101,8 @@ pub(crate) struct AudioGraph {
 impl AudioGraph {
     pub fn new(
         coll_handle: basedrop::Handle,
-        graph_in_channels: u16,
-        graph_out_channels: u16,
+        graph_in_channels: usize,
+        graph_out_channels: usize,
         sample_rate: SampleRate,
         min_frames: u32,
         max_frames: u32,
@@ -136,8 +136,6 @@ impl AudioGraph {
         let graph_in_rdn = Shared::new(&coll_handle, String::from("app.meadowlark.graph_in_node"));
         let graph_out_rdn =
             Shared::new(&coll_handle, String::from("app.meadowlark.graph_out_node"));
-        let temp_rdn =
-            Shared::new(&coll_handle, String::from("app.meadowlark.temporary_plugin_rdn"));
 
         let graph_in_node_id = graph_helper.add_node(0.0);
         let graph_out_node_id = graph_helper.add_node(0.0);
@@ -160,13 +158,12 @@ impl AudioGraph {
             verifier: Verifier::new(),
             graph_helper,
             coll_handle,
-            graph_in_channels,
-            graph_out_channels,
+            graph_in_num_audio_channels: graph_in_channels,
+            graph_out_num_audio_channels: graph_out_channels,
             graph_in_id,
             graph_out_id,
-            graph_in_audio_out_port_ids: Vec::new(),
-            graph_out_audio_in_port_ids: Vec::new(),
-            temp_rdn,
+            edge_id_to_ds_edge_id: FnvHashMap::default(),
+            next_ds_edge_id: 0,
             sample_rate,
             min_frames,
             max_frames,
@@ -202,8 +199,7 @@ impl AudioGraph {
             }
         }
 
-        if self.shared_pools.plugin_hosts.pool.insert(plugin_id.clone(), res.plugin_host).is_some()
-        {
+        if self.shared_pools.plugin_hosts.insert(plugin_id.clone(), res.plugin_host).is_some() {
             panic!("Something went wrong when allocating a new slot for a plugin");
         }
 
@@ -217,12 +213,7 @@ impl AudioGraph {
     }
 
     pub fn activate_plugin_instance(&mut self, id: &PluginInstanceID) -> Result<PluginStatus, ()> {
-        let plugin_host = if let Some(plugin_host) = self.shared_pools.plugin_hosts.pool.get_mut(id)
-        {
-            plugin_host
-        } else {
-            return Err(());
-        };
+        let plugin_host = self.shared_pools.plugin_hosts.get_mut(id).ok_or(())?;
 
         if let Err(e) = plugin_host.can_activate() {
             return Ok(PluginStatus::ActivationError(e));
@@ -233,6 +224,7 @@ impl AudioGraph {
             self.min_frames as u32,
             self.max_frames as u32,
             &mut self.graph_helper,
+            &mut self.edge_id_to_ds_edge_id,
             &self.coll_handle,
         ) {
             Ok(res) => PluginStatus::Activated(res),
@@ -247,16 +239,18 @@ impl AudioGraph {
     /// This will also automatically disconnect all edges that were connected to these
     /// plugins.
     ///
-    /// Requests to remove the "graph input/output" nodes with the IDs `AudioGraph::graph_in_node_id()`
-    /// and `AudioGraph::graph_out_node_id()` will be ignored.
+    /// Requests to remove the "graph input/output" nodes with the IDs
+    /// `AudioGraph::graph_in_node_id()` and `AudioGraph::graph_out_node_id()` will be
+    /// ignored.
+    ///
+    /// This returns a list of all the plugins that were successfully removed, as well
+    /// as a list of all edges that were removed as a result of the operation.
     pub fn remove_plugin_instances(
         &mut self,
         plugin_ids: &[PluginInstanceID],
-        affected_plugins: &mut FnvHashSet<PluginInstanceID>,
-    ) -> (FnvHashSet<PluginInstanceID>, Vec<EdgeID>) {
+    ) -> (FnvHashSet<PluginInstanceID>, Vec<DSEdgeID>) {
         let mut removed_plugins: FnvHashSet<PluginInstanceID> = FnvHashSet::default();
-
-        let mut removed_edges: Vec<EdgeID> = Vec::new();
+        let mut removed_edges: Vec<DSEdgeID> = Vec::new();
 
         for id in plugin_ids.iter() {
             if id == &self.graph_in_id || id == &self.graph_out_id {
@@ -265,24 +259,30 @@ impl AudioGraph {
             }
 
             if removed_plugins.insert(id.clone()) {
-                if let Ok(edges) = self.get_plugin_edges(&id) {
-                    for e in edges.incoming {
-                        let _ = affected_plugins.insert(e.src_plugin_id.clone());
-                    }
-                    for e in edges.outgoing {
-                        let _ = affected_plugins.insert(e.dst_plugin_id.clone());
-                    }
+                if let Some(plugin_host) = self.shared_pools.plugin_hosts.get_mut(&id) {
+                    plugin_host.schedule_remove();
 
-                    if let Some(plugin_host) = self.shared_pools.plugin_hosts.pool.get_mut(&id) {
-                        plugin_host.schedule_remove();
+                    let removed_edges_res =
+                        self.graph_helper.remove_node(id._node_id().into()).unwrap();
+                    for edge_id in removed_edges_res.iter() {
+                        if let Some(ds_edge_id) = self.edge_id_to_ds_edge_id.remove(edge_id) {
+                            removed_edges.push(ds_edge_id);
+                        } else {
+                            panic!(
+                                "Helper disconnected an edge that doesn't exist in graph: {:?}",
+                                edge_id
+                            );
+                        }
                     }
-
-                    removed_edges
-                        .append(&mut self.graph_helper.remove_node(id._node_id().into()).unwrap());
                 } else {
-                    let _ = removed_plugins.remove(&id);
-                    log::warn!("Ignored request to remove plugin instance {:?}: Plugin is already removed.", id);
+                    removed_plugins.remove(&id);
+                    log::warn!(
+                        "Ignored request to remove plugin instance {:?}: plugin is already removed",
+                        id
+                    );
                 }
+            } else {
+                log::warn!("Ignored duplicate request to remove plugin instance {:?}", id);
             }
         }
 
@@ -291,19 +291,16 @@ impl AudioGraph {
 
     pub fn connect_edge(
         &mut self,
-        edge: &EdgeReq,
+        edge: &ConnectEdgeReq,
         src_plugin_id: &PluginInstanceID,
         dst_plugin_id: &PluginInstanceID,
-        check_for_cycles: bool,
-    ) -> Result<EdgeID, ConnectEdgeError> {
-        let src_port_id = if src_plugin_id == &self.graph_in_id {
+    ) -> Result<Edge, ConnectEdgeError> {
+        let (src_port_id, src_port_stable_id) = if src_plugin_id == &self.graph_in_id {
             match &edge.src_port_id {
                 EdgeReqPortID::Main => match edge.edge_type {
                     PortType::Audio => {
-                        if let Some(port_id) =
-                            self.graph_in_audio_out_port_ids.get(usize::from(edge.src_channel))
-                        {
-                            *port_id
+                        if usize::from(edge.src_port_channel) < self.graph_in_num_audio_channels {
+                            (PortID(edge.src_port_channel as u32), edge.src_port_channel as u32)
                         } else {
                             return Err(ConnectEdgeError {
                                 error_type: ConnectEdgeErrorType::SrcPortDoesNotExist,
@@ -333,26 +330,24 @@ impl AudioGraph {
                     });
                 }
             }
-        } else if let Some(plugin_host) = self.shared_pools.plugin_hosts.pool.get(src_plugin_id) {
+        } else if let Some(plugin_host) = self.shared_pools.plugin_hosts.get(src_plugin_id) {
             match &edge.src_port_id {
                 EdgeReqPortID::Main => match edge.edge_type {
                     PortType::Audio => {
                         if let Some(port_id) = plugin_host
                             .port_ids()
                             .main_audio_out_port_ids
-                            .get(usize::from(edge.src_channel))
+                            .get(usize::from(edge.src_port_channel))
                         {
-                            *port_id
-                        } else {
-                            return Err(ConnectEdgeError {
-                                error_type: ConnectEdgeErrorType::SrcPortDoesNotExist,
-                                edge: edge.clone(),
-                            });
-                        }
-                    }
-                    PortType::Automation => {
-                        if let Some(port_id) = plugin_host.port_ids().automation_out_port_id {
-                            port_id
+                            (
+                                *port_id,
+                                plugin_host
+                                    .port_ids()
+                                    .port_id_to_channel_id
+                                    .get(port_id)
+                                    .unwrap()
+                                    .stable_id,
+                            )
                         } else {
                             return Err(ConnectEdgeError {
                                 error_type: ConnectEdgeErrorType::SrcPortDoesNotExist,
@@ -362,7 +357,25 @@ impl AudioGraph {
                     }
                     PortType::Note => {
                         if let Some(port_id) = plugin_host.port_ids().main_note_out_port_id {
-                            port_id
+                            (
+                                port_id,
+                                plugin_host
+                                    .port_ids()
+                                    .port_id_to_channel_id
+                                    .get(&port_id)
+                                    .unwrap()
+                                    .stable_id,
+                            )
+                        } else {
+                            return Err(ConnectEdgeError {
+                                error_type: ConnectEdgeErrorType::SrcPortDoesNotExist,
+                                edge: edge.clone(),
+                            });
+                        }
+                    }
+                    PortType::Automation => {
+                        if let Some(port_id) = plugin_host.port_ids().automation_out_port_id {
+                            (port_id, 0) // Automation ports always have a stable ID of 0
                         } else {
                             return Err(ConnectEdgeError {
                                 error_type: ConnectEdgeErrorType::SrcPortDoesNotExist,
@@ -376,13 +389,13 @@ impl AudioGraph {
                         port_type: edge.edge_type,
                         stable_id: *id,
                         is_input: false,
-                        channel: edge.src_channel,
+                        channel: edge.src_port_channel,
                     };
 
                     if let Some(port_id) =
                         plugin_host.port_ids().channel_id_to_port_id.get(&src_channel_id)
                     {
-                        *port_id
+                        (*port_id, *id)
                     } else {
                         return Err(ConnectEdgeError {
                             error_type: ConnectEdgeErrorType::SrcPortDoesNotExist,
@@ -398,14 +411,12 @@ impl AudioGraph {
             });
         };
 
-        let dst_port_id = if dst_plugin_id == &self.graph_out_id {
+        let (dst_port_id, dst_port_stable_id) = if dst_plugin_id == &self.graph_out_id {
             match &edge.dst_port_id {
                 EdgeReqPortID::Main => match edge.edge_type {
                     PortType::Audio => {
-                        if let Some(port_id) =
-                            self.graph_out_audio_in_port_ids.get(usize::from(edge.dst_channel))
-                        {
-                            *port_id
+                        if usize::from(edge.dst_port_channel) < self.graph_out_num_audio_channels {
+                            (PortID(edge.dst_port_channel as u32), edge.dst_port_channel as u32)
                         } else {
                             return Err(ConnectEdgeError {
                                 error_type: ConnectEdgeErrorType::DstPortDoesNotExist,
@@ -413,14 +424,14 @@ impl AudioGraph {
                             });
                         }
                     }
-                    PortType::Automation => {
+                    PortType::Note => {
+                        // TODO: Note in/out ports on graph in/out nodes.
                         return Err(ConnectEdgeError {
                             error_type: ConnectEdgeErrorType::DstPortDoesNotExist,
                             edge: edge.clone(),
                         });
                     }
-                    PortType::Note => {
-                        // TODO: Note in/out ports on graph in/out nodes.
+                    PortType::Automation => {
                         return Err(ConnectEdgeError {
                             error_type: ConnectEdgeErrorType::DstPortDoesNotExist,
                             edge: edge.clone(),
@@ -435,26 +446,24 @@ impl AudioGraph {
                     });
                 }
             }
-        } else if let Some(plugin_host) = self.shared_pools.plugin_hosts.pool.get(dst_plugin_id) {
+        } else if let Some(plugin_host) = self.shared_pools.plugin_hosts.get(dst_plugin_id) {
             match &edge.dst_port_id {
                 EdgeReqPortID::Main => match edge.edge_type {
                     PortType::Audio => {
                         if let Some(port_id) = plugin_host
                             .port_ids()
                             .main_audio_in_port_ids
-                            .get(usize::from(edge.dst_channel))
+                            .get(usize::from(edge.dst_port_channel))
                         {
-                            *port_id
-                        } else {
-                            return Err(ConnectEdgeError {
-                                error_type: ConnectEdgeErrorType::DstPortDoesNotExist,
-                                edge: edge.clone(),
-                            });
-                        }
-                    }
-                    PortType::Automation => {
-                        if let Some(port_id) = plugin_host.port_ids().automation_in_port_id {
-                            port_id
+                            (
+                                *port_id,
+                                plugin_host
+                                    .port_ids()
+                                    .port_id_to_channel_id
+                                    .get(port_id)
+                                    .unwrap()
+                                    .stable_id,
+                            )
                         } else {
                             return Err(ConnectEdgeError {
                                 error_type: ConnectEdgeErrorType::DstPortDoesNotExist,
@@ -464,7 +473,25 @@ impl AudioGraph {
                     }
                     PortType::Note => {
                         if let Some(port_id) = plugin_host.port_ids().main_note_in_port_id {
-                            port_id
+                            (
+                                port_id,
+                                plugin_host
+                                    .port_ids()
+                                    .port_id_to_channel_id
+                                    .get(&port_id)
+                                    .unwrap()
+                                    .stable_id,
+                            )
+                        } else {
+                            return Err(ConnectEdgeError {
+                                error_type: ConnectEdgeErrorType::DstPortDoesNotExist,
+                                edge: edge.clone(),
+                            });
+                        }
+                    }
+                    PortType::Automation => {
+                        if let Some(port_id) = plugin_host.port_ids().automation_in_port_id {
+                            (port_id, 0) // Automation ports always have a stable ID of 0
                         } else {
                             return Err(ConnectEdgeError {
                                 error_type: ConnectEdgeErrorType::DstPortDoesNotExist,
@@ -478,13 +505,13 @@ impl AudioGraph {
                         port_type: edge.edge_type,
                         stable_id: *id,
                         is_input: true,
-                        channel: edge.dst_channel,
+                        channel: edge.dst_port_channel,
                     };
 
                     if let Some(port_id) =
                         plugin_host.port_ids().channel_id_to_port_id.get(&dst_channel_id)
                     {
-                        *port_id
+                        (*port_id, *id)
                     } else {
                         return Err(ConnectEdgeError {
                             error_type: ConnectEdgeErrorType::DstPortDoesNotExist,
@@ -505,9 +532,28 @@ impl AudioGraph {
             src_port_id,
             dst_plugin_id._node_id().into(),
             dst_port_id,
-            check_for_cycles,
+            edge.check_for_cycles,
         ) {
-            Ok(edge_id) => Ok(edge_id),
+            Ok(edge_id) => {
+                let ds_edge_id = DSEdgeID { unique_id: self.next_ds_edge_id, edge_id };
+                self.next_ds_edge_id += 1;
+
+                if self.edge_id_to_ds_edge_id.insert(edge_id, ds_edge_id).is_some() {
+                    panic!("Something went wrong while connecting edge {:?}", edge_id);
+                }
+
+                Ok(Edge {
+                    id: ds_edge_id,
+
+                    edge_type: edge.edge_type,
+
+                    src_plugin_id: src_plugin_id.clone(),
+                    dst_plugin_id: dst_plugin_id.clone(),
+
+                    src_port_id: src_port_stable_id,
+                    dst_port_id: dst_port_stable_id,
+                })
+            }
             Err(AddEdgeError::CycleDetected) => Err(ConnectEdgeError {
                 error_type: ConnectEdgeErrorType::Cycle,
                 edge: edge.clone(),
@@ -527,19 +573,26 @@ impl AudioGraph {
         }
     }
 
-    pub fn disconnect_edge(&mut self, edge_id: EdgeID) -> bool {
-        if self.graph_helper.remove_edge(edge_id).is_ok() {
-            log::trace!("Successfully disconnected edge: {:?}", edge_id);
-            true
+    pub fn disconnect_edge(&mut self, ds_edge_id: DSEdgeID) -> bool {
+        if self.edge_id_to_ds_edge_id.remove(&ds_edge_id.edge_id).is_some() {
+            if self.graph_helper.remove_edge(ds_edge_id.edge_id).is_ok() {
+                log::trace!("Successfully disconnected edge: {:?}", ds_edge_id);
+                true
+            } else {
+                panic!("Unexpected error while disconnecting edge in graph: {:?}", ds_edge_id);
+            }
         } else {
-            log::warn!("Could not disconnect edge: {:?}: Edge was not found in the graph", edge_id);
+            log::warn!(
+                "Could not disconnect edge: {:?}: Edge was not found in the graph",
+                ds_edge_id
+            );
             false
         }
     }
 
     pub fn reset(&mut self) {
         // Try to gracefully remove all existing plugins.
-        for plugin_host in self.shared_pools.plugin_hosts.pool.values_mut() {
+        for plugin_host in self.shared_pools.plugin_hosts.iter_mut() {
             plugin_host.schedule_remove();
         }
 
@@ -552,8 +605,7 @@ impl AudioGraph {
             const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
             // Wait for all plugins to be removed.
-            while !self.shared_pools.plugin_hosts.pool.is_empty() && start_time.elapsed() < TIMEOUT
-            {
+            while !self.shared_pools.plugin_hosts.is_empty() && start_time.elapsed() < TIMEOUT {
                 std::thread::sleep(std::time::Duration::from_millis(10));
 
                 let mut _events_out: SmallVec<[OnIdleEvent; 32]> = SmallVec::new();
@@ -561,7 +613,7 @@ impl AudioGraph {
                 let _ = self.on_idle(&mut _events_out);
             }
 
-            if self.shared_pools.plugin_hosts.pool.is_empty() {
+            if self.shared_pools.plugin_hosts.is_empty() {
                 log::error!("Timed out while removing all plugins");
             }
         }
@@ -574,8 +626,9 @@ impl AudioGraph {
             &self.coll_handle,
         );
 
-        self.shared_pools.plugin_hosts.pool.clear();
-        self.shared_pools.buffers.remove_excess_buffers(0, 0, 0, 0);
+        self.shared_pools.plugin_hosts.clear();
+        self.shared_pools.buffers.set_num_buffers(0, 0, 0);
+        self.edge_id_to_ds_edge_id.clear();
 
         self.graph_helper = AudioGraphHelper::new(PortType::NUM_TYPES);
 
@@ -597,28 +650,15 @@ impl AudioGraph {
             Shared::clone(self.graph_out_id.rdn()),
         );
 
-        self.graph_in_audio_out_port_ids.clear();
-        self.graph_out_audio_in_port_ids.clear();
-
-        for i in 0..self.graph_in_channels {
-            let channel_id =
-                ChannelID { port_type: PortType::Audio, stable_id: 0, is_input: false, channel: i };
-
+        for i in 0..self.graph_in_num_audio_channels as u16 {
             self.graph_helper
                 .add_port(graph_in_node_id, PortID(i as u32), PortType::Audio.as_type_idx(), false)
                 .unwrap();
-
-            self.graph_in_audio_out_port_ids.push(PortID(i as u32));
         }
-        for i in 0..self.graph_out_channels {
-            let channel_id =
-                ChannelID { port_type: PortType::Audio, stable_id: 0, is_input: true, channel: i };
-
+        for i in 0..self.graph_out_num_audio_channels as u16 {
             self.graph_helper
                 .add_port(graph_out_node_id, PortID(i as u32), PortType::Audio.as_type_idx(), true)
                 .unwrap();
-
-            self.graph_out_audio_in_port_ids.push(PortID(i as u32));
         }
     }
 
@@ -632,8 +672,8 @@ impl AudioGraph {
             &mut self.graph_helper,
             &self.graph_in_id,
             &self.graph_out_id,
-            &self.graph_in_audio_out_port_ids,
-            &self.graph_out_audio_in_port_ids,
+            self.graph_in_num_audio_channels,
+            self.graph_out_num_audio_channels,
             &mut self.verifier,
             &self.coll_handle,
         ) {
@@ -659,32 +699,35 @@ impl AudioGraph {
     }
 
     pub fn collect_save_states(&mut self) -> Vec<(PluginInstanceID, DSPluginSaveState)> {
-        let mut res: Vec<(PluginInstanceID, DSPluginSaveState)> = Vec::new();
-
-        for plugin_host in self.shared_pools.plugin_hosts.pool.values_mut() {
-            if plugin_host.is_save_state_dirty() {
-                res.push((plugin_host.id().clone(), plugin_host.collect_save_state()));
-            }
-        }
-
-        res
+        self.shared_pools
+            .plugin_hosts
+            .iter_mut()
+            .filter_map(|plugin_host| {
+                if plugin_host.is_save_state_dirty() {
+                    Some((plugin_host.id().clone(), plugin_host.collect_save_state()))
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     pub fn on_idle(&mut self, mut events_out: &mut SmallVec<[OnIdleEvent; 32]>) -> bool {
         let mut plugins_to_remove: SmallVec<[PluginInstanceID; 4]> = SmallVec::new();
-
         let mut recompile_graph = false;
 
         // TODO: Optimize by using some kind of hashmap queue that only iterates over the
         // plugins that have non-zero host request flags, instead of iterating over every
         // plugin every time?
-        for plugin_host in self.shared_pools.plugin_hosts.pool.values_mut() {
+        for plugin_host in self.shared_pools.plugin_hosts.iter_mut() {
             let (res, modified_params) = plugin_host.on_idle(
                 self.sample_rate,
                 self.min_frames,
                 self.max_frames,
                 &self.coll_handle,
+                &mut self.graph_helper,
                 &mut events_out,
+                &mut self.edge_id_to_ds_edge_id,
             );
 
             match res {
@@ -700,8 +743,6 @@ impl AudioGraph {
                     });
                 }
                 OnIdleResult::PluginActivated(status) => {
-                    plugin_host.sync_ports_in_graph(&mut self.graph_helper);
-
                     recompile_graph = true;
 
                     events_out.push(OnIdleEvent::PluginActivated {
@@ -734,27 +775,27 @@ impl AudioGraph {
         }
 
         for plugin in plugins_to_remove.iter() {
-            let _ = self.shared_pools.plugin_hosts.pool.remove(plugin);
+            self.shared_pools.plugin_hosts.remove(plugin);
         }
 
         recompile_graph
     }
 
     pub fn update_tempo_map(&mut self, new_tempo_map: Shared<TempoMap>) {
-        for plugin_host in self.shared_pools.plugin_hosts.pool.values_mut() {
+        for plugin_host in self.shared_pools.plugin_hosts.iter_mut() {
             plugin_host.update_tempo_map(&new_tempo_map);
         }
     }
 
     pub fn get_plugin_host(&self, id: &PluginInstanceID) -> Option<&PluginHostMainThread> {
-        self.shared_pools.plugin_hosts.pool.get(id)
+        self.shared_pools.plugin_hosts.get(id)
     }
 
     pub fn get_plugin_host_mut(
         &mut self,
         id: &PluginInstanceID,
     ) -> Option<&mut PluginHostMainThread> {
-        self.shared_pools.plugin_hosts.pool.get_mut(id)
+        self.shared_pools.plugin_hosts.get_mut(id)
     }
 
     pub fn graph_in_id(&self) -> &PluginInstanceID {
@@ -790,16 +831,27 @@ impl PluginEdges {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DSEdgeID {
+    pub(crate) unique_id: u64,
+    pub(crate) edge_id: EdgeID,
+}
+
+impl Hash for DSEdgeID {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.unique_id.hash(state)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Edge {
+    pub id: DSEdgeID,
+
     pub edge_type: PortType,
 
     pub src_plugin_id: PluginInstanceID,
     pub dst_plugin_id: PluginInstanceID,
 
-    pub src_stable_id: u32,
-    pub src_channel: u16,
-
-    pub dst_stable_id: u32,
-    pub dst_channel: u16,
+    pub src_port_id: u32,
+    pub dst_port_id: u32,
 }

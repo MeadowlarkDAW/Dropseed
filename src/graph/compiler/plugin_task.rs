@@ -18,7 +18,7 @@ pub(super) fn construct_plugin_task(
 ) -> Result<Task, GraphCompilerError> {
     // --- Get port info and processor from the plugin host ---------------------------------
 
-    let plugin_host = shared_pool.plugin_hosts.pool.get(&scheduled_node.id).ok_or(
+    let plugin_host = shared_pool.plugin_hosts.get_by_node_id(&scheduled_node.id).ok_or(
         GraphCompilerError::UnexpectedError(format!(
             "Abstract schedule assigned a node that doesn't exist: {:?}",
             scheduled_node
@@ -27,8 +27,6 @@ pub(super) fn construct_plugin_task(
 
     let plugin_id = plugin_host.id();
     let port_ids = plugin_host.port_ids();
-    let num_audio_in_channels = plugin_host.num_audio_in_channels();
-    let num_audio_out_channels = plugin_host.num_audio_out_channels();
     let maybe_shared_processor = plugin_host.shared_processor();
     let maybe_audio_ports_ext = plugin_host.audio_ports_ext();
     let maybe_note_ports_ext = plugin_host.note_ports_ext();
@@ -135,7 +133,7 @@ pub(super) fn construct_plugin_task(
         activated_plugin_task::construct_activated_plugin_task(
             scheduled_node,
             shared_pool,
-            *plugin_id,
+            plugin_id,
             maybe_shared_processor.as_ref().unwrap(),
             maybe_audio_ports_ext.as_ref().unwrap(),
             maybe_note_ports_ext.as_ref().unwrap(),
