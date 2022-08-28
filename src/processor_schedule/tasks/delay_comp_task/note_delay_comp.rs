@@ -1,8 +1,10 @@
 use dropseed_plugin_api::buffer::SharedBuffer;
 use dropseed_plugin_api::ProcInfo;
+use basedrop::Shared;
+use atomic_refcell::{AtomicRefCell, AtomicRefMut};
 
 use crate::{
-    graph::shared_pools::SharedNoteDelayCompNode, plugin_host::event_io_buffers::NoteIoEvent,
+    plugin_host::event_io_buffers::NoteIoEvent,
 };
 
 pub(crate) struct NoteDelayCompTask {
@@ -17,6 +19,28 @@ impl NoteDelayCompTask {
         let mut delay_comp_node = self.shared_node.borrow_mut();
 
         delay_comp_node.process(proc_info, &self.note_in, &self.note_out);
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct SharedNoteDelayCompNode {
+    pub active: bool,
+    pub delay: u32,
+
+    shared: Shared<AtomicRefCell<NoteDelayCompNode>>,
+}
+
+impl SharedNoteDelayCompNode {
+    pub fn new(d: NoteDelayCompNode, coll_handle: &basedrop::Handle) -> Self {
+        Self {
+            active: true,
+            delay: d.delay(),
+            shared: Shared::new(coll_handle, AtomicRefCell::new(d)),
+        }
+    }
+
+    pub fn borrow_mut<'a>(&'a self) -> AtomicRefMut<'a, NoteDelayCompNode> {
+        self.shared.borrow_mut()
     }
 }
 

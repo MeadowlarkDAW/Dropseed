@@ -114,7 +114,7 @@ impl AudioGraph {
         //assert!(graph_in_channels > 0);
         assert!(graph_out_channels > 0);
 
-        let mut graph_helper = AudioGraphHelper::new(PortType::NUM_TYPES);
+        let graph_helper = AudioGraphHelper::new(PortType::NUM_TYPES);
 
         let (transport_task, transport_handle) = TransportTask::new(
             None,
@@ -137,21 +137,10 @@ impl AudioGraph {
         let graph_out_rdn =
             Shared::new(&coll_handle, String::from("app.meadowlark.graph_out_node"));
 
-        let graph_in_node_id = graph_helper.add_node(0.0);
-        let graph_out_node_id = graph_helper.add_node(0.0);
-
-        let graph_in_id = PluginInstanceID::_new(
-            graph_in_node_id.into(),
-            0,
-            PluginInstanceType::GraphInput,
-            graph_in_rdn,
-        );
-        let graph_out_id = PluginInstanceID::_new(
-            graph_out_node_id.into(),
-            1,
-            PluginInstanceType::GraphOutput,
-            graph_out_rdn,
-        );
+        let graph_in_id =
+            PluginInstanceID::_new(0, 0, PluginInstanceType::GraphInput, graph_in_rdn);
+        let graph_out_id =
+            PluginInstanceID::_new(1, 1, PluginInstanceType::GraphOutput, graph_out_rdn);
 
         let mut new_self = Self {
             shared_pools,
@@ -613,7 +602,7 @@ impl AudioGraph {
                 let _ = self.on_idle(&mut _events_out);
             }
 
-            if self.shared_pools.plugin_hosts.is_empty() {
+            if !self.shared_pools.plugin_hosts.is_empty() {
                 log::error!("Timed out while removing all plugins");
             }
         }

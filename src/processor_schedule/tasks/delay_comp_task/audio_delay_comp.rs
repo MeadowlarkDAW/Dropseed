@@ -1,7 +1,7 @@
 use dropseed_plugin_api::buffer::SharedBuffer;
 use dropseed_plugin_api::ProcInfo;
-
-use crate::graph::shared_pools::SharedAudioDelayCompNode;
+use basedrop::Shared;
+use atomic_refcell::{AtomicRefCell, AtomicRefMut};
 
 pub(crate) struct AudioDelayCompTask {
     pub shared_node: SharedAudioDelayCompNode,
@@ -15,6 +15,28 @@ impl AudioDelayCompTask {
         let mut delay_comp_node = self.shared_node.borrow_mut();
 
         delay_comp_node.process(proc_info, &self.audio_in, &self.audio_out);
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct SharedAudioDelayCompNode {
+    pub active: bool,
+    pub delay: u32,
+
+    shared: Shared<AtomicRefCell<AudioDelayCompNode>>,
+}
+
+impl SharedAudioDelayCompNode {
+    pub fn new(d: AudioDelayCompNode, coll_handle: &basedrop::Handle) -> Self {
+        Self {
+            active: true,
+            delay: d.delay(),
+            shared: Shared::new(coll_handle, AtomicRefCell::new(d)),
+        }
+    }
+
+    pub fn borrow_mut<'a>(&'a self) -> AtomicRefMut<'a, AudioDelayCompNode> {
+        self.shared.borrow_mut()
     }
 }
 
