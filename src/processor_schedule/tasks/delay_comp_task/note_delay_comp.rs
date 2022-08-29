@@ -1,11 +1,9 @@
+use atomic_refcell::{AtomicRefCell, AtomicRefMut};
+use basedrop::Shared;
 use dropseed_plugin_api::buffer::SharedBuffer;
 use dropseed_plugin_api::ProcInfo;
-use basedrop::Shared;
-use atomic_refcell::{AtomicRefCell, AtomicRefMut};
 
-use crate::{
-    plugin_host::event_io_buffers::NoteIoEvent,
-};
+use crate::plugin_host::event_io_buffers::NoteIoEvent;
 
 pub(crate) struct NoteDelayCompTask {
     pub shared_node: SharedNoteDelayCompNode,

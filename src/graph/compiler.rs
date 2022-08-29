@@ -1,6 +1,6 @@
 use audio_graph::{AudioGraphHelper, ScheduleEntry};
 
-use crate::processor_schedule::tasks::Task;
+use crate::processor_schedule::tasks::{GraphInTask, GraphOutTask, Task};
 
 mod delay_comp_task;
 mod graph_in_out_task;
@@ -26,6 +26,8 @@ pub(super) fn compile_graph(
     coll_handle: &basedrop::Handle,
 ) -> Result<ProcessorSchedule, GraphCompilerError> {
     let mut tasks: Vec<Task> = Vec::with_capacity(shared_pool.plugin_hosts.num_plugins() * 2);
+    let mut graph_in_task: Option<GraphInTask> = None;
+    let mut graph_out_task: Option<GraphOutTask> = None;
 
     // The `audio_graph` crate compiles a schedule for us in its purest
     // "abstract" form (as a list of Node IDs with their corresponding
@@ -59,30 +61,28 @@ pub(super) fn compile_graph(
     for schedule_entry in abstract_schedule.schedule.iter() {
         match schedule_entry {
             ScheduleEntry::Node(scheduled_node) => {
-                let task = if scheduled_node.id.0 == graph_in_id._node_id() {
+                if scheduled_node.id.0 == graph_in_id._node_id() {
                     // The `graph in` node is a special node that handles inputting all
                     // data from the user's system (microphone inputs, midi controller
                     // inputs, etc.) into the graph.
-                    graph_in_out_task::construct_graph_in_task(
+                    graph_in_task = Some(graph_in_out_task::construct_graph_in_task(
                         scheduled_node,
                         shared_pool,
                         num_graph_in_audio_ports,
-                    )?
+                    )?);
                 } else if scheduled_node.id.0 == graph_out_id._node_id() {
                     // The `graph out` node is a special node that handles outputting
                     // the resulting data processed by the graph back to the user's
                     // system (speakers out, midi out, etc.).
-                    graph_in_out_task::construct_graph_out_task(
+                    graph_out_task = Some(graph_in_out_task::construct_graph_out_task(
                         scheduled_node,
                         shared_pool,
                         num_graph_out_audio_ports,
-                    )?
+                    )?);
                 } else {
                     // Construct a task for a plugin.
-                    plugin_task::construct_plugin_task(scheduled_node, shared_pool)?
+                    tasks.push(plugin_task::construct_plugin_task(scheduled_node, shared_pool)?);
                 };
-
-                tasks.push(task);
             }
             ScheduleEntry::Delay(inserted_delay) => {
                 let delay = inserted_delay.delay.round() as i64;
@@ -111,6 +111,13 @@ pub(super) fn compile_graph(
         }
     }
 
+    let graph_in_task = graph_in_task.ok_or(GraphCompilerError::UnexpectedError(
+        "Abstract schedule did not schedule the graph input node".into(),
+    ))?;
+    let graph_out_task = graph_out_task.ok_or(GraphCompilerError::UnexpectedError(
+        "Abstract schedule did not schedule the graph output node".into(),
+    ))?;
+
     // Remove all delay compensation nodes that are no longer being used.
     //
     // TODO: Use `drain_filter()` once it becomes stable.
@@ -124,6 +131,8 @@ pub(super) fn compile_graph(
     // Construct the new schedule object.
     let new_schedule = ProcessorSchedule::new(
         tasks,
+        graph_in_task,
+        graph_out_task,
         shared_pool.transports.transport.clone(),
         shared_pool.buffers.audio_buffer_pool.buffer_size(),
     );

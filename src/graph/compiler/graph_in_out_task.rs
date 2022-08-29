@@ -2,7 +2,7 @@ use audio_graph::ScheduledNode;
 use dropseed_plugin_api::buffer::SharedBuffer;
 use smallvec::{smallvec, SmallVec};
 
-use crate::processor_schedule::tasks::{GraphInTask, GraphOutTask, Task};
+use crate::processor_schedule::tasks::{GraphInTask, GraphOutTask};
 
 use super::super::error::GraphCompilerError;
 use super::super::shared_pools::GraphSharedPools;
@@ -12,10 +12,10 @@ pub(super) fn construct_graph_in_task(
     scheduled_node: &ScheduledNode,
     shared_pool: &mut GraphSharedPools,
     num_graph_in_audio_ports: usize,
-) -> Result<Task, GraphCompilerError> {
+) -> Result<GraphInTask, GraphCompilerError> {
     // --- Construct a map that maps the index (channel) of each port to its assigned buffer
 
-    let mut audio_out_slots: SmallVec<[Option<SharedBuffer<f32>>; 4]> =
+    let mut audio_out_slots: SmallVec<[Option<SharedBuffer<f32>>; 8]> =
         smallvec![None; num_graph_in_audio_ports];
     for output_buffer in scheduled_node.output_buffers.iter() {
         match output_buffer.type_index {
@@ -48,7 +48,7 @@ pub(super) fn construct_graph_in_task(
 
     // --- Construct the final task using the constructed map from above --------------------
 
-    let mut audio_out: SmallVec<[SharedBuffer<f32>; 4]> =
+    let mut audio_in: SmallVec<[SharedBuffer<f32>; 8]> =
         SmallVec::with_capacity(num_graph_in_audio_ports);
     for buffer_slot in audio_out_slots.drain(..) {
         let buffer = buffer_slot.ok_or(GraphCompilerError::UnexpectedError(format!(
@@ -56,20 +56,20 @@ pub(super) fn construct_graph_in_task(
             scheduled_node
         )))?;
 
-        audio_out.push(buffer);
+        audio_in.push(buffer);
     }
 
-    Ok(Task::GraphIn(GraphInTask { audio_out }))
+    Ok(GraphInTask { audio_in })
 }
 
 pub(super) fn construct_graph_out_task(
     scheduled_node: &ScheduledNode,
     shared_pool: &mut GraphSharedPools,
     num_graph_out_audio_ports: usize,
-) -> Result<Task, GraphCompilerError> {
+) -> Result<GraphOutTask, GraphCompilerError> {
     // --- Construct a map that maps the index (channel) of each port to its assigned buffer
 
-    let mut audio_in_slots: SmallVec<[Option<SharedBuffer<f32>>; 4]> =
+    let mut audio_in_slots: SmallVec<[Option<SharedBuffer<f32>>; 8]> =
         smallvec![None; num_graph_out_audio_ports];
     for input_buffer in scheduled_node.input_buffers.iter() {
         match input_buffer.type_index {
@@ -102,7 +102,7 @@ pub(super) fn construct_graph_out_task(
 
     // --- Construct the final task using the constructed map from above --------------------
 
-    let mut audio_in: SmallVec<[SharedBuffer<f32>; 4]> =
+    let mut audio_out: SmallVec<[SharedBuffer<f32>; 8]> =
         SmallVec::with_capacity(num_graph_out_audio_ports);
     for buffer_slot in audio_in_slots.drain(..) {
         let buffer = buffer_slot.ok_or(GraphCompilerError::UnexpectedError(format!(
@@ -110,8 +110,8 @@ pub(super) fn construct_graph_out_task(
             scheduled_node
         )))?;
 
-        audio_in.push(buffer);
+        audio_out.push(buffer);
     }
 
-    Ok(Task::GraphOut(GraphOutTask { audio_in }))
+    Ok(GraphOutTask { audio_out })
 }

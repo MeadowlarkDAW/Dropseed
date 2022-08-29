@@ -2,14 +2,12 @@ use audio_graph::InsertedDelay;
 
 use crate::processor_schedule::tasks::{
     AudioDelayCompNode, AudioDelayCompTask, AutomationDelayCompNode, AutomationDelayCompTask,
-    NoteDelayCompNode, NoteDelayCompTask, Task,
+    NoteDelayCompNode, NoteDelayCompTask, SharedAudioDelayCompNode, SharedAutomationDelayCompNode,
+    SharedNoteDelayCompNode, Task,
 };
 
 use super::super::error::GraphCompilerError;
-use super::super::shared_pools::{
-    DelayCompKey, GraphSharedPools, SharedAudioDelayCompNode, SharedAutomationDelayCompNode,
-    SharedNoteDelayCompNode,
-};
+use super::super::shared_pools::{DelayCompKey, GraphSharedPools};
 use super::super::PortType;
 
 pub(super) fn construct_delay_comp_task(

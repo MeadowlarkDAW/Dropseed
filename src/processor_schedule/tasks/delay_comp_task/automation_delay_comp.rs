@@ -1,11 +1,9 @@
+use atomic_refcell::{AtomicRefCell, AtomicRefMut};
+use basedrop::Shared;
 use dropseed_plugin_api::buffer::SharedBuffer;
 use dropseed_plugin_api::ProcInfo;
-use basedrop::Shared;
-use atomic_refcell::{AtomicRefCell, AtomicRefMut};
 
-use crate::{
-    plugin_host::event_io_buffers::AutomationIoEvent,
-};
+use crate::plugin_host::event_io_buffers::AutomationIoEvent;
 
 pub(crate) struct AutomationDelayCompTask {
     pub shared_node: SharedAutomationDelayCompNode,

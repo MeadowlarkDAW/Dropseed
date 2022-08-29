@@ -3,7 +3,7 @@ use meadowlark_core_types::time::SampleRate;
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::fmt::Debug;
 use std::sync::{
-    atomic::{AtomicU32, Ordering},
+    atomic::{AtomicUsize, Ordering},
     Arc,
 };
 use std::time::{Duration, Instant};
@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 use super::process_thread::DSEngineProcessThread;
 use crate::graph::shared_pools::SharedProcessorSchedule;
 
-// Allocate enough for at-least 3 seconds of buffer time.
+/// Allocate enough for at-least 3 seconds of buffer time at the
+/// highest possible sample rate.
 static ALLOCATED_FRAMES_PER_CHANNEL: usize = 192_000 * 3;
 
 /// Make sure we have a bit of time to copy the engine's output buffer to the
@@ -31,26 +32,22 @@ pub(crate) static AUDIO_THREAD_POLL_INTERVAL: Duration = Duration::from_micros(1
 pub(crate) static AUDIO_THREAD_POLL_INTERVAL_BUFFERED: Duration = Duration::from_micros(1500);
 
 pub struct DSEngineAudioThread {
-    to_engine_audio_in_tx: Owned<Producer<f32>>,
-    from_engine_audio_out_rx: Owned<Consumer<f32>>,
+    audio_to_process_channel: Owned<AudioToProcessChannelTX>,
+    process_to_audio_channel: Owned<ProcessToAudioChannelRX>,
 
-    in_channels: usize,
-    out_channels: usize,
+    graph_audio_in_channels: usize,
+    graph_audio_out_channels: usize,
 
     sample_rate: SampleRate,
     sample_rate_recip: f64,
-
-    /// In case there are no inputs, use this to let the engine know when there
-    /// are frames to render.
-    num_frames_wanted: Option<Arc<AtomicU32>>,
 }
 
 impl Debug for DSEngineAudioThread {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut f = f.debug_struct("DSEngineAudioThread");
 
-        f.field("in_channels", &self.in_channels);
-        f.field("out_channels", &self.out_channels);
+        f.field("graph_audio_in_channels", &self.graph_audio_in_channels);
+        f.field("graph_audio_out_channels", &self.graph_audio_out_channels);
         f.field("sample_rate", &self.sample_rate);
         f.field("sample_rate_recip", &self.sample_rate_recip);
 
@@ -60,53 +57,58 @@ impl Debug for DSEngineAudioThread {
 
 impl DSEngineAudioThread {
     pub(crate) fn new(
-        in_channels: usize,
-        out_channels: usize,
-        coll_handle: &basedrop::Handle,
         schedule: SharedProcessorSchedule,
         sample_rate: SampleRate,
+        graph_audio_in_channels: usize,
+        graph_audio_out_channels: usize,
+        max_frames: usize,
+        coll_handle: &basedrop::Handle,
     ) -> (Self, DSEngineProcessThread) {
-        let (to_engine_audio_in_tx, from_audio_thread_audio_in_rx) =
-            RingBuffer::<f32>::new(in_channels * ALLOCATED_FRAMES_PER_CHANNEL);
-        let (to_audio_thread_audio_out_tx, from_engine_audio_out_rx) =
-            RingBuffer::<f32>::new(out_channels * ALLOCATED_FRAMES_PER_CHANNEL);
-
-        let to_engine_audio_in_tx = Owned::new(coll_handle, to_engine_audio_in_tx);
-        let from_audio_thread_audio_in_rx = Owned::new(coll_handle, from_audio_thread_audio_in_rx);
-        let to_audio_thread_audio_out_tx = Owned::new(coll_handle, to_audio_thread_audio_out_tx);
-        let from_engine_audio_out_rx = Owned::new(coll_handle, from_engine_audio_out_rx);
-
-        let in_temp_buffer =
-            Owned::new(coll_handle, vec![0.0; in_channels * ALLOCATED_FRAMES_PER_CHANNEL]);
-        let out_temp_buffer =
-            Owned::new(coll_handle, vec![0.0; out_channels * ALLOCATED_FRAMES_PER_CHANNEL]);
-
-        let num_frames_wanted =
-            if in_channels == 0 { Some(Arc::new(AtomicU32::new(0))) } else { None };
-
-        let num_frames_wanted_clone = num_frames_wanted.as_ref().map(Arc::clone);
-
         let sample_rate_recip = 1.0 / sample_rate.as_f64();
+
+        let (audio_to_process_tx, audio_to_process_rx) = if graph_audio_in_channels == 0 {
+            let num_frames_wanted = Arc::new(AtomicUsize::new(0));
+
+            (
+                AudioToProcessChannelTX::NoInputAudio {
+                    num_frames_wanted: Arc::clone(&num_frames_wanted),
+                },
+                AudioToProcessChannelRX::NoInputAudio { num_frames_wanted },
+            )
+        } else {
+            let (audio_rb_tx, audio_rb_rx) =
+                RingBuffer::new(graph_audio_in_channels * ALLOCATED_FRAMES_PER_CHANNEL);
+
+            (
+                AudioToProcessChannelTX::HasInputAudio { audio_rb_tx },
+                AudioToProcessChannelRX::HasInputAudio { audio_rb_rx },
+            )
+        };
+
+        let (process_to_audio_tx, process_to_audio_rx) = {
+            let (audio_rb_tx, audio_rb_rx) =
+                RingBuffer::new(graph_audio_out_channels * ALLOCATED_FRAMES_PER_CHANNEL);
+
+            (ProcessToAudioChannelTX { audio_rb_tx }, ProcessToAudioChannelRX { audio_rb_rx })
+        };
 
         (
             Self {
-                to_engine_audio_in_tx,
-                from_engine_audio_out_rx,
-                in_channels,
-                out_channels,
+                audio_to_process_channel: Owned::new(coll_handle, audio_to_process_tx),
+                process_to_audio_channel: Owned::new(coll_handle, process_to_audio_rx),
+                graph_audio_in_channels,
+                graph_audio_out_channels,
                 sample_rate,
                 sample_rate_recip,
-                num_frames_wanted,
             },
             DSEngineProcessThread::new(
-                to_audio_thread_audio_out_tx,
-                from_audio_thread_audio_in_rx,
-                num_frames_wanted_clone,
-                in_temp_buffer,
-                out_temp_buffer,
-                in_channels,
-                out_channels,
+                audio_to_process_rx,
+                process_to_audio_tx,
+                graph_audio_in_channels,
+                graph_audio_out_channels,
+                max_frames,
                 schedule,
+                coll_handle,
             ),
         )
     }
@@ -125,7 +127,7 @@ impl DSEngineAudioThread {
 
         let proc_start_time = Instant::now();
 
-        if out.len() < self.out_channels || cpal_out_channels == 0 {
+        if out.len() < self.graph_audio_out_channels || cpal_out_channels == 0 {
             clear_output(out);
             return;
         }
@@ -133,34 +135,50 @@ impl DSEngineAudioThread {
         let total_frames = out.len() / cpal_out_channels;
 
         // Discard any output from previous cycles that failed to render on time.
-        if !self.from_engine_audio_out_rx.is_empty() {
-            let num_slots = self.from_engine_audio_out_rx.slots();
+        if !self.process_to_audio_channel.audio_rb_rx.is_empty() {
+            let num_slots = self.process_to_audio_channel.audio_rb_rx.slots();
 
-            let chunks = self.from_engine_audio_out_rx.read_chunk(num_slots).unwrap();
+            let chunks = self.process_to_audio_channel.audio_rb_rx.read_chunk(num_slots).unwrap();
             chunks.commit_all();
         }
 
-        if let Some(num_frames_wanted) = &self.num_frames_wanted {
-            num_frames_wanted.store(total_frames as u32, Ordering::SeqCst);
-        } else {
-            match self.to_engine_audio_in_tx.write_chunk(total_frames * self.in_channels) {
-                Ok(mut chunk) => {
-                    let (slice_1, slice_2) = chunk.as_mut_slices();
-                    slice_1.fill(0.0);
-                    slice_2.fill(0.0);
+        match &mut *self.audio_to_process_channel {
+            AudioToProcessChannelTX::HasInputAudio { audio_rb_tx } => {
+                if !audio_rb_tx.is_abandoned() {
+                    match audio_rb_tx.write_chunk(total_frames * self.graph_audio_in_channels) {
+                        Ok(mut chunk) => {
+                            let (slice_1, slice_2) = chunk.as_mut_slices();
+                            slice_1.fill(0.0);
+                            slice_2.fill(0.0);
 
-                    chunk.commit_all();
+                            chunk.commit_all();
+                        }
+                        Err(_) => {
+                            log::error!(
+                                "Ran out of space in audio thread to process thread audio buffer"
+                            );
+                            clear_output(out);
+                            return;
+                        }
+                    }
+                } else {
+                    clear_output(out);
+                    return;
                 }
-                Err(_) => {
-                    log::error!("Ran out of space in audio_thread_to_engine_audio_in buffer");
+            }
+            AudioToProcessChannelTX::NoInputAudio { num_frames_wanted } => {
+                if Arc::strong_count(num_frames_wanted) > 1 {
+                    num_frames_wanted.store(total_frames, Ordering::SeqCst);
+                } else {
                     clear_output(out);
                     return;
                 }
             }
         }
 
-        let num_out_samples = total_frames * self.out_channels;
+        let num_out_samples = total_frames * self.graph_audio_out_channels;
         if num_out_samples == 0 {
+            clear_output(out);
             return;
         }
 
@@ -172,8 +190,9 @@ impl DSEngineAudioThread {
         let spin_sleeper = spin_sleep::SpinSleeper::default();
 
         loop {
-            if let Ok(chunk) = self.from_engine_audio_out_rx.read_chunk(num_out_samples) {
-                if cpal_out_channels == self.out_channels {
+            if let Ok(chunk) = self.process_to_audio_channel.audio_rb_rx.read_chunk(num_out_samples)
+            {
+                if cpal_out_channels == self.graph_audio_out_channels {
                     // We can simply just convert the interlaced buffer over.
 
                     let (slice_1, slice_2) = chunk.as_slices();
@@ -191,9 +210,9 @@ impl DSEngineAudioThread {
                     let (slice_1, slice_2) = chunk.as_slices();
 
                     for ch_i in 0..cpal_out_channels {
-                        if ch_i < self.out_channels {
+                        if ch_i < self.graph_audio_out_channels {
                             for i in 0..total_frames {
-                                let i2 = (i * self.out_channels) + ch_i;
+                                let i2 = (i * self.graph_audio_out_channels) + ch_i;
 
                                 let s = if i2 < slice_1.len() {
                                     slice_1[i2]
@@ -226,9 +245,26 @@ impl DSEngineAudioThread {
             spin_sleeper.sleep(AUDIO_THREAD_POLL_INTERVAL);
         }
 
-        log::trace!("underrun");
-
         // The engine took too long to process.
+        log::trace!("underrun");
         clear_output(out);
     }
+}
+
+enum AudioToProcessChannelTX {
+    HasInputAudio { audio_rb_tx: Producer<f32> },
+    NoInputAudio { num_frames_wanted: Arc<AtomicUsize> },
+}
+
+pub(super) enum AudioToProcessChannelRX {
+    HasInputAudio { audio_rb_rx: Consumer<f32> },
+    NoInputAudio { num_frames_wanted: Arc<AtomicUsize> },
+}
+
+pub(super) struct ProcessToAudioChannelTX {
+    pub audio_rb_tx: Producer<f32>,
+}
+
+struct ProcessToAudioChannelRX {
+    pub audio_rb_rx: Consumer<f32>,
 }

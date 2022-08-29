@@ -1,7 +1,7 @@
+use atomic_refcell::{AtomicRefCell, AtomicRefMut};
+use basedrop::Shared;
 use dropseed_plugin_api::buffer::SharedBuffer;
 use dropseed_plugin_api::ProcInfo;
-use basedrop::Shared;
-use atomic_refcell::{AtomicRefCell, AtomicRefMut};
 
 pub(crate) struct AudioDelayCompTask {
     pub shared_node: SharedAudioDelayCompNode,

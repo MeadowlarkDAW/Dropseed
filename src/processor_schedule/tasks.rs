@@ -13,7 +13,8 @@ pub use transport_task::TransportHandle;
 pub(crate) use deactivated_plug_task::DeactivatedPluginTask;
 pub(crate) use delay_comp_task::{
     AudioDelayCompNode, AudioDelayCompTask, AutomationDelayCompNode, AutomationDelayCompTask,
-    NoteDelayCompNode, NoteDelayCompTask, SharedAudioDelayCompNode, SharedAutomationDelayCompNode, SharedNoteDelayCompNode,
+    NoteDelayCompNode, NoteDelayCompTask, SharedAudioDelayCompNode, SharedAutomationDelayCompNode,
+    SharedNoteDelayCompNode,
 };
 pub(crate) use graph_in_out_task::{GraphInTask, GraphOutTask};
 pub(crate) use plugin_task::PluginTask;
@@ -29,8 +30,6 @@ pub(crate) enum Task {
     NoteDelayComp(NoteDelayCompTask),
     AutomationDelayComp(AutomationDelayCompTask),
     DeactivatedPlugin(DeactivatedPluginTask),
-    GraphIn(GraphInTask),
-    GraphOut(GraphOutTask),
 }
 
 impl Debug for Task {
@@ -212,28 +211,6 @@ impl Debug for Task {
 
                 f.finish()
             }
-            Task::GraphIn(t) => {
-                let mut f = f.debug_struct("GraphIn");
-
-                let mut s = String::new();
-                for b in t.audio_out.iter() {
-                    s.push_str(&format!("{:?}, ", b.id()))
-                }
-                f.field("audio_out", &s);
-
-                f.finish()
-            }
-            Task::GraphOut(t) => {
-                let mut f = f.debug_struct("GraphOut");
-
-                let mut s = String::new();
-                for b in t.audio_in.iter() {
-                    s.push_str(&format!("{:?}, ", b.id()))
-                }
-                f.field("audio_in", &s);
-
-                f.finish()
-            }
         }
     }
 }
@@ -249,8 +226,6 @@ impl Task {
             Task::NoteDelayComp(task) => task.process(proc_info),
             Task::AutomationDelayComp(task) => task.process(proc_info),
             Task::DeactivatedPlugin(task) => task.process(proc_info),
-            Task::GraphIn(task) => task.process(proc_info),
-            Task::GraphOut(task) => task.process(proc_info),
         }
     }
 }

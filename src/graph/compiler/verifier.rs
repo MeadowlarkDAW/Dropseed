@@ -264,26 +264,6 @@ impl Verifier {
                         }
                     }
                 }
-                Task::GraphIn(t) => {
-                    for b in t.audio_out.iter() {
-                        if !self.buffer_instances.insert(b.id()) {
-                            return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                                buffer_id: b.id(),
-                                task_info: format!("{:?}", &task),
-                            });
-                        }
-                    }
-                }
-                Task::GraphOut(t) => {
-                    for b in t.audio_in.iter() {
-                        if !self.buffer_instances.insert(b.id()) {
-                            return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                                buffer_id: b.id(),
-                                task_info: format!("{:?}", &task),
-                            });
-                        }
-                    }
-                }
             }
         }
 

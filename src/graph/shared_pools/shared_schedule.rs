@@ -64,13 +64,7 @@ impl SharedProcessorSchedule {
         self.schedule.set(Shared::new(coll_handle, AtomicRefCell::new(schedule)));
     }
 
-    pub fn process_interleaved(
-        &mut self,
-        audio_in: &[f32],
-        audio_in_channels: usize,
-        audio_out: &mut [f32],
-        audio_out_channels: usize,
-    ) {
+    pub fn process_interleaved(&mut self, audio_in: &[f32], audio_out: &mut [f32]) {
         let latest_schedule = self.schedule.get();
 
         let mut schedule = latest_schedule.borrow_mut();
@@ -84,6 +78,6 @@ impl SharedProcessorSchedule {
             self.thread_ids.set_process_thread_id(std::thread::current().id(), &self.coll_handle);
         }
 
-        schedule.process_interleaved(audio_in, audio_in_channels, audio_out, audio_out_channels);
+        schedule.process_interleaved(audio_in, audio_out);
     }
 }

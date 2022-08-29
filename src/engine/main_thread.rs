@@ -225,11 +225,12 @@ impl DSEngineMainThread {
             log::info!("Successfully activated RustyDAW engine");
 
             let (audio_thread, mut process_thread) = DSEngineAudioThread::new(
-                num_audio_in_channels as usize,
-                num_audio_out_channels as usize,
-                &self.collector.handle(),
                 shared_schedule,
                 sample_rate,
+                num_audio_in_channels as usize,
+                num_audio_out_channels as usize,
+                max_frames as usize,
+                &self.collector.handle(),
             );
 
             let run_process_thread = Arc::new(AtomicBool::new(true));
