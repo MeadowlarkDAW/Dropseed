@@ -341,7 +341,7 @@ impl DSEngineMainThread {
                     Ok(new_edge) => new_edges.push(new_edge),
                     Err(e) => {
                         if edge.log_error_on_fail {
-                            log::error!("Could not connect edge: {}", e);
+                            log::warn!("Could not connect edge: {}", e);
                         } else {
                             #[cfg(debug_assertions)]
                             log::debug!("Could not connect edge: {}", e);
