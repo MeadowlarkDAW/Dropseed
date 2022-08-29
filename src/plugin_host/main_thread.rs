@@ -14,6 +14,7 @@ use smallvec::SmallVec;
 
 use crate::engine::{OnIdleEvent, PluginActivatedStatus};
 use crate::graph::{ChannelID, DSEdgeID, PortType};
+use crate::utils::thread_id::SharedThreadIDs;
 
 use super::channel::{
     MainToProcParamValue, PlugHostChannelMainThread, PluginActiveState, SharedPluginHostProcThread,
@@ -283,6 +284,7 @@ impl PluginHostMainThread {
         max_frames: u32,
         graph_helper: &mut AudioGraphHelper,
         edge_id_to_ds_edge_id: &mut FnvHashMap<EdgeID, DSEdgeID>,
+        thread_ids: SharedThreadIDs,
         coll_handle: &basedrop::Handle,
     ) -> Result<PluginActivatedStatus, ActivatePluginError> {
         self.can_activate()?;
@@ -358,7 +360,12 @@ impl PluginHostMainThread {
             Ok(info) => {
                 self.channel.shared_state.set_active_state(PluginActiveState::Active);
 
-                self.channel.create_process_thread(info.processor, num_params, coll_handle);
+                self.channel.create_process_thread(
+                    info.processor,
+                    num_params,
+                    thread_ids,
+                    coll_handle,
+                );
 
                 self.params = Some(params);
 
@@ -439,6 +446,7 @@ impl PluginHostMainThread {
         graph_helper: &mut AudioGraphHelper,
         events_out: &mut SmallVec<[OnIdleEvent; 32]>,
         edge_id_to_ds_edge_id: &mut FnvHashMap<EdgeID, DSEdgeID>,
+        thread_ids: &SharedThreadIDs,
     ) -> (OnIdleResult, SmallVec<[ParamModifiedInfo; 4]>) {
         let mut modified_params: SmallVec<[ParamModifiedInfo; 4]> = SmallVec::new();
 
@@ -514,6 +522,7 @@ impl PluginHostMainThread {
                         max_frames,
                         graph_helper,
                         edge_id_to_ds_edge_id,
+                        thread_ids.clone(),
                         coll_handle,
                     ) {
                         Ok(r) => {
@@ -542,6 +551,7 @@ impl PluginHostMainThread {
                     max_frames,
                     graph_helper,
                     edge_id_to_ds_edge_id,
+                    thread_ids.clone(),
                     coll_handle,
                 ) {
                     Ok(r) => {

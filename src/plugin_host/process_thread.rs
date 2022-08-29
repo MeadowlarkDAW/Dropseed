@@ -2,6 +2,8 @@ use clack_host::events::Event;
 use dropseed_plugin_api::buffer::EventBuffer;
 use dropseed_plugin_api::{PluginProcessThread, ProcBuffers, ProcInfo, ProcessStatus};
 
+use crate::utils::thread_id::SharedThreadIDs;
+
 use super::channel::{PlugHostChannelProcThread, PluginActiveState};
 use super::event_io_buffers::{PluginEventIoBuffers, PluginEventOutputSanitizer};
 
@@ -24,6 +26,8 @@ pub(crate) struct PluginHostProcThread {
     event_output_sanitizer: PluginEventOutputSanitizer,
 
     processing_state: ProcessingState,
+
+    thread_ids: SharedThreadIDs,
 }
 
 impl PluginHostProcThread {
@@ -31,6 +35,7 @@ impl PluginHostProcThread {
         plugin: Box<dyn PluginProcessThread>,
         channel: PlugHostChannelProcThread,
         num_params: usize,
+        thread_ids: SharedThreadIDs,
     ) -> Self {
         Self {
             plugin,
@@ -39,6 +44,7 @@ impl PluginHostProcThread {
             out_events: EventBuffer::with_capacity(num_params * 3),
             event_output_sanitizer: PluginEventOutputSanitizer::new(num_params),
             processing_state: ProcessingState::WaitingForStart,
+            thread_ids,
         }
     }
 
@@ -186,12 +192,22 @@ impl PluginHostProcThread {
             good_status => ProcessingState::Started(good_status),
         };
     }
+
+    pub fn stop_processing(&mut self) {
+        if self.thread_ids.is_process_thread() {
+            if let ProcessingState::Started(_) = self.processing_state {
+                self.plugin.stop_processing();
+            }
+        }
+    }
 }
 
 impl Drop for PluginHostProcThread {
     fn drop(&mut self) {
-        if let ProcessingState::Started(_) = self.processing_state {
-            self.plugin.stop_processing();
+        if self.thread_ids.is_process_thread() {
+            if let ProcessingState::Started(_) = self.processing_state {
+                self.plugin.stop_processing();
+            }
         }
 
         self.channel.shared_state.set_active_state(PluginActiveState::DroppedAndReadyToDeactivate);

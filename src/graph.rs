@@ -18,6 +18,7 @@ use dropseed_plugin_api::{DSPluginSaveState, PluginInstanceID, PluginInstanceTyp
 
 use crate::engine::request::{ConnectEdgeReq, EdgeReqPortID};
 use crate::engine::{NewPluginRes, OnIdleEvent, PluginStatus};
+use crate::plugin_host::SharedPluginHostProcThread;
 use crate::plugin_host::{OnIdleResult, PluginHostMainThread};
 use crate::plugin_scanner::PluginScanner;
 use crate::processor_schedule::tasks::{TransportHandle, TransportTask};
@@ -96,6 +97,12 @@ pub(crate) struct AudioGraph {
     sample_rate: SampleRate,
     min_frames: u32,
     max_frames: u32,
+
+    /// For the plugins that are queued to be removed, make sure that
+    /// the plugin's processor part is dropped in the process thread.
+    plugin_processors_to_stop: Vec<SharedPluginHostProcThread>,
+
+    thread_ids: SharedThreadIDs,
 }
 
 impl AudioGraph {
@@ -125,7 +132,7 @@ impl AudioGraph {
         );
 
         let (shared_pools, shared_schedule) = GraphSharedPools::new(
-            thread_ids,
+            thread_ids.clone(),
             max_frames as usize,
             note_buffer_size,
             event_buffer_size,
@@ -156,6 +163,8 @@ impl AudioGraph {
             sample_rate,
             min_frames,
             max_frames,
+            plugin_processors_to_stop: Vec::new(),
+            thread_ids,
         };
 
         new_self.reset();
@@ -214,6 +223,7 @@ impl AudioGraph {
             self.max_frames as u32,
             &mut self.graph_helper,
             &mut self.edge_id_to_ds_edge_id,
+            self.thread_ids.clone(),
             &self.coll_handle,
         ) {
             Ok(res) => PluginStatus::Activated(res),
@@ -591,7 +601,7 @@ impl AudioGraph {
         if audio_thread_is_alive {
             let start_time = std::time::Instant::now();
 
-            const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+            const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
             // Wait for all plugins to be removed.
             while !self.shared_pools.plugin_hosts.is_empty() && start_time.elapsed() < TIMEOUT {
@@ -663,6 +673,7 @@ impl AudioGraph {
             &self.graph_out_id,
             self.graph_in_num_audio_channels,
             self.graph_out_num_audio_channels,
+            self.plugin_processors_to_stop.drain(..).collect(),
             &mut self.verifier,
             &self.coll_handle,
         ) {
@@ -717,6 +728,7 @@ impl AudioGraph {
                 &mut self.graph_helper,
                 &mut events_out,
                 &mut self.edge_id_to_ds_edge_id,
+                &self.thread_ids,
             );
 
             match res {
@@ -740,6 +752,10 @@ impl AudioGraph {
                     });
                 }
                 OnIdleResult::PluginReadyToRemove => {
+                    if let Some(plugin_processor) = plugin_host.shared_processor() {
+                        self.plugin_processors_to_stop.push(plugin_processor.clone());
+                    }
+
                     plugins_to_remove.push(plugin_host.id().clone());
 
                     // The user should have already been alerted of the plugin being removed

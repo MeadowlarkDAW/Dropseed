@@ -1,5 +1,6 @@
 use audio_graph::{AudioGraphHelper, ScheduleEntry};
 
+use crate::plugin_host::SharedPluginHostProcThread;
 use crate::processor_schedule::tasks::{GraphInTask, GraphOutTask, Task};
 
 mod delay_comp_task;
@@ -22,6 +23,9 @@ pub(super) fn compile_graph(
     graph_out_id: &PluginInstanceID,
     num_graph_in_audio_ports: usize,
     num_graph_out_audio_ports: usize,
+    // For the plugins that are queued to be removed, make sure that
+    // the plugin's processor part is dropped in the process thread.
+    plugins_to_drop: Vec<SharedPluginHostProcThread>,
     verifier: &mut Verifier,
     coll_handle: &basedrop::Handle,
 ) -> Result<ProcessorSchedule, GraphCompilerError> {
@@ -134,6 +138,7 @@ pub(super) fn compile_graph(
         graph_in_task,
         graph_out_task,
         shared_pool.transports.transport.clone(),
+        plugins_to_drop,
         shared_pool.buffers.audio_buffer_pool.buffer_size(),
     );
 

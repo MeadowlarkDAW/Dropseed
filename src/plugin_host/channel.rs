@@ -15,6 +15,7 @@ use std::sync::{
 use crate::utils::reducing_queue::{
     ReducFnvConsumer, ReducFnvProducer, ReducFnvValue, ReducingFnvQueue,
 };
+use crate::utils::thread_id::SharedThreadIDs;
 
 use super::event_io_buffers::AutomationIoEventType;
 use super::process_thread::PluginHostProcThread;
@@ -40,6 +41,7 @@ impl PlugHostChannelMainThread {
         &mut self,
         plugin_processor: Box<dyn PluginProcessThread>,
         num_params: usize,
+        thread_ids: SharedThreadIDs,
         coll_handle: &basedrop::Handle,
     ) {
         let (param_queues_main_thread, param_queues_proc_thread) = if num_params > 0 {
@@ -74,7 +76,7 @@ impl PlugHostChannelMainThread {
         };
 
         let shared_proc_thread = SharedPluginHostProcThread::new(
-            PluginHostProcThread::new(plugin_processor, proc_channel, num_params),
+            PluginHostProcThread::new(plugin_processor, proc_channel, num_params, thread_ids),
             coll_handle,
         );
 

@@ -4,7 +4,7 @@ pub(crate) mod tasks;
 
 pub use tasks::TransportHandle;
 
-use crate::graph::shared_pools::SharedTransportTask;
+use crate::{graph::shared_pools::SharedTransportTask, plugin_host::SharedPluginHostProcThread};
 
 use tasks::{GraphInTask, GraphOutTask, Task};
 
@@ -15,6 +15,10 @@ pub struct ProcessorSchedule {
     graph_out_task: GraphOutTask,
     transport_task: SharedTransportTask,
 
+    /// For the plugins that are queued to be removed, make sure that
+    /// the plugin's processor part is dropped in the process thread.
+    plugin_processors_to_stop: Vec<SharedPluginHostProcThread>,
+
     max_block_size: usize,
 }
 
@@ -24,9 +28,19 @@ impl ProcessorSchedule {
         graph_in_task: GraphInTask,
         graph_out_task: GraphOutTask,
         transport_task: SharedTransportTask,
+        // For the plugins that are queued to be removed, make sure that
+        // the plugin's processor part is dropped in the process thread.
+        plugin_processors_to_stop: Vec<SharedPluginHostProcThread>,
         max_block_size: usize,
     ) -> Self {
-        Self { tasks, graph_in_task, graph_out_task, transport_task, max_block_size }
+        Self {
+            tasks,
+            graph_in_task,
+            graph_out_task,
+            transport_task,
+            plugin_processors_to_stop,
+            max_block_size,
+        }
     }
 
     pub(crate) fn new_empty(max_block_size: usize, transport_task: SharedTransportTask) -> Self {
@@ -35,6 +49,7 @@ impl ProcessorSchedule {
             graph_in_task: GraphInTask::default(),
             graph_out_task: GraphOutTask::default(),
             transport_task,
+            plugin_processors_to_stop: Vec::new(),
             max_block_size,
         }
     }
@@ -60,6 +75,14 @@ impl std::fmt::Debug for ProcessorSchedule {
 
 impl ProcessorSchedule {
     pub fn process_interleaved(&mut self, audio_in: &[f32], audio_out: &mut [f32]) {
+        // For the plugins that are queued to be removed, make sure that
+        // we call `stop_processing()` on the process thread before
+        // dropping the plugin's processor.
+        for plugin in self.plugin_processors_to_stop.drain(..) {
+            let mut plugin = plugin.borrow_mut();
+            plugin.stop_processing();
+        }
+
         let audio_in_channels = self.graph_in_task.audio_in.len();
         let audio_out_channels = self.graph_out_task.audio_out.len();
 
