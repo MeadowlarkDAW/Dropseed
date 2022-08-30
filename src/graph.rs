@@ -836,11 +836,19 @@ impl PluginEdges {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub struct DSEdgeID {
     pub(crate) unique_id: u64,
     pub(crate) edge_id: EdgeID,
 }
+
+impl PartialEq for DSEdgeID {
+    fn eq(&self, other: &Self) -> bool {
+        self.unique_id == other.unique_id
+    }
+}
+
+impl Eq for DSEdgeID {}
 
 impl Hash for DSEdgeID {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
