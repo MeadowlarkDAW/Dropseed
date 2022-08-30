@@ -1,23 +1,23 @@
-use smallvec::SmallVec;
-
-use dropseed_plugin_api::buffer::SharedBuffer;
 use dropseed_plugin_api::ProcInfo;
 
 pub(crate) mod tasks;
 
 pub use tasks::TransportHandle;
 
-use crate::graph::shared_pools::SharedTransportTask;
+use crate::{graph::shared_pools::SharedTransportTask, plugin_host::SharedPluginHostProcThread};
 
-use tasks::Task;
+use tasks::{GraphInTask, GraphOutTask, Task};
 
 pub struct ProcessorSchedule {
     tasks: Vec<Task>,
 
-    graph_audio_in: SmallVec<[SharedBuffer<f32>; 4]>,
-    graph_audio_out: SmallVec<[SharedBuffer<f32>; 4]>,
-
+    graph_in_task: GraphInTask,
+    graph_out_task: GraphOutTask,
     transport_task: SharedTransportTask,
+
+    /// For the plugins that are queued to be removed, make sure that
+    /// the plugin's processor part is dropped in the process thread.
+    plugin_processors_to_stop: Vec<SharedPluginHostProcThread>,
 
     max_block_size: usize,
 }
@@ -25,20 +25,31 @@ pub struct ProcessorSchedule {
 impl ProcessorSchedule {
     pub(crate) fn new(
         tasks: Vec<Task>,
-        graph_audio_in: SmallVec<[SharedBuffer<f32>; 4]>,
-        graph_audio_out: SmallVec<[SharedBuffer<f32>; 4]>,
+        graph_in_task: GraphInTask,
+        graph_out_task: GraphOutTask,
         transport_task: SharedTransportTask,
+        // For the plugins that are queued to be removed, make sure that
+        // the plugin's processor part is dropped in the process thread.
+        plugin_processors_to_stop: Vec<SharedPluginHostProcThread>,
         max_block_size: usize,
     ) -> Self {
-        Self { tasks, graph_audio_in, graph_audio_out, transport_task, max_block_size }
+        Self {
+            tasks,
+            graph_in_task,
+            graph_out_task,
+            transport_task,
+            plugin_processors_to_stop,
+            max_block_size,
+        }
     }
 
     pub(crate) fn new_empty(max_block_size: usize, transport_task: SharedTransportTask) -> Self {
         Self {
             tasks: Vec::new(),
-            graph_audio_in: SmallVec::new(),
-            graph_audio_out: SmallVec::new(),
+            graph_in_task: GraphInTask::default(),
+            graph_out_task: GraphOutTask::default(),
             transport_task,
+            plugin_processors_to_stop: Vec::new(),
             max_block_size,
         }
     }
@@ -54,34 +65,27 @@ impl std::fmt::Debug for ProcessorSchedule {
 
         s.push_str("ProcessorSchedule {\n");
 
-        let mut g_s = String::new();
-        for b in self.graph_audio_in.iter() {
-            g_s.push_str(&format!("{:?}, ", b.id()))
-        }
-        s.push_str(format!("    graph_audio_in: {:?},\n", &g_s).as_str());
-
         for t in self.tasks.iter() {
             s.push_str(format!("    {:?},\n", t).as_str());
         }
-
-        let mut g_s = String::new();
-        for b in self.graph_audio_out.iter() {
-            g_s.push_str(&format!("{:?}, ", b.id()))
-        }
-        s.push_str(format!("    graph_audio_out: {:?},\n}}", &g_s).as_str());
 
         write!(f, "{}", s)
     }
 }
 
 impl ProcessorSchedule {
-    pub fn process_interleaved(
-        &mut self,
-        audio_in: &[f32],
-        audio_in_channels: usize,
-        audio_out: &mut [f32],
-        audio_out_channels: usize,
-    ) {
+    pub fn process_interleaved(&mut self, audio_in: &[f32], audio_out: &mut [f32]) {
+        // For the plugins that are queued to be removed, make sure that
+        // we call `stop_processing()` on the process thread before
+        // dropping the plugin's processor.
+        for plugin in self.plugin_processors_to_stop.drain(..) {
+            let mut plugin = plugin.borrow_mut();
+            plugin.stop_processing();
+        }
+
+        let audio_in_channels = self.graph_in_task.audio_in.len();
+        let audio_out_channels = self.graph_out_task.audio_out.len();
+
         if audio_in_channels != 0 && audio_out_channels != 0 {
             assert_eq!(audio_in.len() / audio_in_channels, audio_out.len() / audio_out_channels);
         }
@@ -106,6 +110,16 @@ impl ProcessorSchedule {
         while processed_frames < total_frames {
             let frames = (total_frames - processed_frames).min(self.max_block_size);
 
+            // De-interlace the audio in stream to the graph input buffers.
+            for (channel_i, buffer) in self.graph_in_task.audio_in.iter().enumerate() {
+                let buffer = &mut buffer.borrow_mut()[0..frames];
+
+                // TODO: Check that the compiler is properly eliding bounds checking.
+                for i in 0..frames {
+                    buffer[i] = audio_in[((i + processed_frames) * audio_in_channels) + channel_i];
+                }
+            }
+
             let transport = self.transport_task.borrow_mut().process(frames);
 
             let proc_info = ProcInfo {
@@ -114,50 +128,18 @@ impl ProcessorSchedule {
                 transport,
             };
 
-            for (ch_i, in_buffer) in self.graph_audio_in.iter().enumerate() {
-                if ch_i < audio_in_channels {
-                    let mut buffer_ref = in_buffer.borrow_mut();
-
-                    let buffer = &mut buffer_ref[0..frames];
-
-                    for i in 0..proc_info.frames {
-                        buffer[i] = audio_in[(i * audio_in_channels) + ch_i];
-                    }
-
-                    let mut is_constant = true;
-                    let first_val = buffer[0];
-                    for frame in &buffer[0..frames] {
-                        if *frame != first_val {
-                            is_constant = false;
-                            break;
-                        }
-                    }
-
-                    in_buffer.set_constant(is_constant);
-                } else {
-                    in_buffer.clear_until(frames);
-                }
-            }
-
             for task in self.tasks.iter_mut() {
                 task.process(&proc_info)
             }
 
-            let out_part = &mut audio_out[(processed_frames * audio_out_channels)
-                ..((processed_frames + frames) * audio_out_channels)];
-            for ch_i in 0..audio_out_channels {
-                if let Some(buffer) = self.graph_audio_out.get(ch_i) {
-                    let mut buffer_ref = buffer.borrow_mut();
+            // Interlace the graph output buffers to the audio out stream.
+            for (channel_i, buffer) in self.graph_out_task.audio_out.iter().enumerate() {
+                let buffer = &buffer.borrow()[0..frames];
 
-                    let buffer = &mut buffer_ref[0..frames];
-
-                    for i in 0..frames {
-                        out_part[(i * audio_out_channels) + ch_i] = buffer[i];
-                    }
-                } else {
-                    for i in 0..frames {
-                        out_part[(i * audio_out_channels) + ch_i] = 0.0;
-                    }
+                // TODO: Check that the compiler is properly eliding bounds checking.
+                for i in 0..frames {
+                    audio_out[((i + processed_frames) * audio_out_channels) + channel_i] =
+                        buffer[i];
                 }
             }
 

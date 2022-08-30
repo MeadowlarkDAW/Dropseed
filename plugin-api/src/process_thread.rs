@@ -1,3 +1,4 @@
+use super::automation::AutomationIoEvent;
 use super::buffer::EventBuffer;
 use super::process_info::{ProcBuffers, ProcInfo, ProcessStatus};
 
@@ -51,4 +52,25 @@ pub trait PluginProcessThread: Send + 'static {
     /// [active && !processing : process-thread]
     #[allow(unused)]
     fn param_flush(&mut self, in_events: &EventBuffer, out_events: &mut EventBuffer) {}
+
+    /// Only used for internal plugins which output parameter automation events for
+    /// other plugins.
+    ///
+    /// This will only be called if `PluginMainThread::has_automation_out_port()`
+    /// returned `true`.
+    ///
+    /// By default this returns `ProcessStatus::Error`.
+    ///
+    /// `[process-thread & active_state & processing_state]`
+    #[allow(unused)]
+    fn process_with_automation_out(
+        &mut self,
+        proc_info: &ProcInfo,
+        buffers: &mut ProcBuffers,
+        in_events: &EventBuffer,
+        out_events: &mut EventBuffer,
+        automation_out: &mut Vec<AutomationIoEvent>,
+    ) -> ProcessStatus {
+        ProcessStatus::Error
+    }
 }

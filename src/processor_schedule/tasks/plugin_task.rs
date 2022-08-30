@@ -1,5 +1,7 @@
+use dropseed_plugin_api::buffer::SharedBuffer;
 use dropseed_plugin_api::ProcInfo;
 use dropseed_plugin_api::{PluginInstanceID, ProcBuffers};
+use smallvec::SmallVec;
 
 use crate::plugin_host::event_io_buffers::PluginEventIoBuffers;
 use crate::plugin_host::SharedPluginHostProcThread;
@@ -11,6 +13,8 @@ pub(crate) struct PluginTask {
     pub buffers: ProcBuffers,
 
     pub event_buffers: PluginEventIoBuffers,
+
+    pub clear_audio_in_buffers: SmallVec<[SharedBuffer<f32>; 2]>,
 }
 
 impl PluginTask {

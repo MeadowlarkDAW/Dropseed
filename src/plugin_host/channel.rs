@@ -12,11 +12,13 @@ use std::sync::{
     Arc,
 };
 
+use dropseed_plugin_api::automation::AutomationIoEventType;
+
 use crate::utils::reducing_queue::{
     ReducFnvConsumer, ReducFnvProducer, ReducFnvValue, ReducingFnvQueue,
 };
+use crate::utils::thread_id::SharedThreadIDs;
 
-use super::event_io_buffers::ParamIoEventType;
 use super::process_thread::PluginHostProcThread;
 
 pub(super) struct PlugHostChannelMainThread {
@@ -39,7 +41,9 @@ impl PlugHostChannelMainThread {
     pub fn create_process_thread(
         &mut self,
         plugin_processor: Box<dyn PluginProcessThread>,
+        plugin_instance_id: u64,
         num_params: usize,
+        thread_ids: SharedThreadIDs,
         coll_handle: &basedrop::Handle,
     ) {
         let (param_queues_main_thread, param_queues_proc_thread) = if num_params > 0 {
@@ -74,7 +78,13 @@ impl PlugHostChannelMainThread {
         };
 
         let shared_proc_thread = SharedPluginHostProcThread::new(
-            PluginHostProcThread::new(plugin_processor, proc_channel, num_params),
+            PluginHostProcThread::new(
+                plugin_processor,
+                plugin_instance_id,
+                proc_channel,
+                num_params,
+                thread_ids,
+            ),
             coll_handle,
         );
 
@@ -82,7 +92,9 @@ impl PlugHostChannelMainThread {
     }
 
     /// Note this doesn't actually drop the process thread. It only drops this
-    /// struct's pointer to the process thread.
+    /// struct's pointer to the process thread so that when the process thread
+    /// drops its shared pointer, it will be collected by the garbage
+    /// collector.
     pub fn drop_process_thread_pointer(&mut self) {
         self.process_thread = None;
         self.param_queues = None;
@@ -194,14 +206,14 @@ impl ReducFnvValue for ProcToMainParamValue {
 }
 
 impl ProcToMainParamValue {
-    pub fn from_param_event(event: ParamIoEventType) -> Option<Self> {
+    pub fn from_param_event(event: AutomationIoEventType) -> Option<Self> {
         match event {
-            ParamIoEventType::Value(value) => Some(Self { value: Some(value), gesture: None }),
-            ParamIoEventType::Modulation(_) => None, // TODO: handle mod events
-            ParamIoEventType::BeginGesture => {
+            AutomationIoEventType::Value(value) => Some(Self { value: Some(value), gesture: None }),
+            AutomationIoEventType::Modulation(_) => None, // TODO: handle mod events
+            AutomationIoEventType::BeginGesture => {
                 Some(Self { value: None, gesture: Some(ParamGestureInfo { is_begin: true }) })
             }
-            ParamIoEventType::EndGesture => {
+            AutomationIoEventType::EndGesture => {
                 Some(Self { value: None, gesture: Some(ParamGestureInfo { is_begin: false }) })
             }
         }

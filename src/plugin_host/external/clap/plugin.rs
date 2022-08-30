@@ -216,6 +216,12 @@ impl PluginMainThread for ClapPluginMainThread {
             .expect("Called deactivate() before the plugin's AudioProcessor was dropped");
     }
 
+    fn latency(&self) -> i64 {
+        // TODO: Get latency from plugin
+
+        0
+    }
+
     // --- Parameters ---------------------------------------------------------------------------------
 
     fn on_main_thread(&mut self) {

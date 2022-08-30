@@ -1,45 +1,28 @@
-use atomic_refcell::{AtomicRefCell, AtomicRefMut};
-use basedrop::Shared;
+use audio_graph::Edge;
 use fnv::FnvHashMap;
 
-use crate::processor_schedule::tasks::DelayCompNode;
-
-#[derive(Clone)]
-pub(crate) struct SharedDelayCompNode {
-    pub active: bool,
-    pub delay: u32,
-
-    shared: Shared<AtomicRefCell<DelayCompNode>>,
-}
-
-impl SharedDelayCompNode {
-    pub fn new(d: DelayCompNode, coll_handle: &basedrop::Handle) -> Self {
-        Self {
-            active: true,
-            delay: d.delay(),
-            shared: Shared::new(coll_handle, AtomicRefCell::new(d)),
-        }
-    }
-
-    pub fn borrow_mut<'a>(&'a self) -> AtomicRefMut<'a, DelayCompNode> {
-        self.shared.borrow_mut()
-    }
-}
+use crate::processor_schedule::tasks::{
+    SharedAudioDelayCompNode, SharedAutomationDelayCompNode, SharedNoteDelayCompNode,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct DelayCompKey {
-    pub src_node_ref: usize,
-    pub port_stable_id: u32,
-    pub port_channel_index: u16,
+    pub edge: Edge,
     pub delay: u32,
 }
 
 pub(crate) struct DelayCompNodePool {
-    pub pool: FnvHashMap<DelayCompKey, SharedDelayCompNode>,
+    pub audio: FnvHashMap<DelayCompKey, SharedAudioDelayCompNode>,
+    pub note: FnvHashMap<DelayCompKey, SharedNoteDelayCompNode>,
+    pub automation: FnvHashMap<DelayCompKey, SharedAutomationDelayCompNode>,
 }
 
 impl DelayCompNodePool {
     pub fn new() -> Self {
-        Self { pool: FnvHashMap::default() }
+        Self {
+            audio: FnvHashMap::default(),
+            note: FnvHashMap::default(),
+            automation: FnvHashMap::default(),
+        }
     }
 }

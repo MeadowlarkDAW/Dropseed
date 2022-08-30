@@ -1,17 +1,18 @@
 use smallvec::SmallVec;
 
+use dropseed_plugin_api::automation::AutomationIoEvent;
 use dropseed_plugin_api::buffer::SharedBuffer;
 use dropseed_plugin_api::ProcInfo;
 
-use crate::plugin_host::event_io_buffers::{NoteIoEvent, ParamIoEvent};
+use crate::plugin_host::event_io_buffers::NoteIoEvent;
 
 pub(crate) struct DeactivatedPluginTask {
     pub audio_through: SmallVec<[(SharedBuffer<f32>, SharedBuffer<f32>); 4]>,
-    pub extra_audio_out: SmallVec<[SharedBuffer<f32>; 4]>,
+    pub note_through: Option<(SharedBuffer<NoteIoEvent>, SharedBuffer<NoteIoEvent>)>,
 
-    pub automation_out_buffer: Option<SharedBuffer<ParamIoEvent>>,
-
-    pub note_out_buffers: SmallVec<[Option<SharedBuffer<NoteIoEvent>>; 2]>,
+    pub clear_audio_out: SmallVec<[SharedBuffer<f32>; 4]>,
+    pub clear_note_out: SmallVec<[SharedBuffer<NoteIoEvent>; 2]>,
+    pub clear_automation_out: Option<SharedBuffer<AutomationIoEvent>>,
 }
 
 impl DeactivatedPluginTask {
@@ -29,14 +30,23 @@ impl DeactivatedPluginTask {
             out_buf.copy_from_slice(in_buf);
         }
 
+        // Pass notes through the main ports.
+        if let Some((in_buf, out_buf)) = &self.note_through {
+            let in_buf_ref = in_buf.borrow();
+            let mut out_buf_ref = out_buf.borrow_mut();
+
+            out_buf_ref.clear();
+            out_buf_ref.clone_from(&*in_buf_ref);
+        }
+
         // Make sure all output buffers are cleared.
-        for out_buf in self.extra_audio_out.iter() {
+        for out_buf in self.clear_audio_out.iter() {
             out_buf.clear_until(proc_info.frames);
         }
-        if let Some(out_buf) = &self.automation_out_buffer {
+        for out_buf in self.clear_note_out.iter() {
             out_buf.truncate();
         }
-        for out_buf in self.note_out_buffers.iter().flatten() {
+        if let Some(out_buf) = &self.clear_automation_out {
             out_buf.truncate();
         }
     }

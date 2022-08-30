@@ -1,12 +1,10 @@
-use audio_graph::ScheduledNode;
+use audio_graph::CompiledSchedule;
 use std::error::Error;
 
 use dropseed_plugin_api::{buffer::DebugBufferID, PluginInstanceID};
 
-use crate::engine::request::EdgeReq;
+use crate::engine::request::ConnectEdgeReq;
 use crate::processor_schedule::ProcessorSchedule;
-
-use super::{PortChannelID, PortType};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectEdgeErrorType {
@@ -14,6 +12,7 @@ pub enum ConnectEdgeErrorType {
     DstPluginDoesNotExist,
     SrcPortDoesNotExist,
     DstPortDoesNotExist,
+    EdgeAlreadyExists,
     Cycle,
     Unkown,
 }
@@ -21,7 +20,7 @@ pub enum ConnectEdgeErrorType {
 #[derive(Debug, Clone)]
 pub struct ConnectEdgeError {
     pub error_type: ConnectEdgeErrorType,
-    pub edge: EdgeReq,
+    pub edge: ConnectEdgeReq,
 }
 
 impl Error for ConnectEdgeError {}
@@ -57,6 +56,9 @@ impl std::fmt::Display for ConnectEdgeError {
                     &self.edge
                 )
             }
+            ConnectEdgeErrorType::EdgeAlreadyExists => {
+                write!(f, "Could not add edge {:?} to graph: Edge already exists", &self.edge)
+            }
             ConnectEdgeErrorType::Cycle => {
                 write!(f, "Could not add edge {:?} to graph: Cycle detected", &self.edge)
             }
@@ -69,12 +71,9 @@ impl std::fmt::Display for ConnectEdgeError {
 
 #[derive(Debug)]
 pub enum GraphCompilerError {
-    VerifierError(
-        VerifyScheduleError,
-        Vec<ScheduledNode<PluginInstanceID, PortChannelID, PortType>>,
-        ProcessorSchedule,
-    ),
-    UnexpectedError(String, Vec<ScheduledNode<PluginInstanceID, PortChannelID, PortType>>),
+    AbstractCompilerError(audio_graph::error::CompileGraphError),
+    VerifierError(VerifyScheduleError, CompiledSchedule, ProcessorSchedule),
+    UnexpectedError(String),
 }
 
 impl Error for GraphCompilerError {}
@@ -82,13 +81,22 @@ impl Error for GraphCompilerError {}
 impl std::fmt::Display for GraphCompilerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
+            GraphCompilerError::AbstractCompilerError(e) => {
+                write!(f, "Failed to compile audio graph: abstract compiler error: {}", e)
+            }
             GraphCompilerError::VerifierError(e, abstract_schedule, schedule) => {
                 write!(f, "Failed to compile audio graph: {}\n\nOutput of abstract graph compiler: {:?}\n\nOutput of final compiler: {:?}", e, &abstract_schedule, &schedule)
             }
-            GraphCompilerError::UnexpectedError(e, abstract_schedule) => {
-                write!(f, "Failed to compile audio graph: Unexpected error: {}\n\nOutput of abstract graph compiler: {:?}", e, &abstract_schedule)
+            GraphCompilerError::UnexpectedError(e) => {
+                write!(f, "Failed to compile audio graph: Unexpected error: {}", e)
             }
         }
+    }
+}
+
+impl From<audio_graph::error::CompileGraphError> for GraphCompilerError {
+    fn from(e: audio_graph::error::CompileGraphError) -> Self {
+        Self::AbstractCompilerError(e)
     }
 }
 

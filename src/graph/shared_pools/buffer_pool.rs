@@ -1,6 +1,7 @@
+use dropseed_plugin_api::automation::AutomationIoEvent;
 use dropseed_plugin_api::buffer::{DebugBufferID, DebugBufferType, SharedBuffer};
 
-use crate::plugin_host::event_io_buffers::{NoteIoEvent, ParamIoEvent};
+use crate::plugin_host::event_io_buffers::NoteIoEvent;
 
 pub(crate) struct BufferPool<T: Clone + Copy + Send + Sync + 'static> {
     pool: Vec<SharedBuffer<T>>,
@@ -40,7 +41,6 @@ impl<T: Clone + Copy + Send + Sync + 'static> BufferPool<T> {
             })
         }
 
-        // PANIC: we have checked above that either index was in-bounds, or the pool got resized
         self.pool[index].clone()
     }
 }
@@ -61,17 +61,14 @@ impl<T: Clone + Copy + Send + Sync + 'static + Default> BufferPool<T> {
             })
         }
 
-        // PANIC: we have checked above that either index was in-bounds, or the pool got resized
         self.pool[index].clone()
     }
 }
 
 pub(crate) struct SharedBufferPool {
     pub audio_buffer_pool: BufferPool<f32>,
-    pub intermediary_audio_buffer_pool: BufferPool<f32>,
-
-    pub param_event_buffer_pool: BufferPool<ParamIoEvent>,
     pub note_buffer_pool: BufferPool<NoteIoEvent>,
+    pub automation_buffer_pool: BufferPool<AutomationIoEvent>,
 }
 
 impl SharedBufferPool {
@@ -87,17 +84,12 @@ impl SharedBufferPool {
                 DebugBufferType::Audio32,
                 coll_handle.clone(),
             ),
-            intermediary_audio_buffer_pool: BufferPool::new(
-                audio_buffer_size,
-                DebugBufferType::IntermediaryAudio32,
-                coll_handle.clone(),
-            ),
             note_buffer_pool: BufferPool::new(
                 note_buffer_size,
                 DebugBufferType::Note,
                 coll_handle.clone(),
             ),
-            param_event_buffer_pool: BufferPool::new(
+            automation_buffer_pool: BufferPool::new(
                 event_buffer_size,
                 DebugBufferType::Event,
                 coll_handle,
@@ -105,16 +97,27 @@ impl SharedBufferPool {
         }
     }
 
-    pub fn remove_excess_buffers(
+    pub fn set_num_buffers(
         &mut self,
-        audio_buffer_count: usize,
-        intermediary_audio_buffer_count: usize,
-        note_buffers_count: usize,
-        event_buffer_count: usize,
+        num_audio_buffers: usize,
+        num_note_buffers: usize,
+        num_automation_buffers: usize,
     ) {
-        self.audio_buffer_pool.pool.truncate(audio_buffer_count + 1);
-        self.intermediary_audio_buffer_pool.pool.truncate(intermediary_audio_buffer_count + 1);
-        self.note_buffer_pool.pool.truncate(note_buffers_count + 1);
-        self.param_event_buffer_pool.pool.truncate(event_buffer_count + 1);
+        if num_audio_buffers > self.audio_buffer_pool.pool.len() {
+            // Cause the pool to allocate enough slots.
+            let _ = self.audio_buffer_pool.initialized_buffer_at_index(num_audio_buffers - 1);
+        }
+        if num_note_buffers > self.note_buffer_pool.pool.len() {
+            // Cause the pool to allocate enough slots.
+            let _ = self.note_buffer_pool.buffer_at_index(num_note_buffers - 1);
+        }
+        if num_automation_buffers > self.automation_buffer_pool.pool.len() {
+            // Cause the pool to allocate enough slots.
+            let _ = self.automation_buffer_pool.buffer_at_index(num_automation_buffers - 1);
+        }
+
+        self.audio_buffer_pool.pool.truncate(num_audio_buffers);
+        self.note_buffer_pool.pool.truncate(num_note_buffers);
+        self.automation_buffer_pool.pool.truncate(num_automation_buffers);
     }
 }

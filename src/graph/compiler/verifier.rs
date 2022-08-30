@@ -20,6 +20,8 @@ impl Verifier {
         Verifier { plugin_instances, buffer_instances }
     }
 
+    /// Verify that the schedule is sound (no race conditions).
+    ///
     /// This is probably expensive, but I would like to keep this check here until we are very
     /// confident in the stability and soundness of this audio graph compiler.
     ///
@@ -108,15 +110,7 @@ impl Verifier {
                         }
                     }
                 }
-                Task::DelayComp(t) => {
-                    if t.audio_in.id() == t.audio_out.id() {
-                        return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
-                            buffer_id: t.audio_in.id(),
-                            task_info: format!("{:?}", &task),
-                        });
-                    }
-                }
-                Task::Sum(t) => {
+                Task::AudioSum(t) => {
                     // This could be made just a warning and not an error, but it's still not what
                     // we want to happen.
                     if t.audio_in.len() < 2 {
@@ -126,10 +120,6 @@ impl Verifier {
                         });
                     }
 
-                    // This verification step is probably overkill because I don't believe
-                    // that simply summing aliased buffers can lead to a race condition issue.
-                    // Unless the compiler tries to copy some of those buffers and expects those
-                    // buffers to not alias or something.
                     for b in t.audio_in.iter() {
                         if !self.buffer_instances.insert(b.id()) {
                             return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
@@ -141,6 +131,80 @@ impl Verifier {
                     if !self.buffer_instances.insert(t.audio_out.id()) {
                         return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
                             buffer_id: t.audio_out.id(),
+                            task_info: format!("{:?}", &task),
+                        });
+                    }
+                }
+                Task::NoteSum(t) => {
+                    // This could be made just a warning and not an error, but it's still not what
+                    // we want to happen.
+                    if t.note_in.len() < 2 {
+                        return Err(VerifyScheduleError::SumNodeWithLessThanTwoInputs {
+                            num_inputs: t.note_in.len(),
+                            task_info: format!("{:?}", &task),
+                        });
+                    }
+
+                    for b in t.note_in.iter() {
+                        if !self.buffer_instances.insert(b.id()) {
+                            return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
+                                buffer_id: b.id(),
+                                task_info: format!("{:?}", &task),
+                            });
+                        }
+                    }
+                    if !self.buffer_instances.insert(t.note_out.id()) {
+                        return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
+                            buffer_id: t.note_out.id(),
+                            task_info: format!("{:?}", &task),
+                        });
+                    }
+                }
+                Task::AutomationSum(t) => {
+                    // This could be made just a warning and not an error, but it's still not what
+                    // we want to happen.
+                    if t.input.len() < 2 {
+                        return Err(VerifyScheduleError::SumNodeWithLessThanTwoInputs {
+                            num_inputs: t.input.len(),
+                            task_info: format!("{:?}", &task),
+                        });
+                    }
+
+                    for b in t.input.iter() {
+                        if !self.buffer_instances.insert(b.id()) {
+                            return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
+                                buffer_id: b.id(),
+                                task_info: format!("{:?}", &task),
+                            });
+                        }
+                    }
+                    if !self.buffer_instances.insert(t.output.id()) {
+                        return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
+                            buffer_id: t.output.id(),
+                            task_info: format!("{:?}", &task),
+                        });
+                    }
+                }
+                Task::AudioDelayComp(t) => {
+                    if t.audio_in.id() == t.audio_out.id() {
+                        return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
+                            buffer_id: t.audio_in.id(),
+                            task_info: format!("{:?}", &task),
+                        });
+                    }
+                }
+                Task::NoteDelayComp(t) => {
+                    if t.note_in.id() == t.note_out.id() {
+                        return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
+                            buffer_id: t.note_in.id(),
+                            task_info: format!("{:?}", &task),
+                        });
+                    }
+                }
+                Task::AutomationDelayComp(t) => {
+                    if t.input.id() == t.output.id() {
+                        return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
+                            buffer_id: t.input.id(),
                             task_info: format!("{:?}", &task),
                         });
                     }
@@ -160,8 +224,38 @@ impl Verifier {
                             });
                         }
                     }
+                    for (b_in, b_out) in t.note_through.iter() {
+                        if !self.buffer_instances.insert(b_in.id()) {
+                            return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
+                                buffer_id: b_in.id(),
+                                task_info: format!("{:?}", &task),
+                            });
+                        }
+                        if !self.buffer_instances.insert(b_out.id()) {
+                            return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
+                                buffer_id: b_out.id(),
+                                task_info: format!("{:?}", &task),
+                            });
+                        }
+                    }
 
-                    for b in t.extra_audio_out.iter() {
+                    for b in t.clear_audio_out.iter() {
+                        if !self.buffer_instances.insert(b.id()) {
+                            return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
+                                buffer_id: b.id(),
+                                task_info: format!("{:?}", &task),
+                            });
+                        }
+                    }
+                    for b in t.clear_note_out.iter() {
+                        if !self.buffer_instances.insert(b.id()) {
+                            return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
+                                buffer_id: b.id(),
+                                task_info: format!("{:?}", &task),
+                            });
+                        }
+                    }
+                    if let Some(b) = &t.clear_automation_out {
                         if !self.buffer_instances.insert(b.id()) {
                             return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
                                 buffer_id: b.id(),

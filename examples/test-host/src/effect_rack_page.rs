@@ -6,7 +6,7 @@ use dropseed::plugin_api::{DSPluginSaveState, ParamID, PluginInstanceID};
 use dropseed::plugin_host::ParamModifiedInfo;
 use dropseed::{
     engine::{
-        request::{EdgeReq, EdgeReqPortID, ModifyGraphRequest, PluginIDReq},
+        request::{ConnectEdgeReq, EdgeReqPortID, ModifyGraphRequest, PluginIDReq},
         ActivatedEngineInfo, DSEngineMainThread, PluginActivatedStatus, PluginStatus,
     },
     plugin_api::plugin_scanner::ScannedPluginKey,
@@ -200,7 +200,7 @@ impl EffectRackState {
             add_plugin_instances: vec![DSPluginSaveState::new_with_default_state(plugin_key)],
             remove_plugin_instances: vec![],
             connect_new_edges: vec![
-                EdgeReq {
+                ConnectEdgeReq {
                     edge_type: PortType::Audio,
                     src_plugin_id: PluginIDReq::Existing(engine_info.graph_in_id.clone()),
                     dst_plugin_id: PluginIDReq::Added(0),
@@ -209,8 +209,9 @@ impl EffectRackState {
                     dst_port_id: EdgeReqPortID::Main,
                     dst_port_channel: 0,
                     log_error_on_fail: true,
+                    check_for_cycles: true,
                 },
-                EdgeReq {
+                ConnectEdgeReq {
                     edge_type: PortType::Audio,
                     src_plugin_id: PluginIDReq::Existing(engine_info.graph_in_id.clone()),
                     dst_plugin_id: PluginIDReq::Added(0),
@@ -219,8 +220,9 @@ impl EffectRackState {
                     dst_port_id: EdgeReqPortID::Main,
                     dst_port_channel: 1,
                     log_error_on_fail: true,
+                    check_for_cycles: true,
                 },
-                EdgeReq {
+                ConnectEdgeReq {
                     edge_type: PortType::Audio,
                     src_plugin_id: PluginIDReq::Added(0),
                     dst_plugin_id: PluginIDReq::Existing(engine_info.graph_out_id.clone()),
@@ -229,8 +231,9 @@ impl EffectRackState {
                     dst_port_id: EdgeReqPortID::Main,
                     dst_port_channel: 0,
                     log_error_on_fail: true,
+                    check_for_cycles: true,
                 },
-                EdgeReq {
+                ConnectEdgeReq {
                     edge_type: PortType::Audio,
                     src_plugin_id: PluginIDReq::Added(0),
                     dst_plugin_id: PluginIDReq::Existing(engine_info.graph_out_id.clone()),
@@ -239,6 +242,7 @@ impl EffectRackState {
                     dst_port_id: EdgeReqPortID::Main,
                     dst_port_channel: 1,
                     log_error_on_fail: true,
+                    check_for_cycles: true,
                 },
             ],
             disconnect_edges: vec![],

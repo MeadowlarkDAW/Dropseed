@@ -3,6 +3,7 @@ use std::fmt::{Debug, Error, Formatter, Write};
 
 mod deactivated_plug_task;
 mod delay_comp_task;
+mod graph_in_out_task;
 mod plugin_task;
 mod sum_task;
 mod transport_task;
@@ -10,15 +11,24 @@ mod transport_task;
 pub use transport_task::TransportHandle;
 
 pub(crate) use deactivated_plug_task::DeactivatedPluginTask;
-pub(crate) use delay_comp_task::{DelayCompNode, DelayCompTask};
+pub(crate) use delay_comp_task::{
+    AudioDelayCompNode, AudioDelayCompTask, AutomationDelayCompNode, AutomationDelayCompTask,
+    NoteDelayCompNode, NoteDelayCompTask, SharedAudioDelayCompNode, SharedAutomationDelayCompNode,
+    SharedNoteDelayCompNode,
+};
+pub(crate) use graph_in_out_task::{GraphInTask, GraphOutTask};
 pub(crate) use plugin_task::PluginTask;
-pub(crate) use sum_task::SumTask;
+pub(crate) use sum_task::{AudioSumTask, AutomationSumTask, NoteSumTask};
 pub(crate) use transport_task::TransportTask;
 
 pub(crate) enum Task {
     Plugin(PluginTask),
-    DelayComp(DelayCompTask),
-    Sum(SumTask),
+    AudioSum(AudioSumTask),
+    NoteSum(NoteSumTask),
+    AutomationSum(AutomationSumTask),
+    AudioDelayComp(AudioDelayCompTask),
+    NoteDelayComp(NoteDelayCompTask),
+    AutomationDelayComp(AutomationDelayCompTask),
     DeactivatedPlugin(DeactivatedPluginTask),
 }
 
@@ -49,66 +59,59 @@ impl Debug for Task {
                     f.field("audio_out", &s);
                 }
 
-                if let Some(automation_in_buffers) = &t.event_buffers.unmixed_param_in_buffers {
-                    let mut s = String::new();
-                    for b in automation_in_buffers.iter() {
-                        s.push_str(&format!("{:?}, ", b.id()))
-                    }
-
-                    f.field("automation_in", &s);
+                if let Some((automation_in_buffer, do_clear)) =
+                    &t.event_buffers.automation_in_buffer
+                {
+                    f.field(
+                        "automation_in",
+                        &format!("{:?} clear: {}", &automation_in_buffer.id(), do_clear),
+                    );
                 }
 
-                if let Some(automation_out_buffer) = &t.event_buffers.param_out_buffer {
+                if let Some(automation_out_buffer) = &t.event_buffers.automation_out_buffer {
                     f.field("automation_out", &format!("{:?}", automation_out_buffer.id()));
                 }
 
-                if !t.event_buffers.unmixed_note_in_buffers.is_empty() {
-                    let mut has_buffer = false;
+                if !t.event_buffers.note_in_buffers.is_empty() {
                     let mut s = String::new();
-                    for buffers in t.event_buffers.unmixed_note_in_buffers.iter().flatten() {
-                        has_buffer = true;
-
-                        s.push('[');
-
-                        for b in buffers.iter() {
-                            s.push_str(&format!("{:?}, ", b.id()))
-                        }
-
-                        s.push_str("], ");
-                    }
-
-                    if has_buffer {
-                        f.field("note_in", &s);
-                    }
-                }
-
-                if !t.event_buffers.note_out_buffers.is_empty() {
-                    let mut has_buffer = false;
-                    let mut s = String::new();
-                    for buffer in t.event_buffers.note_out_buffers.iter().flatten() {
-                        has_buffer = true;
-
+                    for buffer in t.event_buffers.note_in_buffers.iter() {
                         s.push_str(&format!("{:?}, ", buffer.id()));
                     }
 
-                    if has_buffer {
-                        f.field("note_out", &s);
+                    f.field("note_in", &s);
+                }
+
+                if !t.event_buffers.note_out_buffers.is_empty() {
+                    let mut s = String::new();
+                    for buffer in t.event_buffers.note_out_buffers.iter() {
+                        s.push_str(&format!("{:?}, ", buffer.id()));
                     }
+
+                    f.field("note_out", &s);
+                }
+
+                if !t.clear_audio_in_buffers.is_empty() {
+                    let mut s = String::new();
+                    for b in t.clear_audio_in_buffers.iter() {
+                        write!(s, "{:?}, ", &b.id())?;
+                    }
+
+                    f.field("clear_audio_in", &s);
+                }
+
+                if !t.event_buffers.clear_note_in_buffers.is_empty() {
+                    let mut s = String::new();
+                    for b in t.event_buffers.clear_note_in_buffers.iter() {
+                        write!(s, "{:?}, ", &b.id())?;
+                    }
+
+                    f.field("clear_note_in", &s);
                 }
 
                 f.finish()
             }
-            Task::DelayComp(t) => {
-                let mut f = f.debug_struct("DelayComp");
-
-                f.field("audio_in", &t.audio_in.id());
-                f.field("audio_out", &t.audio_out.id());
-                f.field("delay", &t.shared_node.delay);
-
-                f.finish()
-            }
-            Task::Sum(t) => {
-                let mut f = f.debug_struct("Sum");
+            Task::AudioSum(t) => {
+                let mut f = f.debug_struct("AudioSum");
 
                 let mut s = String::new();
                 for b in t.audio_in.iter() {
@@ -117,6 +120,59 @@ impl Debug for Task {
                 f.field("audio_in", &s);
 
                 f.field("audio_out", &format!("{:?}", t.audio_out.id()));
+
+                f.finish()
+            }
+            Task::NoteSum(t) => {
+                let mut f = f.debug_struct("NoteSum");
+
+                let mut s = String::new();
+                for b in t.note_in.iter() {
+                    write!(s, "{:?}, ", b.id())?;
+                }
+                f.field("note_in", &s);
+
+                f.field("note_out", &format!("{:?}", t.note_out.id()));
+
+                f.finish()
+            }
+            Task::AutomationSum(t) => {
+                let mut f = f.debug_struct("AutomationSum");
+
+                let mut s = String::new();
+                for b in t.input.iter() {
+                    write!(s, "{:?}, ", b.id())?;
+                }
+                f.field("input", &s);
+
+                f.field("output", &format!("{:?}", t.output.id()));
+
+                f.finish()
+            }
+            Task::AudioDelayComp(t) => {
+                let mut f = f.debug_struct("AudioDelayComp");
+
+                f.field("audio_in", &t.audio_in.id());
+                f.field("audio_out", &t.audio_out.id());
+                f.field("delay", &t.shared_node.delay);
+
+                f.finish()
+            }
+            Task::NoteDelayComp(t) => {
+                let mut f = f.debug_struct("NoteDelayComp");
+
+                f.field("note_in", &t.note_in.id());
+                f.field("note_out", &t.note_out.id());
+                f.field("delay", &t.shared_node.delay);
+
+                f.finish()
+            }
+            Task::AutomationDelayComp(t) => {
+                let mut f = f.debug_struct("AutomationDelayComp");
+
+                f.field("input", &t.input.id());
+                f.field("output", &t.output.id());
+                f.field("delay", &t.shared_node.delay);
 
                 f.finish()
             }
@@ -130,26 +186,26 @@ impl Debug for Task {
                 f.field("audio_through", &s);
 
                 let mut s = String::new();
-                for b in t.extra_audio_out.iter() {
+                for b in t.clear_audio_out.iter() {
                     s.push_str(&format!("{:?}, ", b.id()))
                 }
-                f.field("extra_audio_out", &s);
+                f.field("clear_audio_out", &s);
 
-                if let Some(automation_out_buffer) = &t.automation_out_buffer {
-                    f.field("automation_out", &format!("{:?}", automation_out_buffer.id()));
+                if let Some(automation_out_buffer) = &t.clear_automation_out {
+                    f.field("clear_automation_out", &format!("{:?}", automation_out_buffer.id()));
                 }
 
-                if !t.note_out_buffers.is_empty() {
+                if !t.clear_note_out.is_empty() {
                     let mut has_buffer = false;
                     let mut s = String::new();
-                    for buffer in t.note_out_buffers.iter().flatten() {
+                    for buffer in t.clear_note_out.iter() {
                         has_buffer = true;
 
                         s.push_str(&format!("{:?}, ", buffer.id()));
                     }
 
                     if has_buffer {
-                        f.field("note_out", &s);
+                        f.field("clear_note_out", &s);
                     }
                 }
 
@@ -163,8 +219,12 @@ impl Task {
     pub fn process(&mut self, proc_info: &ProcInfo) {
         match self {
             Task::Plugin(task) => task.process(proc_info),
-            Task::DelayComp(task) => task.process(proc_info),
-            Task::Sum(task) => task.process(proc_info),
+            Task::AudioSum(task) => task.process(proc_info),
+            Task::NoteSum(task) => task.process(),
+            Task::AutomationSum(task) => task.process(),
+            Task::AudioDelayComp(task) => task.process(proc_info),
+            Task::NoteDelayComp(task) => task.process(proc_info),
+            Task::AutomationDelayComp(task) => task.process(proc_info),
             Task::DeactivatedPlugin(task) => task.process(proc_info),
         }
     }

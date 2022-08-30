@@ -40,7 +40,7 @@ impl From<PluginFormat> for PluginInstanceType {
 
 /// A unique ID for a plugin instance.
 pub struct PluginInstanceID {
-    node_ref: usize,
+    node_id: u32,
     // To make sure that no two plugin instances ever have the same ID.
     unique_id: u64,
     format: PluginInstanceType,
@@ -49,12 +49,12 @@ pub struct PluginInstanceID {
 
 impl PluginInstanceID {
     pub fn _new(
-        node_ref: usize,
+        node_id: u32,
         unique_id: u64,
         format: PluginInstanceType,
         rdn: Shared<String>,
     ) -> Self {
-        Self { node_ref, unique_id, format, rdn }
+        Self { node_id, unique_id, format, rdn }
     }
 
     /// The reverse domain name of this plugin.
@@ -70,8 +70,8 @@ impl PluginInstanceID {
         self.format
     }
 
-    pub fn _node_ref(&self) -> usize {
-        self.node_ref
+    pub fn _node_id(&self) -> u32 {
+        self.node_id
     }
 }
 
@@ -100,7 +100,7 @@ impl std::fmt::Debug for PluginInstanceID {
 impl Clone for PluginInstanceID {
     fn clone(&self) -> Self {
         Self {
-            node_ref: self.node_ref,
+            node_id: self.node_id,
             unique_id: self.unique_id,
             format: self.format,
             rdn: Shared::clone(&self.rdn),
@@ -110,7 +110,7 @@ impl Clone for PluginInstanceID {
 
 impl PartialEq for PluginInstanceID {
     fn eq(&self, other: &Self) -> bool {
-        self.node_ref.eq(&other.node_ref)
+        self.node_id.eq(&other.node_id)
     }
 }
 
@@ -118,7 +118,7 @@ impl Eq for PluginInstanceID {}
 
 impl Hash for PluginInstanceID {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.node_ref.hash(state);
+        self.node_id.hash(state);
         self.unique_id.hash(state);
     }
 }
