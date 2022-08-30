@@ -17,14 +17,14 @@ bitflags! {
         /// Should call the on_main() callback
         const CALLBACK = 1 << 3;
 
-        /// Should rescan audio ports
-        const RESCAN_AUDIO_PORTS = 1 << 4;
+        /// Should rescan audio and note ports
+        const RESCAN_PORTS = 1 << 4;
 
-        /// Should rescan note ports
-        const RESCAN_NOTE_PORTS = 1 << 5;
+        /// Should rescan parameters
+        const RESCAN_PARAMS = 1 << 5;
 
         /// Should flush parameter values
-        const FLUSH_PARAMS = 1 >> 6;
+        const FLUSH_PARAMS = 1 << 6;
 
         /// Should resize the GUI
         const GUI_RESIZE = 1 << 7;

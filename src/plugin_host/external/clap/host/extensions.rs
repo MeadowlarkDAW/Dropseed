@@ -1,5 +1,6 @@
 use clack_extensions::audio_ports::{HostAudioPortsImplementation, RescanType};
 use clack_extensions::gui::{GuiError, GuiSize, HostGuiImplementation};
+use clack_extensions::latency::HostLatencyImpl;
 use clack_extensions::log::implementation::HostLog;
 use clack_extensions::log::LogSeverity;
 use clack_extensions::params::{
@@ -10,10 +11,11 @@ use dropseed_plugin_api::HostRequestFlags;
 
 use super::{ClapHostMainThread, ClapHostShared};
 
-// TODO: Make sure that the log and print methods don't allocate on the current thread.
-// If they do, then we need to come up with a realtime-safe way to print to the terminal.
 impl<'a> HostLog for ClapHostShared<'a> {
     fn log(&self, severity: LogSeverity, message: &str) {
+        // TODO: Make sure that the log and print methods don't allocate on the current thread.
+        // If they do, then we need to come up with a realtime-safe way to print to the terminal.
+
         let level = match severity {
             LogSeverity::Debug => log::Level::Debug,
             LogSeverity::Info => log::Level::Info,
@@ -50,28 +52,23 @@ impl<'a> HostAudioPortsImplementation for ClapHostMainThread<'a> {
             | RescanType::CHANNEL_COUNT
             | RescanType::PORT_TYPE
             | RescanType::IN_PLACE_PAIR
-            | RescanType::LIST;
-        // | RescanType::NAMES // TODO: support this
+            | RescanType::LIST
+            | RescanType::NAMES;
 
         flag.remove(supported);
         flag.is_empty()
     }
 
-    fn rescan(&mut self, mut flags: RescanType) {
+    fn rescan(&mut self, flags: RescanType) {
         if !self.shared.thread_ids.is_main_thread() {
             log::warn!("Plugin called clap_host_audio_ports->rescan() not in the main thread");
             return;
         }
 
-        if flags.contains(RescanType::NAMES) {
-            // TODO: support this
-            log::warn!("clap plugin {:?} set CLAP_AUDIO_PORTS_RESCAN_NAMES flag in call to clap_host_audio_ports->rescan()", &*self.shared.plugin_log_name);
-
-            flags.remove(RescanType::NAMES);
-        }
-
         if !flags.is_empty() {
-            // self.shared.host_request.request_restart(); // TODO
+            // We ignore the `flags` field since we just do a full restart
+            // and rescan for every "rescan ports" request anyway.
+            self.shared.host_request.request(HostRequestFlags::RESCAN_PORTS);
         }
     }
 }
@@ -90,10 +87,11 @@ impl<'a> HostParamsImplementationMainThread for ClapHostMainThread<'a> {
             return;
         }
 
-        let flags = ParamRescanFlags::from_bits_truncate(flags.bits());
-
-        self.rescan_requested =
-            Some(self.rescan_requested.unwrap_or(ParamRescanFlags::empty()) | flags);
+        if !flags.is_empty() {
+            // We ignore the `flags` field since we just do a full rescan
+            // for every "rescan params" request anyway.
+            self.shared.host_request.request(HostRequestFlags::RESCAN_PARAMS);
+        }
     }
 
     fn clear(&mut self, _param_id: u32, _flags: ParamClearFlags) {
@@ -128,9 +126,15 @@ impl<'a> HostGuiImplementation for ClapHostShared<'a> {
 
     fn closed(&self, was_destroyed: bool) {
         if was_destroyed {
-            self.host_request.request(HostRequestFlags::GUI_DESTROYED)
+            self.host_request.request(HostRequestFlags::GUI_DESTROYED);
         } else {
-            self.host_request.request(HostRequestFlags::GUI_CLOSED)
+            self.host_request.request(HostRequestFlags::GUI_CLOSED);
         }
+    }
+}
+
+impl<'a> HostLatencyImpl for ClapHostMainThread<'a> {
+    fn changed(&mut self) {
+        self.shared.host_request.request(HostRequestFlags::RESTART);
     }
 }

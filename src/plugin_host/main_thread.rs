@@ -462,7 +462,14 @@ impl PluginHostMainThread {
             self.plug_main_thread.on_main_thread();
         }
 
-        if request_flags.contains(HostRequestFlags::RESTART) && !self.remove_requested {
+        if request_flags.contains(HostRequestFlags::RESCAN_PARAMS) {
+            // TODO
+        }
+
+        // We just do a full restart and rescan for all "rescan port" requests for
+        // simplicity. I don't expect plugins to change the state of their ports
+        // often anyway.
+        if request_flags.intersects(HostRequestFlags::RESTART | HostRequestFlags::RESCAN_PORTS) {
             self.restarting = true;
             if active_state != PluginActiveState::DroppedAndReadyToDeactivate {
                 self.channel.shared_state.set_active_state(PluginActiveState::WaitingToDrop);

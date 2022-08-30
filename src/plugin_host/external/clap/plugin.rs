@@ -217,9 +217,11 @@ impl PluginMainThread for ClapPluginMainThread {
     }
 
     fn latency(&self) -> i64 {
-        // TODO: Get latency from plugin
-
-        0
+        if let Some(latency_ext) = self.instance.shared_host_data().latency_ext {
+            latency_ext.get(&mut self.instance.main_thread_plugin_data()) as i64
+        } else {
+            0
+        }
     }
 
     // --- Parameters ---------------------------------------------------------------------------------
