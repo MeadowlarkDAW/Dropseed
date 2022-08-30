@@ -19,12 +19,13 @@ pub(super) fn construct_plugin_task(
 ) -> Result<Task, GraphCompilerError> {
     // --- Get port info and processor from the plugin host ---------------------------------
 
-    let plugin_host = shared_pool.plugin_hosts.get_by_node_id(&scheduled_node.id).ok_or(
-        GraphCompilerError::UnexpectedError(format!(
-            "Abstract schedule assigned a node that doesn't exist: {:?}",
-            scheduled_node
-        )),
-    )?;
+    let plugin_host =
+        shared_pool.plugin_hosts.get_by_node_id(&scheduled_node.id).ok_or_else(|| {
+            GraphCompilerError::UnexpectedError(format!(
+                "Abstract schedule assigned a node that doesn't exist: {:?}",
+                scheduled_node
+            ))
+        })?;
 
     let plugin_id = plugin_host.id();
     let port_ids = plugin_host.port_ids();
@@ -44,12 +45,13 @@ pub(super) fn construct_plugin_task(
     for assigned_buffer in
         scheduled_node.input_buffers.iter().chain(scheduled_node.output_buffers.iter())
     {
-        let channel_id = port_ids.port_id_to_channel_id.get(&assigned_buffer.port_id).ok_or(
-            GraphCompilerError::UnexpectedError(format!(
-                "Abstract schedule assigned a buffer for port that doesn't exist {:?}",
-                scheduled_node
-            )),
-        )?;
+        let channel_id =
+            port_ids.port_id_to_channel_id.get(&assigned_buffer.port_id).ok_or_else(|| {
+                GraphCompilerError::UnexpectedError(format!(
+                    "Abstract schedule assigned a buffer for port that doesn't exist {:?}",
+                    scheduled_node
+                ))
+            })?;
 
         if assigned_buffer.type_index != channel_id.port_type.as_type_idx() {
             return Err(GraphCompilerError::UnexpectedError(format!(

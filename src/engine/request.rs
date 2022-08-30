@@ -17,7 +17,7 @@ pub struct ModifyGraphRequest {
     pub disconnect_edges: Vec<DSEdgeID>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PluginIDReq {
     /// Use an existing plugin in the audio graph.
     Existing(PluginInstanceID),
@@ -26,7 +26,7 @@ pub enum PluginIDReq {
     Added(usize),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EdgeReqPortID {
     /// Use the main port.
     ///
@@ -37,7 +37,7 @@ pub enum EdgeReqPortID {
     StableID(u32),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct ConnectEdgeReq {
     pub edge_type: PortType,
 

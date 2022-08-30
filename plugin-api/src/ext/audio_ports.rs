@@ -5,11 +5,11 @@ pub const PORT_NAME_SIDECHAIN: &str = "sidechain";
 
 pub(crate) static EMPTY_AUDIO_PORTS_CONFIG: PluginAudioPortsExt = PluginAudioPortsExt::empty();
 
-#[derive(Debug, Clone, PartialEq)]
 /// The layout of the audio ports of a plugin.
 ///
 /// By default this returns a configuration with a main stereo
 /// input port and a main stereo output port.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginAudioPortsExt {
     /// The list of input audio ports, in order.
     pub inputs: Vec<AudioPortInfo>,
@@ -293,7 +293,7 @@ impl PluginAudioPortsExt {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// Information about a custom audio port.
 pub struct AudioPortInfo {
     /// Stable identifier, it must never change.
@@ -322,7 +322,7 @@ pub struct AudioPortInfo {
     pub display_name: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Specifies which audio ports are "main" ports.
 pub enum MainPortsLayout {
     /// Both the first input port and the first output port are main ports.

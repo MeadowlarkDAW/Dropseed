@@ -106,7 +106,7 @@ impl PluginEventIoBuffers {
         sanitizer: &mut PluginEventOutputSanitizer,
         frames: u32,
     ) {
-        let events_iter = raw_event_buffer.iter().filter_map(|e| PluginIoEvent::read_from_clap(e));
+        let events_iter = raw_event_buffer.iter().filter_map(PluginIoEvent::read_from_clap);
         let events_iter = sanitizer.sanitize(events_iter, frames);
 
         for event in events_iter {

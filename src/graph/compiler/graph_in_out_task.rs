@@ -25,12 +25,13 @@ pub(super) fn construct_graph_in_task(
                     .audio_buffer_pool
                     .initialized_buffer_at_index(output_buffer.buffer_index.0);
 
-                let buffer_slot = audio_out_slots.get_mut(output_buffer.port_id.0 as usize).ok_or(
-                    GraphCompilerError::UnexpectedError(format!(
+                let buffer_slot =
+                    audio_out_slots.get_mut(output_buffer.port_id.0 as usize).ok_or_else(|| {
+                        GraphCompilerError::UnexpectedError(format!(
                     "Abstract schedule assigned buffer to graph in node with invalid port id {:?}",
                     output_buffer
-                )),
-                )?;
+                ))
+                    })?;
 
                 *buffer_slot = Some(buffer);
             }
@@ -51,10 +52,12 @@ pub(super) fn construct_graph_in_task(
     let mut audio_in: SmallVec<[SharedBuffer<f32>; 8]> =
         SmallVec::with_capacity(num_graph_in_audio_ports);
     for buffer_slot in audio_out_slots.drain(..) {
-        let buffer = buffer_slot.ok_or(GraphCompilerError::UnexpectedError(format!(
-            "Abstract schedule did not assign a buffer to all ports on graph in node {:?}",
-            scheduled_node
-        )))?;
+        let buffer = buffer_slot.ok_or_else(|| {
+            GraphCompilerError::UnexpectedError(format!(
+                "Abstract schedule did not assign a buffer to all ports on graph in node {:?}",
+                scheduled_node
+            ))
+        })?;
 
         audio_in.push(buffer);
     }
@@ -79,12 +82,13 @@ pub(super) fn construct_graph_out_task(
                     .audio_buffer_pool
                     .initialized_buffer_at_index(input_buffer.buffer_index.0);
 
-                let buffer_slot = audio_in_slots.get_mut(input_buffer.port_id.0 as usize).ok_or(
-                    GraphCompilerError::UnexpectedError(format!(
+                let buffer_slot =
+                    audio_in_slots.get_mut(input_buffer.port_id.0 as usize).ok_or_else(|| {
+                        GraphCompilerError::UnexpectedError(format!(
                     "Abstract schedule assigned buffer to graph out node with invalid port id {:?}",
                     input_buffer
-                )),
-                )?;
+                ))
+                    })?;
 
                 *buffer_slot = Some(buffer);
             }
@@ -105,10 +109,12 @@ pub(super) fn construct_graph_out_task(
     let mut audio_out: SmallVec<[SharedBuffer<f32>; 8]> =
         SmallVec::with_capacity(num_graph_out_audio_ports);
     for buffer_slot in audio_in_slots.drain(..) {
-        let buffer = buffer_slot.ok_or(GraphCompilerError::UnexpectedError(format!(
-            "Abstract schedule did not assign a buffer to all ports on graph out node {:?}",
-            scheduled_node
-        )))?;
+        let buffer = buffer_slot.ok_or_else(|| {
+            GraphCompilerError::UnexpectedError(format!(
+                "Abstract schedule did not assign a buffer to all ports on graph out node {:?}",
+                scheduled_node
+            ))
+        })?;
 
         audio_out.push(buffer);
     }

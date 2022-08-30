@@ -36,7 +36,7 @@ impl SharedAutomationDelayCompNode {
         }
     }
 
-    pub fn borrow_mut<'a>(&'a self) -> AtomicRefMut<'a, AutomationDelayCompNode> {
+    pub fn borrow_mut(&self) -> AtomicRefMut<'_, AutomationDelayCompNode> {
         self.shared.borrow_mut()
     }
 }
@@ -80,7 +80,7 @@ impl AutomationDelayCompNode {
         self.buf.append(&mut self.temp_buf);
 
         for event in input_buf.iter() {
-            let mut event_delayed = event.clone();
+            let mut event_delayed = *event;
             event_delayed.header.time += self.delay;
 
             if event_delayed.header.time < proc_info.frames as u32 {

@@ -46,7 +46,7 @@ impl DeclickInfo {
         }
     }
 
-    pub fn buffers<'a>(&'a self) -> AtomicRef<'a, DeclickBuffers> {
+    pub fn buffers(&self) -> AtomicRef<'_, DeclickBuffers> {
         self.buffers.borrow()
     }
 }

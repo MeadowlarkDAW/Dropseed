@@ -45,12 +45,12 @@ pub(super) fn construct_activated_plugin_task(
                 channel: channel_i,
             };
 
-            let buffer = assigned_audio_buffers.get(&channel_id).ok_or(
+            let buffer = assigned_audio_buffers.get(&channel_id).ok_or_else(|| {
                 GraphCompilerError::UnexpectedError(format!(
                     "Abstract schedule did not assign a buffer to every port in node {:?}",
                     scheduled_node
-                )),
-            )?;
+                ))
+            })?;
 
             buffers.push(buffer.0.clone());
 
@@ -76,12 +76,12 @@ pub(super) fn construct_activated_plugin_task(
                 channel: channel_i,
             };
 
-            let buffer = assigned_audio_buffers.get(&channel_id).ok_or(
+            let buffer = assigned_audio_buffers.get(&channel_id).ok_or_else(|| {
                 GraphCompilerError::UnexpectedError(format!(
                     "Abstract schedule did not assign a buffer to every port in node {:?}",
                     scheduled_node
-                )),
-            )?;
+                ))
+            })?;
 
             buffers.push(buffer.0.clone());
         }
@@ -101,12 +101,12 @@ pub(super) fn construct_activated_plugin_task(
             channel: 0,
         };
 
-        let buffer = assigned_note_buffers.get(&channel_id).ok_or(
+        let buffer = assigned_note_buffers.get(&channel_id).ok_or_else(|| {
             GraphCompilerError::UnexpectedError(format!(
                 "Abstract schedule did not assign a buffer to every port in node {:?}",
                 scheduled_node
-            )),
-        )?;
+            ))
+        })?;
 
         note_in_buffers.push(buffer.0.clone());
 
@@ -122,12 +122,12 @@ pub(super) fn construct_activated_plugin_task(
             channel: 0,
         };
 
-        let buffer = assigned_note_buffers.get(&channel_id).ok_or(
+        let buffer = assigned_note_buffers.get(&channel_id).ok_or_else(|| {
             GraphCompilerError::UnexpectedError(format!(
                 "Abstract schedule did not assign a buffer to every port in node {:?}",
                 scheduled_node
-            )),
-        )?;
+            ))
+        })?;
 
         note_out_buffers.push(buffer.0.clone());
     }

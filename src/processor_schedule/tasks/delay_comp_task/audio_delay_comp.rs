@@ -35,7 +35,7 @@ impl SharedAudioDelayCompNode {
         }
     }
 
-    pub fn borrow_mut<'a>(&'a self) -> AtomicRefMut<'a, AudioDelayCompNode> {
+    pub fn borrow_mut(&self) -> AtomicRefMut<'_, AudioDelayCompNode> {
         self.shared.borrow_mut()
     }
 }

@@ -137,7 +137,9 @@ impl PluginHostProcThread {
                 return;
             }
 
-            if self.plugin.start_processing().is_err() {
+            if let Err(e) = self.plugin.start_processing() {
+                log::error!("Plugin has failed to start processing: {}", e);
+
                 // The plugin failed to start processing.
                 self.processing_state = ProcessingState::Errored;
                 buffers.clear_all_outputs(proc_info);

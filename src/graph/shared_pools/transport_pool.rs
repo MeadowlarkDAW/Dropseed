@@ -13,7 +13,7 @@ impl SharedTransportTask {
         Self { shared: Shared::new(coll_handle, AtomicRefCell::new(t)) }
     }
 
-    pub fn borrow_mut<'a>(&'a self) -> AtomicRefMut<'a, TransportTask> {
+    pub fn borrow_mut(&self) -> AtomicRefMut<'_, TransportTask> {
         self.shared.borrow_mut()
     }
 }

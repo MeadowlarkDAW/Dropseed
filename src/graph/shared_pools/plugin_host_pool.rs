@@ -45,7 +45,7 @@ impl PluginHostPool {
         self.pool.len()
     }
 
-    pub fn iter_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut PluginHostMainThread> {
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &'_ mut PluginHostMainThread> {
         self.pool.values_mut()
     }
 

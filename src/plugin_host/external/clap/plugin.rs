@@ -1,5 +1,3 @@
-use super::*;
-
 use atomic_refcell::{AtomicRef, AtomicRefMut};
 use clack_extensions::audio_ports::{AudioPortFlags, AudioPortInfoBuffer, PluginAudioPorts};
 use clack_extensions::gui::{GuiApiType, GuiError};
@@ -15,11 +13,13 @@ use dropseed_plugin_api::{
 };
 use meadowlark_core_types::time::SampleRate;
 use smallvec::SmallVec;
+use std::error::Error;
 use std::ffi::CString;
 use std::io::Cursor;
 use std::mem::MaybeUninit;
 
 use super::process::ClapProcess;
+use super::*;
 
 impl ClapPluginMainThread {
     pub(crate) fn new(instance: PluginInstance<ClapHost>) -> Result<Self, String> {
@@ -179,7 +179,7 @@ impl PluginMainThread for ClapPluginMainThread {
             state_ext.save(self.instance.main_thread_plugin_data(), &mut buffer).map_err(|_| {
                 format!(
                     "Plugin with ID {} returned error on call to clap_plugin_state.save()",
-                    &*self.id()
+                    self.id()
                 )
             })?;
 
@@ -196,7 +196,7 @@ impl PluginMainThread for ClapPluginMainThread {
             state_ext.load(self.instance.main_thread_plugin_data(), &mut reader).map_err(|_| {
                 format!(
                     "Plugin with ID {} returned error on call to clap_plugin_state.load()",
-                    &*self.id()
+                    self.id()
                 )
             })?;
 
@@ -204,7 +204,7 @@ impl PluginMainThread for ClapPluginMainThread {
         } else {
             Err(format!(
                 "Could not load state for clap plugin with ID {}: plugin does not implement the \"clap.state\" extension",
-                &*self.id()
+                self.id()
             ))
         }
     }
@@ -242,34 +242,37 @@ impl PluginMainThread for ClapPluginMainThread {
         }
     }
 
-    fn param_info(&mut self, param_index: usize) -> Result<ext::params::ParamInfo, ()> {
+    fn param_info(&mut self, param_index: usize) -> Result<ext::params::ParamInfo, Box<dyn Error>> {
         if let Some(params_ext) = self.instance.shared_host_data().params_ext {
             let mut data = MaybeUninit::uninit();
 
-            let info =
-                params_ext.get_info(&self.instance, param_index as u32, &mut data).ok_or(())?;
+            let info = params_ext
+                .get_info(&self.instance, param_index as u32, &mut data)
+                .ok_or_else(|| format!("Param at index {} does not exist", param_index))?;
 
             Ok(ParamInfo {
                 stable_id: ParamID(info.id()),
                 flags: ParamInfoFlags::from_bits_truncate(info.flags()),
                 // TODO: better handle UTF8 validation
-                display_name: core::str::from_utf8(info.name()).map_err(|_| ())?.to_string(),
-                module: core::str::from_utf8(info.module()).map_err(|_| ())?.to_string(),
+                display_name: core::str::from_utf8(info.name())?.to_string(),
+                module: core::str::from_utf8(info.module())?.to_string(),
                 min_value: info.min_value(),
                 max_value: info.max_value(),
                 default_value: info.default_value(),
                 _cookie: info.cookie(),
             })
         } else {
-            Err(())
+            Err("Plugin does not have any parameters".into())
         }
     }
 
-    fn param_value(&self, param_id: ParamID) -> Result<f64, ()> {
+    fn param_value(&self, param_id: ParamID) -> Result<f64, Box<dyn Error>> {
         if let Some(params_ext) = self.instance.shared_host_data().params_ext {
-            params_ext.get_value(&self.instance, param_id.0).ok_or(())
+            params_ext
+                .get_value(&self.instance, param_id.0)
+                .ok_or_else(|| format!("Param with id {:?} does not exist", param_id).into())
         } else {
-            Err(())
+            Err("Plugin does not have any parameters".into())
         }
     }
 
@@ -300,7 +303,7 @@ impl PluginMainThread for ClapPluginMainThread {
                     Ok(())
                 }
                 Err(e) => {
-                    return Err(format!("Failed to convert parameter value {} on parameter {:?} on plugin {} to a string: {}", value, &param_id, self.id(), e));
+                    Err(format!("Failed to convert parameter value {} on parameter {:?} on plugin {} to a string: {}", value, &param_id, self.id(), e))
                 }
             }
         } else {
@@ -384,13 +387,13 @@ struct ClapPluginProcessThread {
 }
 
 impl PluginProcessThread for ClapPluginProcessThread {
-    fn start_processing(&mut self) -> Result<(), ()> {
+    fn start_processing(&mut self) -> Result<(), Box<dyn Error>> {
         log::trace!(
             "clap plugin instance start_processing {}",
             &*self.audio_processor.shared_host_data().id
         );
 
-        self.audio_processor.start_processing().map_err(|_| ())
+        self.audio_processor.start_processing().map_err(|e| e.into())
     }
 
     fn stop_processing(&mut self) {

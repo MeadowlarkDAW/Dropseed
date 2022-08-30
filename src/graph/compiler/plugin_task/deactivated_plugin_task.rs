@@ -50,18 +50,22 @@ pub(super) fn construct_deactivated_plugin_task(
 
                 let in_buf = assigned_audio_buffers
                     .get(&in_channel_id)
-                    .ok_or(GraphCompilerError::UnexpectedError(format!(
-                        "Abstract schedule did not assign a buffer to every port in node {:?}",
-                        scheduled_node
-                    )))?
+                    .ok_or_else(|| {
+                        GraphCompilerError::UnexpectedError(format!(
+                            "Abstract schedule did not assign a buffer to every port in node {:?}",
+                            scheduled_node
+                        ))
+                    })?
                     .0
                     .clone();
                 let out_buf = assigned_audio_buffers
                     .remove(&out_channel_id)
-                    .ok_or(GraphCompilerError::UnexpectedError(format!(
-                        "Abstract schedule did not assign a buffer to every port in node {:?}",
-                        scheduled_node
-                    )))?
+                    .ok_or_else(|| {
+                        GraphCompilerError::UnexpectedError(format!(
+                            "Abstract schedule did not assign a buffer to every port in node {:?}",
+                            scheduled_node
+                        ))
+                    })?
                     .0;
 
                 audio_through.push((in_buf, out_buf));
@@ -87,18 +91,22 @@ pub(super) fn construct_deactivated_plugin_task(
 
             let in_buf = assigned_note_buffers
                 .get(&in_channel_id)
-                .ok_or(GraphCompilerError::UnexpectedError(format!(
-                    "Abstract schedule did not assign a buffer to every port in node {:?}",
-                    scheduled_node
-                )))?
+                .ok_or_else(|| {
+                    GraphCompilerError::UnexpectedError(format!(
+                        "Abstract schedule did not assign a buffer to every port in node {:?}",
+                        scheduled_node
+                    ))
+                })?
                 .0
                 .clone();
             let out_buf = assigned_note_buffers
                 .remove(&out_channel_id)
-                .ok_or(GraphCompilerError::UnexpectedError(format!(
-                    "Abstract schedule did not assign a buffer to every port in node {:?}",
-                    scheduled_node
-                )))?
+                .ok_or_else(|| {
+                    GraphCompilerError::UnexpectedError(format!(
+                        "Abstract schedule did not assign a buffer to every port in node {:?}",
+                        scheduled_node
+                    ))
+                })?
                 .0;
 
             note_through = Some((in_buf, out_buf));
@@ -116,7 +124,7 @@ pub(super) fn construct_deactivated_plugin_task(
         }
     }
     if let Some(buffer) = assigned_automation_out_buffer {
-        clear_automation_out = Some(buffer.clone());
+        clear_automation_out = Some(buffer);
     }
 
     Ok(Task::DeactivatedPlugin(DeactivatedPluginTask {

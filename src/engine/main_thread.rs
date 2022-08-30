@@ -112,7 +112,7 @@ impl DSEngineMainThread {
     /// This will return `None` if a plugin with the given ID does not exist/
     /// has been removed.
     pub fn get_plugin_host(&self, id: &PluginInstanceID) -> Option<&PluginHostMainThread> {
-        self.audio_graph.as_ref().and_then(|a| a.get_plugin_host(&id))
+        self.audio_graph.as_ref().and_then(|a| a.get_plugin_host(id))
     }
 
     /// Get a mutable reference to the host for a particular plugin.
@@ -123,7 +123,7 @@ impl DSEngineMainThread {
         &mut self,
         id: &PluginInstanceID,
     ) -> Option<&mut PluginHostMainThread> {
-        self.audio_graph.as_mut().and_then(|a| a.get_plugin_host_mut(&id))
+        self.audio_graph.as_mut().and_then(|a| a.get_plugin_host_mut(id))
     }
 
     /// This must be called periodically (i.e. once every frame).
@@ -133,8 +133,9 @@ impl DSEngineMainThread {
         let mut events_out: SmallVec<[OnIdleEvent; 32]> = SmallVec::new();
 
         if let Some(msg) = self.crash_msg.take() {
-            events_out
-                .push(OnIdleEvent::EngineDeactivated(EngineDeactivatedStatus::EngineCrashed(msg)));
+            events_out.push(OnIdleEvent::EngineDeactivated(
+                EngineDeactivatedStatus::EngineCrashed(Box::new(msg)),
+            ));
         }
 
         if let Some(audio_graph) = &mut self.audio_graph {
@@ -559,7 +560,7 @@ pub enum EngineDeactivatedStatus {
     /// The engine was deactivated gracefully.
     DeactivatedGracefully,
     /// The engine has crashed.
-    EngineCrashed(EngineCrashError),
+    EngineCrashed(Box<EngineCrashError>),
 }
 
 #[derive(Debug)]

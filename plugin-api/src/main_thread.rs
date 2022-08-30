@@ -2,6 +2,7 @@ use basedrop::Shared;
 use clack_extensions::gui::GuiError;
 use clack_host::events::io::EventBuffer;
 use meadowlark_core_types::time::SampleRate;
+use std::error::Error;
 
 use super::transport::TempoMap;
 use super::{ext, ParamID, PluginProcessThread};
@@ -107,24 +108,24 @@ pub trait PluginMainThread {
     ///
     /// This will never be called if `PluginMainThread::num_params()` returned 0.
     ///
-    /// By default this returns an Err(()).
+    /// By default this returns an error.
     ///
     /// [main-thread]
     #[allow(unused)]
-    fn param_info(&mut self, param_index: usize) -> Result<ext::params::ParamInfo, ()> {
-        Err(())
+    fn param_info(&mut self, param_index: usize) -> Result<ext::params::ParamInfo, Box<dyn Error>> {
+        Err(format!("Param at index {} does not exist", param_index).into())
     }
 
     /// Get the plain value of the parameter.
     ///
     /// This will never be called if `PluginMainThread::num_params()` returned 0.
     ///
-    /// By default this returns `Err(())`
+    /// By default this returns an error.
     ///
     /// [main-thread]
     #[allow(unused)]
-    fn param_value(&self, param_id: ParamID) -> Result<f64, ()> {
-        Err(())
+    fn param_value(&self, param_id: ParamID) -> Result<f64, Box<dyn Error>> {
+        Err(format!("Param with id {:?} does not exist", param_id).into())
     }
 
     /// Format the display text for the given parameter value.

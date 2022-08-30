@@ -44,7 +44,7 @@ impl Debug for Task {
                 if !t.buffers.audio_in.is_empty() {
                     let mut s = String::new();
                     for b in t.buffers.audio_in.iter() {
-                        write!(s, "{:?}, ", b)?;
+                        let _ = write!(s, "{:?}, ", b);
                     }
 
                     f.field("audio_in", &s);
@@ -53,7 +53,7 @@ impl Debug for Task {
                 if !t.buffers.audio_out.is_empty() {
                     let mut s = String::new();
                     for b in t.buffers.audio_out.iter() {
-                        write!(s, "{:?}, ", b)?;
+                        let _ = write!(s, "{:?}, ", b);
                     }
 
                     f.field("audio_out", &s);
@@ -75,7 +75,7 @@ impl Debug for Task {
                 if !t.event_buffers.note_in_buffers.is_empty() {
                     let mut s = String::new();
                     for buffer in t.event_buffers.note_in_buffers.iter() {
-                        s.push_str(&format!("{:?}, ", buffer.id()));
+                        let _ = write!(s, "{:?}, ", buffer.id());
                     }
 
                     f.field("note_in", &s);
@@ -84,7 +84,7 @@ impl Debug for Task {
                 if !t.event_buffers.note_out_buffers.is_empty() {
                     let mut s = String::new();
                     for buffer in t.event_buffers.note_out_buffers.iter() {
-                        s.push_str(&format!("{:?}, ", buffer.id()));
+                        let _ = write!(s, "{:?}, ", buffer.id());
                     }
 
                     f.field("note_out", &s);
@@ -93,7 +93,7 @@ impl Debug for Task {
                 if !t.clear_audio_in_buffers.is_empty() {
                     let mut s = String::new();
                     for b in t.clear_audio_in_buffers.iter() {
-                        write!(s, "{:?}, ", &b.id())?;
+                        let _ = write!(s, "{:?}, ", &b.id());
                     }
 
                     f.field("clear_audio_in", &s);
@@ -102,7 +102,7 @@ impl Debug for Task {
                 if !t.event_buffers.clear_note_in_buffers.is_empty() {
                     let mut s = String::new();
                     for b in t.event_buffers.clear_note_in_buffers.iter() {
-                        write!(s, "{:?}, ", &b.id())?;
+                        let _ = write!(s, "{:?}, ", &b.id());
                     }
 
                     f.field("clear_note_in", &s);
@@ -115,7 +115,7 @@ impl Debug for Task {
 
                 let mut s = String::new();
                 for b in t.audio_in.iter() {
-                    write!(s, "{:?}, ", b.id())?;
+                    let _ = write!(s, "{:?}, ", b.id());
                 }
                 f.field("audio_in", &s);
 
@@ -128,7 +128,7 @@ impl Debug for Task {
 
                 let mut s = String::new();
                 for b in t.note_in.iter() {
-                    write!(s, "{:?}, ", b.id())?;
+                    let _ = write!(s, "{:?}, ", b.id());
                 }
                 f.field("note_in", &s);
 
@@ -141,7 +141,7 @@ impl Debug for Task {
 
                 let mut s = String::new();
                 for b in t.input.iter() {
-                    write!(s, "{:?}, ", b.id())?;
+                    let _ = write!(s, "{:?}, ", b.id());
                 }
                 f.field("input", &s);
 
@@ -181,13 +181,13 @@ impl Debug for Task {
 
                 let mut s = String::new();
                 for (b_in, b_out) in t.audio_through.iter() {
-                    s.push_str(&format!("(in: {:?}, out: {:?})", b_in.id(), b_out.id()));
+                    let _ = write!(s, "(in: {:?}, out: {:?})", b_in.id(), b_out.id());
                 }
                 f.field("audio_through", &s);
 
                 let mut s = String::new();
                 for b in t.clear_audio_out.iter() {
-                    s.push_str(&format!("{:?}, ", b.id()))
+                    let _ = write!(s, "{:?}, ", b.id());
                 }
                 f.field("clear_audio_out", &s);
 
@@ -200,8 +200,7 @@ impl Debug for Task {
                     let mut s = String::new();
                     for buffer in t.clear_note_out.iter() {
                         has_buffer = true;
-
-                        s.push_str(&format!("{:?}, ", buffer.id()));
+                        let _ = write!(s, "{:?}, ", buffer.id());
                     }
 
                     if has_buffer {

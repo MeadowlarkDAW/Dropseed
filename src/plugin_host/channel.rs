@@ -48,11 +48,11 @@ impl PlugHostChannelMainThread {
     ) {
         let (param_queues_main_thread, param_queues_proc_thread) = if num_params > 0 {
             let (main_to_proc_param_value_tx, main_to_proc_param_value_rx) =
-                ReducingFnvQueue::new(num_params, coll_handle);
+                ReducingFnvQueue::new_channel(num_params, coll_handle);
             let (main_to_proc_param_mod_tx, main_to_proc_param_mod_rx) =
-                ReducingFnvQueue::new(num_params, coll_handle);
+                ReducingFnvQueue::new_channel(num_params, coll_handle);
             let (proc_to_main_param_value_tx, proc_to_main_param_value_rx) =
-                ReducingFnvQueue::new(num_params, coll_handle);
+                ReducingFnvQueue::new_channel(num_params, coll_handle);
 
             (
                 Some(ParamQueuesMainThread {
@@ -292,7 +292,7 @@ impl SharedPluginHostProcThread {
         Self { shared: Shared::new(coll_handle, AtomicRefCell::new(p)) }
     }
 
-    pub fn borrow_mut<'a>(&'a self) -> AtomicRefMut<'a, PluginHostProcThread> {
+    pub fn borrow_mut(&self) -> AtomicRefMut<'_, PluginHostProcThread> {
         self.shared.borrow_mut()
     }
 }

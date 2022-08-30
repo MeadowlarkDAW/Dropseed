@@ -72,7 +72,7 @@ impl std::fmt::Display for ConnectEdgeError {
 #[derive(Debug)]
 pub enum GraphCompilerError {
     AbstractCompilerError(audio_graph::error::CompileGraphError),
-    VerifierError(VerifyScheduleError, CompiledSchedule, ProcessorSchedule),
+    VerifierError(VerifyScheduleError, CompiledSchedule, Box<ProcessorSchedule>),
     UnexpectedError(String),
 }
 

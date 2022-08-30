@@ -173,11 +173,8 @@ impl TransportTask {
         let (tsig_num, tsig_denom) = tempo_map.tsig_at_frame(playhead_frame);
         let (bar_number, bar_start) = tempo_map.current_bar_at_frame(playhead_frame);
 
-        let declick = if let Some(declick_time) = declick_time {
-            Some(TransportDeclick::new(max_frames, declick_time, sample_rate, &coll_handle))
-        } else {
-            None
-        };
+        let declick =
+            declick_time.map(|d| TransportDeclick::new(max_frames, d, sample_rate, &coll_handle));
 
         (
             TransportTask {

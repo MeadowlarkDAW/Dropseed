@@ -198,14 +198,14 @@ impl TransportDeclick {
             let buf = &mut start_stop_buf[0..frames];
 
             // Fill the buffer with declick frames.
-            let buf_part_1 = &mut buf[0..declick_frames];
+            let buf_part = &mut buf[0..declick_frames];
             if is_playing {
-                for s in buf_part_1.iter_mut() {
+                for s in buf_part.iter_mut() {
                     *s = val;
                     val += self.declick_inc;
                 }
             } else {
-                for s in buf_part_1.iter_mut() {
+                for s in buf_part.iter_mut() {
                     *s = val;
                     val -= self.declick_inc;
                 }
@@ -317,10 +317,9 @@ impl TransportDeclick {
                         };
 
                     // Fill the out buffer with declick frames.
-                    let out_buf_part_1 = &mut out_buf[0..out_declick_frames];
-                    for i in 0..out_declick_frames {
-                        out_buf_part_1[i] = out_val;
-
+                    let out_buf_part = &mut out_buf[0..out_declick_frames];
+                    for v in out_buf_part.iter_mut() {
+                        *v = in_val;
                         out_val -= self.declick_inc;
                     }
 
@@ -346,10 +345,10 @@ impl TransportDeclick {
                     };
 
                     // Fill the in buffer with declick frames.
-                    let in_buf_part_1 = &mut in_buf[0..in_declick_frames];
-                    for i in 0..in_declick_frames {
-                        in_buf_part_1[i] = in_val;
 
+                    let in_buf_part = &mut in_buf[0..in_declick_frames];
+                    for v in in_buf_part.iter_mut() {
+                        *v = in_val;
                         in_val += self.declick_inc;
                     }
 

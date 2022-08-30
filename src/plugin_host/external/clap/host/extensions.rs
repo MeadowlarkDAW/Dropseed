@@ -99,7 +99,7 @@ impl<'a> HostParamsImplementationMainThread for ClapHostMainThread<'a> {
     fn clear(&mut self, _param_id: u32, _flags: ParamClearFlags) {
         if !self.shared.thread_ids.is_main_thread() {
             log::warn!("Plugin called clap_host_params->clear() not in the main thread");
-            return;
+            //return;
         }
 
         // TODO: we have no modulations or automations to clear yet

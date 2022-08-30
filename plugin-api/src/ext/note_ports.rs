@@ -6,7 +6,7 @@ use clack_extensions::note_ports::{NoteDialect, NoteDialects};
 
 pub(crate) static EMPTY_NOTE_PORTS_CONFIG: PluginNotePortsExt = PluginNotePortsExt::empty();
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// The layout of the audio ports of a plugin.
 pub struct PluginNotePortsExt {
     /// The list of input note ports.
@@ -22,7 +22,7 @@ impl PluginNotePortsExt {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotePortInfo {
     /// stable identifier
     pub stable_id: u32,

@@ -6,7 +6,7 @@ use crate::buffer::{AudioPortBuffer, AudioPortBufferMut};
 
 /// The status of a call to a plugin's `process()` method.
 #[repr(i32)]
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessStatus {
     /// Processing failed. The output buffer must be discarded.
     Error = 0,

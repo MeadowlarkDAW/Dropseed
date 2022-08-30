@@ -115,12 +115,16 @@ pub(super) fn compile_graph(
         }
     }
 
-    let graph_in_task = graph_in_task.ok_or(GraphCompilerError::UnexpectedError(
-        "Abstract schedule did not schedule the graph input node".into(),
-    ))?;
-    let graph_out_task = graph_out_task.ok_or(GraphCompilerError::UnexpectedError(
-        "Abstract schedule did not schedule the graph output node".into(),
-    ))?;
+    let graph_in_task = graph_in_task.ok_or_else(|| {
+        GraphCompilerError::UnexpectedError(
+            "Abstract schedule did not schedule the graph input node".into(),
+        )
+    })?;
+    let graph_out_task = graph_out_task.ok_or_else(|| {
+        GraphCompilerError::UnexpectedError(
+            "Abstract schedule did not schedule the graph output node".into(),
+        )
+    })?;
 
     // Remove all delay compensation nodes that are no longer being used.
     //
@@ -155,7 +159,11 @@ pub(super) fn compile_graph(
     // the same buffer being assigned multiple times within the same task, or the same buffer
     // appearing multiple times between parallel tasks (once we have multithreaded scheduling).
     if let Err(e) = verifier.verify_schedule_for_race_conditions(&new_schedule) {
-        return Err(GraphCompilerError::VerifierError(e, abstract_schedule, new_schedule));
+        return Err(GraphCompilerError::VerifierError(
+            e,
+            abstract_schedule,
+            Box::new(new_schedule),
+        ));
     }
 
     Ok(new_schedule)

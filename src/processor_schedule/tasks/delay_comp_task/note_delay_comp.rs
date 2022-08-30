@@ -37,7 +37,7 @@ impl SharedNoteDelayCompNode {
         }
     }
 
-    pub fn borrow_mut<'a>(&'a self) -> AtomicRefMut<'a, NoteDelayCompNode> {
+    pub fn borrow_mut(&self) -> AtomicRefMut<'_, NoteDelayCompNode> {
         self.shared.borrow_mut()
     }
 }
@@ -81,7 +81,7 @@ impl NoteDelayCompNode {
         self.buf.append(&mut self.temp_buf);
 
         for event in input_buf.iter() {
-            let mut event_delayed = event.clone();
+            let mut event_delayed = *event;
             event_delayed.header.time += self.delay;
 
             if event_delayed.header.time < proc_info.frames as u32 {

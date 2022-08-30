@@ -258,7 +258,7 @@ impl AudioGraph {
             }
 
             if removed_plugins.insert(id.clone()) {
-                if let Some(plugin_host) = self.shared_pools.plugin_hosts.get_mut(&id) {
+                if let Some(plugin_host) = self.shared_pools.plugin_hosts.get_mut(id) {
                     plugin_host.schedule_remove();
 
                     let removed_edges_res =
@@ -274,7 +274,7 @@ impl AudioGraph {
                         }
                     }
                 } else {
-                    removed_plugins.remove(&id);
+                    removed_plugins.remove(id);
                     log::warn!(
                         "Ignored request to remove plugin instance {:?}: plugin is already removed",
                         id
@@ -712,7 +712,7 @@ impl AudioGraph {
             .collect()
     }
 
-    pub fn on_idle(&mut self, mut events_out: &mut SmallVec<[OnIdleEvent; 32]>) -> bool {
+    pub fn on_idle(&mut self, events_out: &mut SmallVec<[OnIdleEvent; 32]>) -> bool {
         let mut plugins_to_remove: SmallVec<[PluginInstanceID; 4]> = SmallVec::new();
         let mut recompile_graph = false;
 
@@ -726,7 +726,7 @@ impl AudioGraph {
                 self.max_frames,
                 &self.coll_handle,
                 &mut self.graph_helper,
-                &mut events_out,
+                events_out,
                 &mut self.edge_id_to_ds_edge_id,
                 &self.thread_ids,
             );
@@ -824,18 +824,6 @@ impl Drop for AudioGraph {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct PluginEdges {
-    pub incoming: SmallVec<[Edge; 8]>,
-    pub outgoing: SmallVec<[Edge; 8]>,
-}
-
-impl PluginEdges {
-    pub fn emtpy() -> Self {
-        Self { incoming: SmallVec::new(), outgoing: SmallVec::new() }
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct DSEdgeID {
     pub(crate) unique_id: u64,
@@ -856,7 +844,7 @@ impl Hash for DSEdgeID {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Edge {
     pub id: DSEdgeID,
 
@@ -868,3 +856,11 @@ pub struct Edge {
     pub src_port_id: u32,
     pub dst_port_id: u32,
 }
+
+impl PartialEq for Edge {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for Edge {}

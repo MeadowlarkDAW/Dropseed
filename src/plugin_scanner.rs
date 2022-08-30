@@ -23,14 +23,14 @@ use missing_plugin::MissingPluginMainThread;
     feature = "clap-host",
     any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd")
 ))]
-const DEFAULT_CLAP_SCAN_DIRECTORIES: [&'static str; 2] = ["/usr/lib/clap", "/usr/local/lib/clap"];
+const DEFAULT_CLAP_SCAN_DIRECTORIES: [&str; 2] = ["/usr/lib/clap", "/usr/local/lib/clap"];
 
 #[cfg(all(feature = "clap-host", target_os = "macos"))]
-const DEFAULT_CLAP_SCAN_DIRECTORIES: [&'static str; 1] = ["/Library/Audio/Plug-Ins/CLAP"];
+const DEFAULT_CLAP_SCAN_DIRECTORIES: [&str; 1] = ["/Library/Audio/Plug-Ins/CLAP"];
 
 #[cfg(all(feature = "clap-host", target_os = "windows"))]
 // TODO: Find the proper "Common Files" folder at runtime.
-const DEFAULT_CLAP_SCAN_DIRECTORIES: [&'static str; 1] = ["C:/Program Files/Common Files/CLAP"];
+const DEFAULT_CLAP_SCAN_DIRECTORIES: [&str; 1] = ["C:/Program Files/Common Files/CLAP"];
 
 const MAX_SCAN_DEPTH: usize = 10;
 
@@ -44,7 +44,7 @@ pub struct ScannedPluginInfo {
 
 impl ScannedPluginInfo {
     pub fn rdn(&self) -> &str {
-        &*self.key.rdn.as_str()
+        self.key.rdn.as_str()
     }
 }
 
@@ -174,7 +174,7 @@ impl PluginScanner {
             LoadedPluginFactory {
                 factory,
                 format: PluginFormat::Internal,
-                shared_rdn: Shared::new(&self.coll_handle, description.id.to_string()),
+                shared_rdn: Shared::new(&self.coll_handle, description.id),
             },
         );
 
@@ -369,8 +369,8 @@ impl PluginScanner {
                 self.scanned_external_plugins.get(&new_key)
             };
 
-            if let Some(plugin_bundle_key) = pb {
-                plugin_bundle = self.external_plugin_bundles.get_mut(&plugin_bundle_key);
+            if let Some(plugin_bundle_key) = &pb {
+                plugin_bundle = self.external_plugin_bundles.get_mut(plugin_bundle_key);
             } else {
                 status = Err(NewPluginInstanceError::FormatNotFound(
                     save_state.key.rdn.clone(),

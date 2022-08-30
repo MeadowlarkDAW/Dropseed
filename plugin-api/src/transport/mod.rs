@@ -176,7 +176,7 @@ impl RangeChecker {
 }
 
 /// The status of looping on this transport.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoopState {
     /// The transport is not currently looping.
     Inactive,
@@ -202,7 +202,7 @@ impl LoopState {
 }
 
 /// The status of looping on this transport.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoopStateProcInfo {
     /// The transport is not currently looping.
     Inactive,

@@ -320,8 +320,8 @@ impl PluginHostMainThread {
             }
         };
 
-        self.audio_ports_ext = Some(audio_ports.clone());
-        self.note_ports_ext = Some(note_ports.clone());
+        self.audio_ports_ext = Some(audio_ports);
+        self.note_ports_ext = Some(note_ports);
 
         let num_params = self.plug_main_thread.num_params() as usize;
         let mut params: FnvHashMap<ParamID, ParamInfo> = FnvHashMap::default();
@@ -333,8 +333,8 @@ impl PluginHostMainThread {
                     Ok(value) => {
                         let id = info.stable_id;
 
-                        let _ = params.insert(id, info.clone());
-                        let _ = param_values.push((info, value));
+                        params.insert(id, info.clone());
+                        param_values.push((info, value));
                     }
                     Err(_) => {
                         self.channel

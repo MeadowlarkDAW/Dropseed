@@ -49,7 +49,7 @@ pub struct ReducingFnvQueue<K: Hash + Eq + Send + 'static, V: ReducFnvValue> {
 }
 
 impl<K: Hash + Eq + Send + 'static, V: ReducFnvValue> ReducingFnvQueue<K, V> {
-    pub fn new(
+    pub fn new_channel(
         capacity: usize,
         coll_handle: &basedrop::Handle,
     ) -> (ReducFnvProducer<K, V>, ReducFnvConsumer<K, V>) {

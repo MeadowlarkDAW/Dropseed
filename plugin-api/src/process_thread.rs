@@ -1,3 +1,5 @@
+use std::error::Error;
+
 use super::automation::AutomationIoEvent;
 use super::buffer::EventBuffer;
 use super::process_info::{ProcBuffers, ProcInfo, ProcessStatus};
@@ -14,7 +16,7 @@ pub trait PluginProcessThread: Send + 'static {
     ///
     /// `[process-thread & active_state & !processing_state]`
     #[allow(unused)]
-    fn start_processing(&mut self) -> Result<(), ()> {
+    fn start_processing(&mut self) -> Result<(), Box<dyn Error>> {
         Ok(())
     }
 

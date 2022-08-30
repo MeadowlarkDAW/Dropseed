@@ -224,7 +224,7 @@ impl Verifier {
                             });
                         }
                     }
-                    for (b_in, b_out) in t.note_through.iter() {
+                    if let Some((b_in, b_out)) = &t.note_through {
                         if !self.buffer_instances.insert(b_in.id()) {
                             return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {
                                 buffer_id: b_in.id(),
