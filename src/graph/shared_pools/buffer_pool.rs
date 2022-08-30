@@ -1,6 +1,7 @@
+use dropseed_plugin_api::automation::AutomationIoEvent;
 use dropseed_plugin_api::buffer::{DebugBufferID, DebugBufferType, SharedBuffer};
 
-use crate::plugin_host::event_io_buffers::{AutomationIoEvent, NoteIoEvent};
+use crate::plugin_host::event_io_buffers::NoteIoEvent;
 
 pub(crate) struct BufferPool<T: Clone + Copy + Send + Sync + 'static> {
     pool: Vec<SharedBuffer<T>>,

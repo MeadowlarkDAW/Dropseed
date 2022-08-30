@@ -1,9 +1,10 @@
 use smallvec::SmallVec;
 
+use dropseed_plugin_api::automation::AutomationIoEvent;
 use dropseed_plugin_api::buffer::SharedBuffer;
 use dropseed_plugin_api::ProcInfo;
 
-use crate::plugin_host::event_io_buffers::{AutomationIoEvent, NoteIoEvent};
+use crate::plugin_host::event_io_buffers::NoteIoEvent;
 
 pub(crate) struct DeactivatedPluginTask {
     pub audio_through: SmallVec<[(SharedBuffer<f32>, SharedBuffer<f32>); 4]>,

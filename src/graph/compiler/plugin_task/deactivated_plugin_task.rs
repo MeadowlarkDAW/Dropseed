@@ -1,11 +1,12 @@
 use audio_graph::ScheduledNode;
+use dropseed_plugin_api::automation::AutomationIoEvent;
 use dropseed_plugin_api::buffer::SharedBuffer;
 use dropseed_plugin_api::ext::audio_ports::{MainPortsLayout, PluginAudioPortsExt};
 use dropseed_plugin_api::ext::note_ports::PluginNotePortsExt;
 use fnv::FnvHashMap;
 use smallvec::SmallVec;
 
-use crate::plugin_host::event_io_buffers::{AutomationIoEvent, NoteIoEvent};
+use crate::plugin_host::event_io_buffers::NoteIoEvent;
 use crate::processor_schedule::tasks::{DeactivatedPluginTask, Task};
 
 use super::super::super::error::GraphCompilerError;

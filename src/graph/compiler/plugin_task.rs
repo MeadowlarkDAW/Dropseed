@@ -1,8 +1,9 @@
 use audio_graph::ScheduledNode;
+use dropseed_plugin_api::automation::AutomationIoEvent;
 use dropseed_plugin_api::buffer::SharedBuffer;
 use fnv::FnvHashMap;
 
-use crate::plugin_host::event_io_buffers::{AutomationIoEvent, NoteIoEvent};
+use crate::plugin_host::event_io_buffers::NoteIoEvent;
 use crate::processor_schedule::tasks::Task;
 
 use super::super::error::GraphCompilerError;

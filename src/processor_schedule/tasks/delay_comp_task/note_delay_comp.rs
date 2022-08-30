@@ -43,13 +43,18 @@ impl SharedNoteDelayCompNode {
 }
 
 pub(crate) struct NoteDelayCompNode {
-    // TODO
+    buf: Vec<NoteIoEvent>,
+    temp_buf: Vec<NoteIoEvent>,
     delay: u32,
 }
 
 impl NoteDelayCompNode {
-    pub fn new(delay: u32) -> Self {
-        Self { delay }
+    pub fn new(delay: u32, note_buffer_size: usize) -> Self {
+        Self {
+            buf: Vec::with_capacity(note_buffer_size),
+            temp_buf: Vec::with_capacity(note_buffer_size),
+            delay,
+        }
     }
 
     pub fn process(
@@ -58,7 +63,34 @@ impl NoteDelayCompNode {
         input: &SharedBuffer<NoteIoEvent>,
         output: &SharedBuffer<NoteIoEvent>,
     ) {
-        // TODO
+        let input_buf = input.borrow();
+        let mut output_buf = output.borrow_mut();
+        output_buf.clear();
+
+        self.temp_buf.clear();
+
+        for mut event in self.buf.drain(..) {
+            if event.header.time < proc_info.frames as u32 {
+                output_buf.push(event);
+            } else {
+                event.header.time -= proc_info.frames as u32;
+                self.temp_buf.push(event);
+            }
+        }
+
+        self.buf.append(&mut self.temp_buf);
+
+        for event in input_buf.iter() {
+            let mut event_delayed = event.clone();
+            event_delayed.header.time += self.delay;
+
+            if event_delayed.header.time < proc_info.frames as u32 {
+                output_buf.push(event_delayed);
+            } else {
+                event_delayed.header.time -= proc_info.frames as u32;
+                self.buf.push(event_delayed);
+            }
+        }
     }
 
     pub fn delay(&self) -> u32 {

@@ -1,8 +1,9 @@
 use audio_graph::InsertedSum;
+use dropseed_plugin_api::automation::AutomationIoEvent;
 use dropseed_plugin_api::buffer::SharedBuffer;
 use smallvec::SmallVec;
 
-use crate::plugin_host::event_io_buffers::{AutomationIoEvent, NoteIoEvent};
+use crate::plugin_host::event_io_buffers::NoteIoEvent;
 use crate::processor_schedule::tasks::{AudioSumTask, AutomationSumTask, NoteSumTask, Task};
 
 use super::super::error::GraphCompilerError;

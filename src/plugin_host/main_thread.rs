@@ -362,6 +362,7 @@ impl PluginHostMainThread {
 
                 self.channel.create_process_thread(
                     info.processor,
+                    self.id.unique_id(),
                     num_params,
                     thread_ids,
                     coll_handle,
@@ -574,15 +575,16 @@ impl PluginHostMainThread {
             return;
         }
 
-        // Allow the plugin's audio thread to be dropped when the new
-        // schedule is sent.
+        // Allow the plugin's audio thread to be dropped when the new schedule is
+        // sent.
         //
-        // Note this doesn't actually drop the process thread. It only
-        // drops this struct's pointer to the process thread.
+        // Note this doesn't actually drop the process thread. It only drops this
+        // struct's pointer to the process thread so that when the process thread
+        // drops its shared pointer, it will be collected by the garbage
+        // collector.
         self.channel.drop_process_thread_pointer();
 
-        // Wait for the audio thread part to go to sleep before
-        // deactivating.
+        // Wait for the audio thread part to go to sleep before deactivating.
         self.channel.shared_state.set_active_state(PluginActiveState::WaitingToDrop);
     }
 

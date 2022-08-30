@@ -1,7 +1,6 @@
 use smallvec::SmallVec;
 
 use dropseed_plugin_api::buffer::SharedBuffer;
-use dropseed_plugin_api::ProcInfo;
 
 use crate::plugin_host::event_io_buffers::NoteIoEvent;
 
@@ -11,7 +10,13 @@ pub(crate) struct NoteSumTask {
 }
 
 impl NoteSumTask {
-    pub fn process(&mut self, proc_info: &ProcInfo) {
-        // TODO
+    pub fn process(&mut self) {
+        let mut out_buf = self.note_out.borrow_mut();
+        out_buf.clear();
+
+        for in_buf in self.note_in.iter() {
+            let in_buf = in_buf.borrow();
+            out_buf.extend_from_slice(in_buf.as_slice());
+        }
     }
 }

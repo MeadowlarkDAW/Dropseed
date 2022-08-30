@@ -61,7 +61,13 @@ pub(super) fn construct_delay_comp_task(
 
             let shared_node =
                 shared_pool.delay_comp_nodes.note.entry(delay_comp_key).or_insert_with(|| {
-                    SharedNoteDelayCompNode::new(NoteDelayCompNode::new(delay), coll_handle)
+                    SharedNoteDelayCompNode::new(
+                        NoteDelayCompNode::new(
+                            delay,
+                            shared_pool.buffers.note_buffer_pool.buffer_size(),
+                        ),
+                        coll_handle,
+                    )
                 });
             shared_node.active = true;
 
@@ -85,7 +91,10 @@ pub(super) fn construct_delay_comp_task(
                 shared_pool.delay_comp_nodes.automation.entry(delay_comp_key).or_insert_with(
                     || {
                         SharedAutomationDelayCompNode::new(
-                            AutomationDelayCompNode::new(delay),
+                            AutomationDelayCompNode::new(
+                                delay,
+                                shared_pool.buffers.automation_buffer_pool.buffer_size(),
+                            ),
                             coll_handle,
                         )
                     },

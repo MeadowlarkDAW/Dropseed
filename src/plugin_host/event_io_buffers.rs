@@ -6,6 +6,7 @@ use clack_host::events::{Event, EventHeader as ClackEventHeader, UnknownEvent};
 use clack_host::utils::Cookie;
 use smallvec::SmallVec;
 
+use dropseed_plugin_api::automation::{AutomationIoEvent, AutomationIoEventType, IoEventHeader};
 use dropseed_plugin_api::buffer::SharedBuffer;
 use dropseed_plugin_api::ParamID;
 
@@ -45,9 +46,14 @@ impl PluginEventIoBuffers {
         }
     }
 
-    pub fn write_input_events(&self, raw_event_buffer: &mut EventBuffer) -> (bool, bool) {
+    pub fn write_input_events(
+        &self,
+        raw_event_buffer: &mut EventBuffer,
+        plugin_instance_id: u64,
+    ) -> (bool, bool) {
         let wrote_note_event = self.write_input_note_events(raw_event_buffer);
-        let wrote_param_event = self.write_input_automation_events(raw_event_buffer);
+        let wrote_param_event =
+            self.write_input_automation_events(raw_event_buffer, plugin_instance_id);
 
         (wrote_note_event, wrote_param_event)
     }
@@ -69,16 +75,22 @@ impl PluginEventIoBuffers {
         wrote_note_event
     }
 
-    fn write_input_automation_events(&self, raw_event_buffer: &mut EventBuffer) -> bool {
+    fn write_input_automation_events(
+        &self,
+        raw_event_buffer: &mut EventBuffer,
+        plugin_instance_id: u64,
+    ) -> bool {
         let mut wrote_event = false;
 
         if let Some((in_buf, _)) = &self.automation_in_buffer {
             for event in in_buf.borrow().iter() {
-                // TODO: handle cookies
-                let event =
-                    PluginIoEvent::AutomationEvent { cookie: Cookie::empty(), event: *event };
-                event.write_to_clap_buffer(raw_event_buffer);
-                wrote_event = true;
+                if event.plugin_instance_id == plugin_instance_id {
+                    // TODO: handle cookies
+                    let event =
+                        PluginIoEvent::AutomationEvent { cookie: Cookie::empty(), event: *event };
+                    event.write_to_clap_buffer(raw_event_buffer);
+                    wrote_event = true;
+                }
             }
         }
 
@@ -92,12 +104,10 @@ impl PluginEventIoBuffers {
             &mut ReducFnvProducerRefMut<ParamID, ProcToMainParamValue>,
         >,
         sanitizer: &mut PluginEventOutputSanitizer,
-        param_target_plugin_id: u64,
+        frames: u32,
     ) {
-        let events_iter = raw_event_buffer
-            .iter()
-            .filter_map(|e| PluginIoEvent::read_from_clap(e, param_target_plugin_id));
-        let events_iter = sanitizer.sanitize(events_iter);
+        let events_iter = raw_event_buffer.iter().filter_map(|e| PluginIoEvent::read_from_clap(e));
+        let events_iter = sanitizer.sanitize(events_iter, frames);
 
         for event in events_iter {
             match event {
@@ -107,10 +117,6 @@ impl PluginEventIoBuffers {
                     }
                 }
                 PluginIoEvent::AutomationEvent { cookie: _, event } => {
-                    if let Some(buffer) = &mut self.automation_out_buffer {
-                        buffer.borrow_mut().push(event)
-                    }
-
                     if let Some(queue) = external_parameter_queue.as_mut() {
                         if let Some(value) =
                             ProcToMainParamValue::from_param_event(event.event_type)
@@ -133,22 +139,6 @@ pub struct NoteIoEvent {
     pub event_type: NoteIoEventType,
 }
 
-// Contents of AutomationBuffer
-#[derive(Copy, Clone)]
-pub struct AutomationIoEvent {
-    pub header: IoEventHeader,
-    pub parameter_id: u32,
-    pub event_type: AutomationIoEventType,
-    pub plugin_instance_id: u64,
-}
-
-// Contains common data
-#[derive(Copy, Clone)]
-pub struct IoEventHeader {
-    pub time: u32,
-    // TODO: add event flags here when we implement them
-}
-
 #[derive(Copy, Clone)]
 pub enum NoteIoEventType {
     On { velocity: f64 },
@@ -158,24 +148,13 @@ pub enum NoteIoEventType {
 }
 
 #[derive(Copy, Clone)]
-pub enum AutomationIoEventType {
-    Value(f64),
-    Modulation(f64),
-    BeginGesture,
-    EndGesture,
-}
-
-#[derive(Copy, Clone)]
 pub enum PluginIoEvent {
     NoteEvent { note_port_index: i16, event: NoteIoEvent },
     AutomationEvent { cookie: Cookie, event: AutomationIoEvent },
 }
 
 impl PluginIoEvent {
-    pub fn read_from_clap(
-        clap_event: &UnknownEvent,
-        target_plugin_instance_id: u64,
-    ) -> Option<Self> {
+    pub fn read_from_clap(clap_event: &UnknownEvent) -> Option<Self> {
         match clap_event.as_core_event()? {
             CoreEventSpace::NoteOn(NoteOnEvent(e)) => Some(PluginIoEvent::NoteEvent {
                 note_port_index: e.port_index(),
@@ -220,7 +199,7 @@ impl PluginIoEvent {
             CoreEventSpace::ParamValue(e) => Some(PluginIoEvent::AutomationEvent {
                 cookie: e.cookie(),
                 event: AutomationIoEvent {
-                    plugin_instance_id: target_plugin_instance_id,
+                    plugin_instance_id: 0,
                     parameter_id: e.param_id(),
                     header: IoEventHeader { time: e.header().time() },
                     event_type: AutomationIoEventType::Value(e.value()),
@@ -229,25 +208,25 @@ impl PluginIoEvent {
             CoreEventSpace::ParamMod(e) => Some(PluginIoEvent::AutomationEvent {
                 cookie: e.cookie(),
                 event: AutomationIoEvent {
-                    plugin_instance_id: target_plugin_instance_id,
+                    plugin_instance_id: 0,
                     parameter_id: e.param_id(),
                     header: IoEventHeader { time: e.header().time() },
                     event_type: AutomationIoEventType::Modulation(e.value()),
                 },
             }),
             CoreEventSpace::ParamGestureBegin(e) => Some(PluginIoEvent::AutomationEvent {
-                cookie: Cookie::empty(),
+                cookie: Cookie::empty(), // TODO: get cookie
                 event: AutomationIoEvent {
-                    plugin_instance_id: target_plugin_instance_id,
+                    plugin_instance_id: 0,
                     parameter_id: e.param_id(),
                     header: IoEventHeader { time: e.header().time() },
                     event_type: AutomationIoEventType::BeginGesture,
                 },
             }),
             CoreEventSpace::ParamGestureEnd(e) => Some(PluginIoEvent::AutomationEvent {
-                cookie: Cookie::empty(),
+                cookie: Cookie::empty(), // TODO: get cookie
                 event: AutomationIoEvent {
-                    plugin_instance_id: target_plugin_instance_id,
+                    plugin_instance_id: 0,
                     parameter_id: e.param_id(),
                     header: IoEventHeader { time: e.header().time() },
                     event_type: AutomationIoEventType::EndGesture,
@@ -255,6 +234,11 @@ impl PluginIoEvent {
             }),
 
             // TODO: handle MIDI events & note end events
+            CoreEventSpace::Transport(_) => {
+                log::warn!("Plugin outputted a `CLAP_EVENT_TRANSPORT` event. Event was discarded.");
+                None
+            }
+
             _ => None,
         }
     }

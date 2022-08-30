@@ -1,9 +1,8 @@
 use atomic_refcell::{AtomicRefCell, AtomicRefMut};
 use basedrop::Shared;
+use dropseed_plugin_api::automation::AutomationIoEvent;
 use dropseed_plugin_api::buffer::SharedBuffer;
 use dropseed_plugin_api::ProcInfo;
-
-use crate::plugin_host::event_io_buffers::AutomationIoEvent;
 
 pub(crate) struct AutomationDelayCompTask {
     pub shared_node: SharedAutomationDelayCompNode,
@@ -43,13 +42,18 @@ impl SharedAutomationDelayCompNode {
 }
 
 pub(crate) struct AutomationDelayCompNode {
-    // TODO
+    buf: Vec<AutomationIoEvent>,
+    temp_buf: Vec<AutomationIoEvent>,
     delay: u32,
 }
 
 impl AutomationDelayCompNode {
-    pub fn new(delay: u32) -> Self {
-        Self { delay }
+    pub fn new(delay: u32, automation_buffer_size: usize) -> Self {
+        Self {
+            buf: Vec::with_capacity(automation_buffer_size),
+            temp_buf: Vec::with_capacity(automation_buffer_size),
+            delay,
+        }
     }
 
     pub fn process(
@@ -58,7 +62,34 @@ impl AutomationDelayCompNode {
         input: &SharedBuffer<AutomationIoEvent>,
         output: &SharedBuffer<AutomationIoEvent>,
     ) {
-        // TODO
+        let input_buf = input.borrow();
+        let mut output_buf = output.borrow_mut();
+        output_buf.clear();
+
+        self.temp_buf.clear();
+
+        for mut event in self.buf.drain(..) {
+            if event.header.time < proc_info.frames as u32 {
+                output_buf.push(event);
+            } else {
+                event.header.time -= proc_info.frames as u32;
+                self.temp_buf.push(event);
+            }
+        }
+
+        self.buf.append(&mut self.temp_buf);
+
+        for event in input_buf.iter() {
+            let mut event_delayed = event.clone();
+            event_delayed.header.time += self.delay;
+
+            if event_delayed.header.time < proc_info.frames as u32 {
+                output_buf.push(event_delayed);
+            } else {
+                event_delayed.header.time -= proc_info.frames as u32;
+                self.buf.push(event_delayed);
+            }
+        }
     }
 
     pub fn delay(&self) -> u32 {

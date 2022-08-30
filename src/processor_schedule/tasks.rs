@@ -220,8 +220,8 @@ impl Task {
         match self {
             Task::Plugin(task) => task.process(proc_info),
             Task::AudioSum(task) => task.process(proc_info),
-            Task::NoteSum(task) => task.process(proc_info),
-            Task::AutomationSum(task) => task.process(proc_info),
+            Task::NoteSum(task) => task.process(),
+            Task::AutomationSum(task) => task.process(),
             Task::AudioDelayComp(task) => task.process(proc_info),
             Task::NoteDelayComp(task) => task.process(proc_info),
             Task::AutomationDelayComp(task) => task.process(proc_info),

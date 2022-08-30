@@ -12,12 +12,13 @@ use std::sync::{
     Arc,
 };
 
+use dropseed_plugin_api::automation::AutomationIoEventType;
+
 use crate::utils::reducing_queue::{
     ReducFnvConsumer, ReducFnvProducer, ReducFnvValue, ReducingFnvQueue,
 };
 use crate::utils::thread_id::SharedThreadIDs;
 
-use super::event_io_buffers::AutomationIoEventType;
 use super::process_thread::PluginHostProcThread;
 
 pub(super) struct PlugHostChannelMainThread {
@@ -40,6 +41,7 @@ impl PlugHostChannelMainThread {
     pub fn create_process_thread(
         &mut self,
         plugin_processor: Box<dyn PluginProcessThread>,
+        plugin_instance_id: u64,
         num_params: usize,
         thread_ids: SharedThreadIDs,
         coll_handle: &basedrop::Handle,
@@ -76,7 +78,13 @@ impl PlugHostChannelMainThread {
         };
 
         let shared_proc_thread = SharedPluginHostProcThread::new(
-            PluginHostProcThread::new(plugin_processor, proc_channel, num_params, thread_ids),
+            PluginHostProcThread::new(
+                plugin_processor,
+                plugin_instance_id,
+                proc_channel,
+                num_params,
+                thread_ids,
+            ),
             coll_handle,
         );
 
@@ -84,7 +92,9 @@ impl PlugHostChannelMainThread {
     }
 
     /// Note this doesn't actually drop the process thread. It only drops this
-    /// struct's pointer to the process thread.
+    /// struct's pointer to the process thread so that when the process thread
+    /// drops its shared pointer, it will be collected by the garbage
+    /// collector.
     pub fn drop_process_thread_pointer(&mut self) {
         self.process_thread = None;
         self.param_queues = None;

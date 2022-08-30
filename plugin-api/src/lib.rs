@@ -1,3 +1,4 @@
+pub mod automation;
 pub mod buffer;
 pub mod ext;
 pub mod plugin_scanner;
