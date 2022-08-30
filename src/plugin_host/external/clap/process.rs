@@ -6,8 +6,9 @@ use clack_host::instance::processor::audio::{
 use std::ops::{Deref, DerefMut};
 
 use dropseed_plugin_api::buffer::RawAudioChannelBuffers;
-use dropseed_plugin_api::ext::audio_ports::PluginAudioPortsExt;
 use dropseed_plugin_api::ProcBuffers;
+
+use super::plugin::AudioPortChannels;
 
 // Deref coercion struggles to go from AtomicRefMut<Vec<T>> to [T]
 struct BorrowedBuffer<'a, T>(AtomicRefMut<'a, Vec<T>>);
@@ -34,13 +35,18 @@ pub(crate) struct ClapProcess {
 }
 
 impl ClapProcess {
-    pub fn new(audio_ports: &PluginAudioPortsExt) -> Self {
+    pub(super) fn new(audio_port_channels: &AudioPortChannels) -> Self {
         // Allocate enough slots for each buffer so we can update them in
         // the audio thread.
-
         Self {
-            input_buffer_slots: AudioPorts::with_capacity(2, audio_ports.inputs.len()),
-            output_buffer_slots: AudioPorts::with_capacity(2, audio_ports.outputs.len()),
+            input_buffer_slots: AudioPorts::with_capacity(
+                audio_port_channels.max_input_channels,
+                audio_port_channels.num_input_ports,
+            ),
+            output_buffer_slots: AudioPorts::with_capacity(
+                audio_port_channels.max_output_channels,
+                audio_port_channels.num_output_ports,
+            ),
         }
     }
 

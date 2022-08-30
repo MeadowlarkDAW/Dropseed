@@ -1,5 +1,4 @@
 use clack_host::instance::PluginInstance;
-use dropseed_plugin_api::ext::audio_ports::PluginAudioPortsExt;
 
 pub(crate) mod factory;
 
@@ -10,7 +9,9 @@ mod plugin;
 
 mod process;
 
+use plugin::AudioPortChannels;
+
 pub struct ClapPluginMainThread {
     instance: PluginInstance<ClapHost>,
-    audio_ports_ext: PluginAudioPortsExt,
+    audio_port_channels: AudioPortChannels,
 }

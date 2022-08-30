@@ -3,6 +3,9 @@ use clack_extensions::gui::{GuiError, GuiSize, HostGuiImplementation};
 use clack_extensions::latency::HostLatencyImpl;
 use clack_extensions::log::implementation::HostLog;
 use clack_extensions::log::LogSeverity;
+use clack_extensions::note_ports::{
+    HostNotePortsImplementation, NoteDialects, NotePortRescanFlags,
+};
 use clack_extensions::params::{
     HostParamsImplementation, HostParamsImplementationMainThread, ParamClearFlags, ParamRescanFlags,
 };
@@ -62,6 +65,26 @@ impl<'a> HostAudioPortsImplementation for ClapHostMainThread<'a> {
     fn rescan(&mut self, flags: RescanType) {
         if !self.shared.thread_ids.is_main_thread() {
             log::warn!("Plugin called clap_host_audio_ports->rescan() not in the main thread");
+            return;
+        }
+
+        if !flags.is_empty() {
+            // We ignore the `flags` field since we just do a full restart
+            // and rescan for every "rescan ports" request anyway.
+            self.shared.host_request.request(HostRequestFlags::RESCAN_PORTS);
+        }
+    }
+}
+
+impl<'a> HostNotePortsImplementation for ClapHostMainThread<'a> {
+    fn supported_dialects(&self) -> NoteDialects {
+        // TODO: Support MIDI2
+        NoteDialects::CLAP | NoteDialects::MIDI
+    }
+
+    fn rescan(&self, flags: NotePortRescanFlags) {
+        if !self.shared.thread_ids.is_main_thread() {
+            log::warn!("Plugin called clap_host_note_ports->rescan() not in the main thread");
             return;
         }
 

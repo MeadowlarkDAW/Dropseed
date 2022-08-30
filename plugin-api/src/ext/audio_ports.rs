@@ -84,6 +84,38 @@ impl PluginAudioPortsExt {
         None
     }
 
+    /// Returns the input port with the largest number of channels.
+    pub fn max_input_channels(&self) -> Option<&AudioPortInfo> {
+        if self.inputs.is_empty() {
+            return None;
+        }
+
+        let mut max = &self.inputs[0];
+        for p in self.inputs.iter() {
+            if p.channels > max.channels {
+                max = p;
+            }
+        }
+
+        Some(max)
+    }
+
+    /// Returns the output port with the largest number of channels.
+    pub fn max_output_channels(&self) -> Option<&AudioPortInfo> {
+        if self.outputs.is_empty() {
+            return None;
+        }
+
+        let mut max = &self.outputs[0];
+        for p in self.outputs.iter() {
+            if p.channels > max.channels {
+                max = p;
+            }
+        }
+
+        Some(max)
+    }
+
     pub const fn empty() -> Self {
         PluginAudioPortsExt {
             inputs: vec![],

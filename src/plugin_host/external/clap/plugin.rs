@@ -1,11 +1,13 @@
 use atomic_refcell::{AtomicRef, AtomicRefMut};
 use clack_extensions::audio_ports::{AudioPortFlags, AudioPortInfoBuffer, PluginAudioPorts};
 use clack_extensions::gui::{GuiApiType, GuiError};
+use clack_extensions::note_ports::{NotePortInfoBuffer, PluginNotePorts};
 use clack_host::events::io::{InputEvents, OutputEvents};
 use clack_host::instance::processor::PluginAudioProcessor;
 use clack_host::instance::{PluginAudioConfiguration, PluginInstance};
 use dropseed_plugin_api::buffer::RawAudioChannelBuffers;
 use dropseed_plugin_api::ext::audio_ports::{AudioPortInfo, MainPortsLayout, PluginAudioPortsExt};
+use dropseed_plugin_api::ext::note_ports::{NotePortInfo, PluginNotePortsExt};
 use dropseed_plugin_api::ext::params::{ParamID, ParamInfo, ParamInfoFlags};
 use dropseed_plugin_api::{
     buffer::EventBuffer, ext, PluginActivatedInfo, PluginMainThread, PluginProcessThread,
@@ -21,9 +23,17 @@ use std::mem::MaybeUninit;
 use super::process::ClapProcess;
 use super::*;
 
+#[derive(Default)]
+pub(super) struct AudioPortChannels {
+    pub num_input_ports: usize,
+    pub num_output_ports: usize,
+    pub max_input_channels: usize,
+    pub max_output_channels: usize,
+}
+
 impl ClapPluginMainThread {
     pub(crate) fn new(instance: PluginInstance<ClapHost>) -> Result<Self, String> {
-        Ok(Self { audio_ports_ext: Self::parse_audio_ports_extension(&instance)?, instance })
+        Ok(Self { instance, audio_port_channels: AudioPortChannels::default() })
     }
 
     #[inline]
@@ -94,7 +104,7 @@ impl ClapPluginMainThread {
         let outputs: Vec<AudioPortInfo> = (0..num_out_ports).filter_map(|i| {
             let raw_info = match audio_ports.get(&plugin, i, false, &mut buffer) {
                 None => {
-                    log::warn!("Error when getting CLAP Port Info from plugin instance {}: plugin returned no info for index {}", id, i);
+                    log::warn!("Error when getting CLAP audio port info from plugin instance {}: plugin returned no info for index {}", id, i);
                     return None;
                 },
                 Some(i) => i
@@ -135,6 +145,81 @@ impl ClapPluginMainThread {
 
         Ok(PluginAudioPortsExt { inputs, outputs, main_ports_layout })
     }
+
+    fn parse_note_ports_extension(
+        instance: &PluginInstance<ClapHost>,
+    ) -> Result<PluginNotePortsExt, String> {
+        let id = &*instance.shared_host_data().id;
+        log::trace!("clap plugin instance parse note ports extension {}", id);
+
+        if instance.is_active() {
+            return Err("Cannot get note ports extension while plugin is active".into());
+        }
+
+        let note_ports = match instance.shared_plugin_data().get_extension::<PluginNotePorts>() {
+            None => return Ok(PluginNotePortsExt::empty()),
+            Some(e) => e,
+        };
+
+        let plugin = instance.main_thread_plugin_data();
+
+        let num_in_ports = note_ports.count(&plugin, true);
+        let num_out_ports = note_ports.count(&plugin, false);
+
+        let mut buffer = NotePortInfoBuffer::new();
+
+        let inputs: Vec<NotePortInfo> = (0..num_in_ports).filter_map(|i| {
+            let raw_info = match note_ports.get(&plugin, i, true, &mut buffer) {
+                None => {
+                    log::warn!("Error when getting CLAP note port info from plugin instance {}: plugin returned no info for index {}", id, i);
+                    return None;
+                },
+                Some(i) => i
+            };
+
+            let display_name = match raw_info.name.to_str() {
+                Ok(s) => Some(s.to_string()),
+                Err(_) => {
+                    log::warn!("Failed to get clap_audio_port_info.name from plugin instance {}", id);
+                    None
+                }
+            };
+
+            Some(NotePortInfo {
+                stable_id: raw_info.id,
+                supported_dialects: raw_info.supported_dialects,
+                preferred_dialect: raw_info.preferred_dialect,
+                display_name,
+            })
+        }).collect();
+
+        let outputs: Vec<NotePortInfo> = (0..num_out_ports).filter_map(|i| {
+            let raw_info = match note_ports.get(&plugin, i, false, &mut buffer) {
+                None => {
+                    log::warn!("Error when getting CLAP note port info from plugin instance {}: plugin returned no info for index {}", id, i);
+                    return None;
+                },
+                Some(i) => i
+            };
+
+            let display_name = match raw_info.name.to_str() {
+                Ok(s) => Some(s.to_string()),
+                Err(_) => {
+                    log::warn!("Failed to get clap_audio_port_info.name from plugin instance {}", id);
+                    None
+                }
+            };
+
+            Some(NotePortInfo {
+                stable_id: raw_info.id,
+                supported_dialects: raw_info.supported_dialects,
+                preferred_dialect: raw_info.preferred_dialect,
+                display_name,
+            })
+        }).collect();
+
+        Ok(PluginNotePortsExt { inputs, outputs })
+    }
 }
 
 impl PluginMainThread for ClapPluginMainThread {
@@ -162,7 +247,10 @@ impl PluginMainThread for ClapPluginMainThread {
         Ok(PluginActivatedInfo {
             processor: Box::new(ClapPluginProcessThread {
                 audio_processor: audio_processor.into(),
-                process: ClapProcess::new(&self.audio_ports_ext),
+                // `PluginHostMainThread` will always call
+                // `ClapPluginMainThread::audio_ports_ext()` before activating
+                // a plugin, so `audio_port_channels` info should be correct.
+                process: ClapProcess::new(&self.audio_port_channels),
             }),
             internal_handle: None,
         })
@@ -224,8 +312,6 @@ impl PluginMainThread for ClapPluginMainThread {
         }
     }
 
-    // --- Parameters ---------------------------------------------------------------------------------
-
     fn on_main_thread(&mut self) {
         log::trace!("clap plugin instance on_main_thread {}", self.id());
 
@@ -233,8 +319,27 @@ impl PluginMainThread for ClapPluginMainThread {
     }
 
     fn audio_ports_ext(&mut self) -> Result<PluginAudioPortsExt, String> {
-        Ok(self.audio_ports_ext.clone())
+        let res = Self::parse_audio_ports_extension(&self.instance);
+
+        if let Ok(audio_ports) = &res {
+            self.audio_port_channels.num_input_ports = audio_ports.inputs.len();
+            self.audio_port_channels.num_output_ports = audio_ports.outputs.len();
+            self.audio_port_channels.max_input_channels =
+                audio_ports.max_input_channels().map(|p| usize::from(p.channels)).unwrap_or(2);
+            self.audio_port_channels.max_output_channels =
+                audio_ports.max_output_channels().map(|p| usize::from(p.channels)).unwrap_or(2);
+        } else {
+            self.audio_port_channels = AudioPortChannels::default();
+        }
+
+        res
     }
+
+    fn note_ports_ext(&mut self) -> Result<PluginNotePortsExt, String> {
+        Self::parse_note_ports_extension(&self.instance)
+    }
+
+    // --- Parameters ---------------------------------------------------------------------------------
 
     fn num_params(&mut self) -> u32 {
         if let Some(params_ext) = self.instance.shared_host_data().params_ext {
