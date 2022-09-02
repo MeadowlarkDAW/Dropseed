@@ -1,5 +1,5 @@
 use atomic_refcell::{AtomicRefCell, AtomicRefMut};
-use basedrop::Shared;
+use basedrop::{Shared, SharedCell};
 use clack_host::events::{Event, EventFlags, EventHeader};
 use clack_host::utils::Cookie;
 use dropseed_plugin_api::{
@@ -26,14 +26,14 @@ pub(super) struct PlugHostChannelMainThread {
 
     pub shared_state: Arc<SharedPluginHostState>,
 
-    process_thread: Option<SharedPluginHostProcThread>,
+    process_thread: SharedPluginHostProcThread,
 }
 
 impl PlugHostChannelMainThread {
-    pub fn new() -> Self {
+    pub fn new(coll_handle: &basedrop::Handle) -> Self {
         Self {
             param_queues: None,
-            process_thread: None,
+            process_thread: SharedPluginHostProcThread::new(None, coll_handle),
             shared_state: Arc::new(SharedPluginHostState::new()),
         }
     }
@@ -77,30 +77,28 @@ impl PlugHostChannelMainThread {
             shared_state: Arc::clone(&self.shared_state),
         };
 
-        let shared_proc_thread = SharedPluginHostProcThread::new(
-            PluginHostProcThread::new(
+        self.process_thread.set(
+            Some(PluginHostProcThread::new(
                 plugin_processor,
                 plugin_instance_id,
                 proc_channel,
                 num_params,
                 thread_ids,
-            ),
+            )),
             coll_handle,
         );
-
-        self.process_thread = Some(shared_proc_thread);
     }
 
     /// Note this doesn't actually drop the process thread. It only drops this
     /// struct's pointer to the process thread so that when the process thread
     /// drops its shared pointer, it will be collected by the garbage
     /// collector.
-    pub fn drop_process_thread_pointer(&mut self) {
-        self.process_thread = None;
+    pub fn drop_process_thread_pointer(&mut self, coll_handle: &basedrop::Handle) {
+        self.process_thread.set(None, coll_handle);
         self.param_queues = None;
     }
 
-    pub fn shared_processor(&self) -> &Option<SharedPluginHostProcThread> {
+    pub fn shared_processor(&self) -> &SharedPluginHostProcThread {
         &self.process_thread
     }
 }
@@ -282,17 +280,41 @@ impl From<u32> for PluginActiveState {
     }
 }
 
+struct PluginHostProcThreadWrapper {
+    processor: Option<AtomicRefCell<PluginHostProcThread>>,
+}
+
+unsafe impl Send for PluginHostProcThreadWrapper {}
+unsafe impl Sync for PluginHostProcThreadWrapper {}
+
 #[derive(Clone)]
 pub(crate) struct SharedPluginHostProcThread {
-    shared: Shared<AtomicRefCell<PluginHostProcThread>>,
+    shared: Shared<SharedCell<PluginHostProcThreadWrapper>>,
 }
 
 impl SharedPluginHostProcThread {
-    pub fn new(p: PluginHostProcThread, coll_handle: &basedrop::Handle) -> Self {
-        Self { shared: Shared::new(coll_handle, AtomicRefCell::new(p)) }
+    pub fn new(p: Option<PluginHostProcThread>, coll_handle: &basedrop::Handle) -> Self {
+        Self {
+            shared: Shared::new(
+                coll_handle,
+                SharedCell::new(Shared::new(
+                    coll_handle,
+                    PluginHostProcThreadWrapper { processor: p.map(|p| AtomicRefCell::new(p)) },
+                )),
+            ),
+        }
     }
 
-    pub fn borrow_mut(&self) -> AtomicRefMut<'_, PluginHostProcThread> {
-        self.shared.borrow_mut()
+    fn set(&mut self, p: Option<PluginHostProcThread>, coll_handle: &basedrop::Handle) {
+        self.shared.set(Shared::new(
+            coll_handle,
+            PluginHostProcThreadWrapper { processor: p.map(|p| AtomicRefCell::new(p)) },
+        ))
+    }
+
+    pub fn borrow_mut(&self) -> Option<AtomicRefMut<'_, PluginHostProcThread>> {
+        self.shared.get().processor.map(|p| p.borrow_mut())
     }
 }
+
+unsafe impl Send for SharedPluginHostProcThread {}

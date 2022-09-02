@@ -11,7 +11,7 @@ use super::super::shared_pools::GraphSharedPools;
 use super::super::{ChannelID, PortType};
 
 mod activated_plugin_task;
-mod deactivated_plugin_task;
+mod unloaded_plugin_task;
 
 pub(super) fn construct_plugin_task(
     scheduled_node: &ScheduledNode,
@@ -123,8 +123,8 @@ pub(super) fn construct_plugin_task(
     // --- Construct the final task using the constructed map from above --------------------
 
     if maybe_shared_processor.is_none() {
-        // Plugin is unloaded/deactivated
-        deactivated_plugin_task::construct_deactivated_plugin_task(
+        // Plugin is unloaded
+        unloaded_plugin_task::construct_deactivated_plugin_task(
             scheduled_node,
             maybe_audio_ports_ext,
             maybe_note_ports_ext,

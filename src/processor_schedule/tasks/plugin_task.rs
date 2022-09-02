@@ -11,16 +11,18 @@ pub(crate) struct PluginTask {
     pub shared_processor: SharedPluginHostProcThread,
 
     pub buffers: ProcBuffers,
-
     pub event_buffers: PluginEventIoBuffers,
-
     pub clear_audio_in_buffers: SmallVec<[SharedBuffer<f32>; 2]>,
 }
 
 impl PluginTask {
     pub fn process(&mut self, proc_info: &ProcInfo) {
-        let mut processor = self.shared_processor.borrow_mut();
-
-        processor.process(proc_info, &mut self.buffers, &mut self.event_buffers);
+        if let Some(processor) = self.shared_processor.borrow_mut() {
+            processor.process(proc_info, &mut self.buffers, &mut self.event_buffers);
+        } else {
+            // Plugin is deactivated.
+            self.buffers.bypassed(proc_info);
+            self.event_buffers.bypassed();
+        }
     }
 }

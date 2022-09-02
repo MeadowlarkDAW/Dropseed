@@ -28,6 +28,8 @@ pub(crate) struct PluginEventIoBuffers {
     pub automation_in_buffer: Option<(SharedBuffer<AutomationIoEvent>, bool)>,
     /// Only for internal plugin (e.g. timeline or macros)
     pub automation_out_buffer: Option<SharedBuffer<AutomationIoEvent>>,
+
+    pub main_note_through_when_bypassed: bool,
 }
 
 impl PluginEventIoBuffers {
@@ -125,6 +127,26 @@ impl PluginEventIoBuffers {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    pub fn bypassed(&mut self) {
+        for note_out in self.note_out_buffers.iter() {
+            note_out.truncate();
+        }
+
+        if let Some(automation_out) = &self.automation_out_buffer {
+            automation_out.truncate();
+        }
+
+        // TODO: More note through ports when bypassed?
+        if self.main_note_through_when_bypassed {
+            let in_buf = self.note_in_buffers[0].borrow();
+            let out_buf = self.note_out_buffers[0].borrow_mut();
+
+            for event in in_buf.iter() {
+                out_buf.push(*event);
             }
         }
     }

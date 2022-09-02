@@ -47,6 +47,8 @@ pub struct ProcInfo {
 pub struct ProcBuffers {
     pub audio_in: SmallVec<[AudioPortBuffer; 2]>,
     pub audio_out: SmallVec<[AudioPortBufferMut; 2]>,
+
+    main_audio_through_when_bypassed: bool,
 }
 
 impl ProcBuffers {
@@ -69,9 +71,46 @@ impl ProcBuffers {
         self.audio_in.iter().all(|b| b.has_silent_hint())
     }
 
+    /// Clear all output buffers.
+    ///
+    /// All output buffers which have not already been filled manually must be cleared.
     pub fn clear_all_outputs(&mut self, proc_info: &ProcInfo) {
         for buf in self.audio_out.iter_mut() {
             buf.clear_all(proc_info.frames);
+        }
+    }
+
+    /// Copy all inputs to their corresponding outputs, and clear all other outputs.
+    pub fn bypassed(&mut self, proc_info: &ProcInfo) {
+        self.clear_all_outputs(proc_info);
+
+        // TODO: More audio through ports when bypassed?
+        if self.main_audio_through_when_bypassed {
+            let in_buf = &self.audio_in[0];
+            let out_buf = &mut self.audio_out[0];
+
+            if !in_buf.has_silent_hint() {
+                let in_buf_iter = if let Some(i) = in_buf._iter_raw_f32() {
+                    i
+                } else {
+                    return;
+                };
+                let out_buf_iter = if let Some(i) = out_buf._iter_raw_f32_mut() {
+                    i
+                } else {
+                    return;
+                };
+
+                for (in_channel, out_channel) in in_buf_iter.zip(out_buf_iter) {
+                    let in_channel_data = out_channel.borrow();
+                    let mut out_channel_data = out_channel.borrow_mut();
+
+                    out_channel_data[0..proc_info.frames]
+                        .copy_from_slice(&in_channel_data[0..proc_info.frames]);
+
+                    out_channel.set_constant(in_channel.is_constant());
+                }
+            }
         }
     }
 }

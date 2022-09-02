@@ -13,6 +13,8 @@ pub enum ActivatePluginError {
     PluginFailedToGetNotePortsExt(String),
     PluginFailedToGetParamInfo(usize),
     PluginFailedToGetParamValue(ParamID),
+    AudioPortsExtDuplicateID { is_input: bool, id: u32 },
+    NotePortsExtDuplicateID { is_input: bool, id: u32 },
     PluginSpecific(String),
 }
 
@@ -42,6 +44,20 @@ impl std::fmt::Display for ActivatePluginError {
                     param_id
                 )
             }
+            ActivatePluginError::AudioPortsExtDuplicateID { is_input, id } => {
+                if *is_input {
+                    write!(f, "plugin has more than one input audio port with ID {}", id)
+                } else {
+                    write!(f, "plugin has more than one output audio port with ID {}", id)
+                }
+            }
+            ActivatePluginError::NotePortsExtDuplicateID { is_input, id } => {
+                if *is_input {
+                    write!(f, "plugin has more than one input note port with ID {}", id)
+                } else {
+                    write!(f, "plugin has more than one output note port with ID {}", id)
+                }
+            }
             ActivatePluginError::PluginSpecific(e) => {
                 write!(f, "plugin returned error while activating: {:?}", e)
             }
@@ -58,7 +74,7 @@ impl From<String> for ActivatePluginError {
 #[derive(Debug, Clone)]
 pub enum SetParamValueError {
     ParamDoesNotExist(ParamID),
-    PluginNotActive,
+    PluginNotLoaded,
     ParamIsReadOnly(ParamID),
     ParamIsNotModulatable(ParamID),
 }
@@ -71,8 +87,8 @@ impl std::fmt::Display for SetParamValueError {
             SetParamValueError::ParamDoesNotExist(id) => {
                 write!(f, "failed to set value of plugin parameter: parameter with id {:?} does not exist", id)
             }
-            SetParamValueError::PluginNotActive => {
-                write!(f, "failed to set value of plugin parameter: plugin is not activated")
+            SetParamValueError::PluginNotLoaded => {
+                write!(f, "failed to set value of plugin parameter: plugin is not loaded")
             }
             SetParamValueError::ParamIsReadOnly(id) => {
                 write!(

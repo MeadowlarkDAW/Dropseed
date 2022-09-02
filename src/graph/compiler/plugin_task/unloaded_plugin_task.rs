@@ -7,14 +7,14 @@ use fnv::FnvHashMap;
 use smallvec::SmallVec;
 
 use crate::plugin_host::event_io_buffers::NoteIoEvent;
-use crate::processor_schedule::tasks::{DeactivatedPluginTask, Task};
+use crate::processor_schedule::tasks::{Task, UnloadedPluginTask};
 
 use super::super::super::error::GraphCompilerError;
 use super::super::super::{ChannelID, PortType};
 
 /// In this task, audio and note data is passed through the main ports (if the plugin
 /// has main in/out ports), and then all the other output buffers are cleared.
-pub(super) fn construct_deactivated_plugin_task(
+pub(super) fn construct_unloaded_plugin_task(
     scheduled_node: &ScheduledNode,
     maybe_audio_ports_ext: Option<&PluginAudioPortsExt>,
     maybe_note_ports_ext: Option<&PluginNotePortsExt>,
@@ -127,7 +127,7 @@ pub(super) fn construct_deactivated_plugin_task(
         clear_automation_out = Some(buffer);
     }
 
-    Ok(Task::DeactivatedPlugin(DeactivatedPluginTask {
+    Ok(Task::UnloadedPlugin(UnloadedPluginTask {
         audio_through,
         note_through,
         clear_audio_out,

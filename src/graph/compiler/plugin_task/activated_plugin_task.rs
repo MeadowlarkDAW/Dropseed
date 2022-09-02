@@ -1,7 +1,7 @@
 use audio_graph::ScheduledNode;
 use dropseed_plugin_api::automation::AutomationIoEvent;
 use dropseed_plugin_api::buffer::{AudioPortBuffer, AudioPortBufferMut, SharedBuffer};
-use dropseed_plugin_api::ext::audio_ports::PluginAudioPortsExt;
+use dropseed_plugin_api::ext::audio_ports::{MainPortsLayout, PluginAudioPortsExt};
 use dropseed_plugin_api::ext::note_ports::PluginNotePortsExt;
 use dropseed_plugin_api::{PluginInstanceID, ProcBuffers};
 use fnv::FnvHashMap;
@@ -33,6 +33,14 @@ pub(super) fn construct_activated_plugin_task(
     let mut note_out_buffers: SmallVec<[SharedBuffer<NoteIoEvent>; 2]> = SmallVec::new();
     let mut clear_audio_in_buffers: SmallVec<[SharedBuffer<f32>; 2]> = SmallVec::new();
     let mut clear_note_in_buffers: SmallVec<[SharedBuffer<NoteIoEvent>; 2]> = SmallVec::new();
+
+    // TODO: More audio through ports when bypassed?
+    let main_audio_through_when_bypassed =
+        audio_ports_ext.main_ports_layout == MainPortsLayout::InOut;
+
+    // TODO: More note through ports when bypassed?
+    let main_note_through_when_bypassed =
+        !note_ports_ext.inputs.is_empty() && !note_ports_ext.outputs.is_empty();
 
     for in_port in audio_ports_ext.inputs.iter() {
         let mut buffers: SmallVec<[SharedBuffer<f32>; 2]> =
@@ -135,13 +143,14 @@ pub(super) fn construct_activated_plugin_task(
     Ok(Task::Plugin(PluginTask {
         plugin_id: plugin_id.clone(),
         shared_processor: shared_processor.clone(),
-        buffers: ProcBuffers { audio_in, audio_out },
+        buffers: ProcBuffers { audio_in, audio_out, main_audio_through_when_bypassed },
         event_buffers: PluginEventIoBuffers {
             note_in_buffers,
             note_out_buffers,
             clear_note_in_buffers,
             automation_in_buffer: assigned_automation_in_buffer,
             automation_out_buffer: assigned_automation_out_buffer,
+            main_note_through_when_bypassed,
         },
         clear_audio_in_buffers,
     }))

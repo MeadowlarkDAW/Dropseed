@@ -6,7 +6,7 @@ use dropseed_plugin_api::ProcInfo;
 
 use crate::plugin_host::event_io_buffers::NoteIoEvent;
 
-pub(crate) struct DeactivatedPluginTask {
+pub(crate) struct UnloadedPluginTask {
     pub audio_through: SmallVec<[(SharedBuffer<f32>, SharedBuffer<f32>); 4]>,
     pub note_through: Option<(SharedBuffer<NoteIoEvent>, SharedBuffer<NoteIoEvent>)>,
 
@@ -15,7 +15,7 @@ pub(crate) struct DeactivatedPluginTask {
     pub clear_automation_out: Option<SharedBuffer<AutomationIoEvent>>,
 }
 
-impl DeactivatedPluginTask {
+impl UnloadedPluginTask {
     pub fn process(&mut self, proc_info: &ProcInfo) {
         // Pass audio through the main ports.
         for (in_buf, out_buf) in self.audio_through.iter() {
@@ -41,7 +41,7 @@ impl DeactivatedPluginTask {
 
         // Make sure all output buffers are cleared.
         for out_buf in self.clear_audio_out.iter() {
-            out_buf.clear_until(proc_info.frames);
+            out_buf.clear(proc_info.frames);
         }
         for out_buf in self.clear_note_out.iter() {
             out_buf.truncate();

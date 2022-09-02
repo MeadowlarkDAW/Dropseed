@@ -599,6 +599,10 @@ pub struct PluginActivatedStatus {
     /// Any edges that were removed as a result of the plugin removing
     /// some of its ports.
     pub removed_edges: Vec<DSEdgeID>,
+
+    /// This is `true` if activating this plugin caused the audio graph
+    /// to recompile.
+    pub caused_recompile: bool,
 }
 
 #[derive(Debug)]
