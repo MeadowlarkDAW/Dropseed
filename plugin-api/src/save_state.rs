@@ -16,15 +16,17 @@ pub struct DSPluginSaveState {
     /// not be activated automatically.
     pub is_active: bool,
 
-    /// Use this as a backup in case the plugin fails to load. (Most
-    /// likey from a user opening another user's project, but the
-    /// former user doesn't have this plugin installed on their system.)
-    pub backup_audio_ports: Option<PluginAudioPortsExt>,
+    pub is_bypassed: bool,
 
     /// Use this as a backup in case the plugin fails to load. (Most
     /// likey from a user opening another user's project, but the
     /// former user doesn't have this plugin installed on their system.)
-    pub backup_note_ports: Option<PluginNotePortsExt>,
+    pub backup_audio_ports_ext: Option<PluginAudioPortsExt>,
+
+    /// Use this as a backup in case the plugin fails to load. (Most
+    /// likey from a user opening another user's project, but the
+    /// former user doesn't have this plugin installed on their system.)
+    pub backup_note_ports_ext: Option<PluginNotePortsExt>,
 
     /// The plugin's state/preset as raw bytes.
     ///
@@ -38,8 +40,9 @@ impl DSPluginSaveState {
         Self {
             key,
             is_active: true,
-            backup_audio_ports: None,
-            backup_note_ports: None,
+            is_bypassed: false,
+            backup_audio_ports_ext: None,
+            backup_note_ports_ext: None,
             raw_state: None,
         }
     }
@@ -51,8 +54,9 @@ impl Debug for DSPluginSaveState {
 
         f.field("key", &self.key);
         f.field("is_active", &self.is_active);
-        f.field("backup_audio_ports", &self.backup_audio_ports);
-        f.field("backup_note_ports", &self.backup_note_ports);
+        f.field("is_bypassed", &self.is_bypassed);
+        f.field("backup_audio_ports_ext", &self.backup_audio_ports_ext);
+        f.field("backup_note_ports_ext", &self.backup_note_ports_ext);
 
         if let Some(s) = &self.raw_state {
             f.field("raw_state size", &format!("{}", s.len()));

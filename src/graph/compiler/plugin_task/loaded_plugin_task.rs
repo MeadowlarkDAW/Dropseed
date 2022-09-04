@@ -8,18 +8,18 @@ use fnv::FnvHashMap;
 use smallvec::SmallVec;
 
 use crate::plugin_host::event_io_buffers::{NoteIoEvent, PluginEventIoBuffers};
-use crate::plugin_host::SharedPluginHostProcThread;
+use crate::plugin_host::SharedPluginHostProcessor;
 use crate::processor_schedule::tasks::{PluginTask, Task};
 
 use super::super::super::error::GraphCompilerError;
 use super::super::super::shared_pools::GraphSharedPools;
 use super::super::super::{ChannelID, PortType};
 
-pub(super) fn construct_activated_plugin_task(
+pub(super) fn construct_loaded_plugin_task(
     scheduled_node: &ScheduledNode,
     shared_pool: &GraphSharedPools,
     plugin_id: &PluginInstanceID,
-    shared_processor: &SharedPluginHostProcThread,
+    shared_processor: &SharedPluginHostProcessor,
     audio_ports_ext: &PluginAudioPortsExt,
     note_ports_ext: &PluginNotePortsExt,
     assigned_audio_buffers: FnvHashMap<ChannelID, (SharedBuffer<f32>, bool)>,
@@ -143,7 +143,8 @@ pub(super) fn construct_activated_plugin_task(
     Ok(Task::Plugin(PluginTask {
         plugin_id: plugin_id.clone(),
         shared_processor: shared_processor.clone(),
-        buffers: ProcBuffers { audio_in, audio_out, main_audio_through_when_bypassed },
+        current_processor: None,
+        buffers: ProcBuffers::_new(audio_in, audio_out, main_audio_through_when_bypassed),
         event_buffers: PluginEventIoBuffers {
             note_in_buffers,
             note_out_buffers,

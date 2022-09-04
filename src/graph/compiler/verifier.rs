@@ -209,7 +209,7 @@ impl Verifier {
                         });
                     }
                 }
-                Task::DeactivatedPlugin(t) => {
+                Task::UnloadedPlugin(t) => {
                     for (b_in, b_out) in t.audio_through.iter() {
                         if !self.buffer_instances.insert(b_in.id()) {
                             return Err(VerifyScheduleError::BufferAppearsTwiceInSameTask {

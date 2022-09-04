@@ -9,7 +9,7 @@ use dropseed_plugin_api::{
     PluginMainThread,
 };
 use fnv::{FnvHashMap, FnvHashSet};
-use meadowlark_core_types::time::SampleRate;
+use meadowlark_core_types::time::{SampleRate, Seconds};
 use smallvec::SmallVec;
 
 use crate::engine::{OnIdleEvent, PluginActivatedStatus};
@@ -17,9 +17,12 @@ use crate::graph::{ChannelID, DSEdgeID, PortType};
 use crate::utils::thread_id::SharedThreadIDs;
 
 use super::channel::{
-    MainToProcParamValue, PlugHostChannelMainThread, PluginActiveState, SharedPluginHostProcThread,
+    MainToProcParamValue, PlugHostChannelMainThread, PluginActiveState, SharedPluginHostProcessor,
 };
 use super::error::{ActivatePluginError, SetParamValueError, ShowGuiError};
+use super::PluginHostProcessorWrapper;
+
+static BYPASS_DECLICK_SECS: Seconds = Seconds(3.0 / 1000.0);
 
 /// The references to this plugin's ports in the audio graph.
 pub(crate) struct PluginHostPortIDs {
@@ -82,7 +85,7 @@ pub struct PluginHostMainThread {
 impl PluginHostMainThread {
     pub(crate) fn new(
         id: PluginInstanceID,
-        save_state: DSPluginSaveState,
+        mut save_state: DSPluginSaveState,
         mut plug_main_thread: Box<dyn PluginMainThread>,
         host_request_rx: HostRequestChannelReceiver,
         plugin_loaded: bool,
@@ -100,7 +103,7 @@ impl PluginHostMainThread {
         }
 
         let (num_audio_in_channels, num_audio_out_channels) =
-            if let Some(audio_ports_ext) = &save_state.backup_audio_ports {
+            if let Some(audio_ports_ext) = &save_state.backup_audio_ports_ext {
                 (audio_ports_ext.total_in_channels(), audio_ports_ext.total_out_channels())
             } else {
                 (0, 0)
@@ -112,6 +115,13 @@ impl PluginHostMainThread {
             LoadedState::Unloaded
         };
 
+        if save_state.backup_audio_ports_ext.is_none() {
+            save_state.backup_audio_ports_ext = Some(PluginAudioPortsExt::empty());
+            save_state.backup_note_ports_ext = Some(PluginNotePortsExt::empty());
+        }
+
+        let bypassed = save_state.is_bypassed;
+
         Self {
             id,
             plug_main_thread,
@@ -119,7 +129,7 @@ impl PluginHostMainThread {
             next_port_id: 0,
             free_port_ids: Vec::new(),
             loaded_state,
-            channel: PlugHostChannelMainThread::new(coll_handle),
+            channel: PlugHostChannelMainThread::new(bypassed, coll_handle),
             save_state,
             gesturing_params: FnvHashMap::default(),
             num_audio_in_channels,
@@ -128,6 +138,27 @@ impl PluginHostMainThread {
             remove_requested: false,
             save_state_dirty: false,
             restarting: false,
+        }
+    }
+
+    pub fn is_loaded(&self) -> bool {
+        if let LoadedState::Loaded { .. } = self.loaded_state {
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn is_bypassed(&self) -> bool {
+        self.save_state.is_bypassed
+    }
+
+    pub fn set_bypassed(&mut self, bypassed: bool) {
+        if self.save_state.is_bypassed != bypassed {
+            self.save_state.is_bypassed = true;
+            self.save_state_dirty = true;
+
+            self.channel.shared_state.set_bypassed(bypassed);
         }
     }
 
@@ -297,16 +328,20 @@ impl PluginHostMainThread {
         graph_helper: &mut AudioGraphHelper,
         edge_id_to_ds_edge_id: &mut FnvHashMap<EdgeID, DSEdgeID>,
         thread_ids: SharedThreadIDs,
+        schedule_version: u64,
         coll_handle: &basedrop::Handle,
     ) -> Result<PluginActivatedStatus, ActivatePluginError> {
         self.can_activate()?;
 
+        let set_inactive_with_error = |self_: &mut Self| {
+            self_.channel.shared_state.set_active_state(PluginActiveState::InactiveWithError);
+            self_.channel.param_queues = None;
+        };
+
         let audio_ports = match self.plug_main_thread.audio_ports_ext() {
             Ok(audio_ports) => audio_ports,
             Err(e) => {
-                self.channel.shared_state.set_active_state(PluginActiveState::InactiveWithError);
-                self.channel.param_queues = None;
-
+                set_inactive_with_error(self);
                 return Err(ActivatePluginError::PluginFailedToGetAudioPortsExt(e));
             }
         };
@@ -314,9 +349,7 @@ impl PluginHostMainThread {
         let note_ports = match self.plug_main_thread.note_ports_ext() {
             Ok(note_ports) => note_ports,
             Err(e) => {
-                self.channel.shared_state.set_active_state(PluginActiveState::InactiveWithError);
-                self.channel.param_queues = None;
-
+                set_inactive_with_error(self);
                 return Err(ActivatePluginError::PluginFailedToGetNotePortsExt(e));
             }
         };
@@ -335,22 +368,14 @@ impl PluginHostMainThread {
                         param_values.push((info, value));
                     }
                     Err(_) => {
-                        self.channel
-                            .shared_state
-                            .set_active_state(PluginActiveState::InactiveWithError);
-                        self.channel.param_queues = None;
-
+                        set_inactive_with_error(self);
                         return Err(ActivatePluginError::PluginFailedToGetParamValue(
                             info.stable_id,
                         ));
                     }
                 },
                 Err(_) => {
-                    self.channel
-                        .shared_state
-                        .set_active_state(PluginActiveState::InactiveWithError);
-                    self.channel.param_queues = None;
-
+                    set_inactive_with_error(self);
                     return Err(ActivatePluginError::PluginFailedToGetParamInfo(i));
                 }
             }
@@ -368,25 +393,13 @@ impl PluginHostMainThread {
         ) {
             Ok((removed_edges, needs_recompile)) => (removed_edges, needs_recompile),
             Err(e) => {
-                self.channel.shared_state.set_active_state(PluginActiveState::InactiveWithError);
-                self.channel.param_queues = None;
-
+                set_inactive_with_error(self);
                 return Err(e);
             }
         };
 
         match self.plug_main_thread.activate(sample_rate, min_frames, max_frames, coll_handle) {
             Ok(info) => {
-                self.channel.shared_state.set_active_state(PluginActiveState::Active);
-
-                self.channel.create_process_thread(
-                    info.processor,
-                    self.id.unique_id(),
-                    num_params,
-                    thread_ids,
-                    coll_handle,
-                );
-
                 let new_latency = if let LoadedState::Loaded { params, latency: old_latency } =
                     &mut self.loaded_state
                 {
@@ -406,13 +419,13 @@ impl PluginHostMainThread {
                 };
 
                 let audio_ports_changed =
-                    if let Some(old_audio_ports) = &self.save_state.backup_audio_ports {
+                    if let Some(old_audio_ports) = &self.save_state.backup_audio_ports_ext {
                         &audio_ports != old_audio_ports
                     } else {
                         true
                     };
                 let note_ports_changed =
-                    if let Some(old_note_ports) = &self.save_state.backup_note_ports {
+                    if let Some(old_note_ports) = &self.save_state.backup_note_ports_ext {
                         &note_ports != old_note_ports
                     } else {
                         true
@@ -424,7 +437,7 @@ impl PluginHostMainThread {
                     self.num_audio_in_channels = audio_ports.total_in_channels();
                     self.num_audio_out_channels = audio_ports.total_out_channels();
 
-                    self.save_state.backup_audio_ports = Some(audio_ports.clone());
+                    self.save_state.backup_audio_ports_ext = Some(audio_ports.clone());
                     Some(audio_ports)
                 } else {
                     None
@@ -432,11 +445,31 @@ impl PluginHostMainThread {
                 let new_note_ports_ext = if note_ports_changed {
                     self.save_state_dirty = true;
 
-                    self.save_state.backup_note_ports = Some(note_ports.clone());
+                    self.save_state.backup_note_ports_ext = Some(note_ports.clone());
                     Some(note_ports)
                 } else {
                     None
                 };
+
+                // If the plugin restarting requires the graph to recompile first (because
+                // the port configuration or latency configuration has changed), tell the
+                // processor to wait for the new schedule before processing.
+                let sched_version =
+                    if needs_recompile { schedule_version + 1 } else { schedule_version };
+
+                let bypass_declick_frames =
+                    BYPASS_DECLICK_SECS.to_nearest_frame_round(sample_rate).0 as usize;
+
+                self.channel.shared_state.set_active_state(PluginActiveState::Active);
+                self.channel.create_processor_channel(
+                    info.processor,
+                    self.id.unique_id(),
+                    num_params,
+                    thread_ids,
+                    sched_version,
+                    bypass_declick_frames,
+                    coll_handle,
+                );
 
                 Ok(PluginActivatedStatus {
                     new_parameters: param_values,
@@ -450,9 +483,7 @@ impl PluginHostMainThread {
                 })
             }
             Err(e) => {
-                self.channel.shared_state.set_active_state(PluginActiveState::InactiveWithError);
-                self.channel.param_queues = None;
-
+                set_inactive_with_error(self);
                 Err(ActivatePluginError::PluginSpecific(e))
             }
         }
@@ -463,7 +494,7 @@ impl PluginHostMainThread {
     /// This will return `None` if this plugin is unloaded and there
     /// exists no backup of the audio ports extension.
     pub fn audio_ports_ext(&self) -> Option<&PluginAudioPortsExt> {
-        self.save_state.backup_audio_ports.as_ref()
+        self.save_state.backup_audio_ports_ext.as_ref()
     }
 
     /// Get the note port configuration on this plugin.
@@ -471,7 +502,7 @@ impl PluginHostMainThread {
     /// This will return `None` if this plugin is unloaded and there
     /// exists no backup of the note ports extension.
     pub fn note_ports_ext(&self) -> Option<&PluginNotePortsExt> {
-        self.save_state.backup_note_ports.as_ref()
+        self.save_state.backup_note_ports_ext.as_ref()
     }
 
     /// The total number of audio input channels on this plugin.
@@ -499,6 +530,7 @@ impl PluginHostMainThread {
         events_out: &mut SmallVec<[OnIdleEvent; 32]>,
         edge_id_to_ds_edge_id: &mut FnvHashMap<EdgeID, DSEdgeID>,
         thread_ids: &SharedThreadIDs,
+        schedule_version: u64,
     ) -> (OnIdleResult, SmallVec<[ParamModifiedInfo; 4]>) {
         let mut modified_params: SmallVec<[ParamModifiedInfo; 4]> = SmallVec::new();
 
@@ -515,22 +547,6 @@ impl PluginHostMainThread {
 
         if request_flags.contains(HostRequestFlags::RESCAN_PARAMS) {
             // TODO
-        }
-
-        // We just do a full restart and rescan for all "rescan port" requests for
-        // simplicity. I don't expect plugins to change the state of their ports
-        // often anyway.
-        if request_flags.intersects(HostRequestFlags::RESTART | HostRequestFlags::RESCAN_PORTS) {
-            self.restarting = true;
-            self.schedule_deactivate(coll_handle);
-        }
-
-        if request_flags.intersects(HostRequestFlags::GUI_CLOSED | HostRequestFlags::GUI_DESTROYED)
-        {
-            self.plug_main_thread
-                .on_gui_closed(request_flags.contains(HostRequestFlags::GUI_DESTROYED));
-
-            events_out.push(OnIdleEvent::PluginGuiClosed { plugin_id: self.id.clone() });
         }
 
         if let Some(params_queue) = &mut self.channel.param_queues {
@@ -559,13 +575,30 @@ impl PluginHostMainThread {
             });
         }
 
+        // We just do a full restart and rescan for all "rescan port" requests for
+        // simplicity. I don't expect plugins to change the state of their ports
+        // often anyway.
+        if request_flags.intersects(HostRequestFlags::RESTART | HostRequestFlags::RESCAN_PORTS) {
+            self.restarting = true;
+            self.schedule_deactivate(coll_handle);
+
+            if active_state == PluginActiveState::Active {
+                active_state = PluginActiveState::WaitingToDrop;
+            }
+        }
+
+        if request_flags.intersects(HostRequestFlags::GUI_CLOSED | HostRequestFlags::GUI_DESTROYED)
+        {
+            self.plug_main_thread
+                .on_gui_closed(request_flags.contains(HostRequestFlags::GUI_DESTROYED));
+
+            events_out.push(OnIdleEvent::PluginGuiClosed { plugin_id: self.id.clone() });
+        }
+
         if active_state == PluginActiveState::DroppedAndReadyToDeactivate {
             // Safe to deactivate now.
             self.plug_main_thread.deactivate();
-
             self.channel.shared_state.set_active_state(PluginActiveState::Inactive);
-
-            self.channel.drop_process_thread_pointer(coll_handle);
             self.save_state_dirty = true;
 
             if !self.remove_requested {
@@ -579,6 +612,7 @@ impl PluginHostMainThread {
                         graph_helper,
                         edge_id_to_ds_edge_id,
                         thread_ids.clone(),
+                        schedule_version,
                         coll_handle,
                     ) {
                         Ok(r) => {
@@ -597,7 +631,7 @@ impl PluginHostMainThread {
             && !self.restarting
         {
             if active_state == PluginActiveState::Active {
-                self.channel.shared_state.start_processing();
+                self.channel.shared_state.set_process_requested();
             } else if active_state == PluginActiveState::Inactive
                 || active_state == PluginActiveState::InactiveWithError
             {
@@ -608,6 +642,7 @@ impl PluginHostMainThread {
                     graph_helper,
                     edge_id_to_ds_edge_id,
                     thread_ids.clone(),
+                    schedule_version,
                     coll_handle,
                 ) {
                     Ok(r) => {
@@ -625,35 +660,36 @@ impl PluginHostMainThread {
         (OnIdleResult::Ok, modified_params)
     }
 
-    pub(crate) fn schedule_deactivate(&mut self, coll_handle: &basedrop::Handle) {
+    pub(crate) fn schedule_deactivate(
+        &mut self,
+        coll_handle: &basedrop::Handle,
+    ) -> Option<Shared<PluginHostProcessorWrapper>> {
         if self.channel.shared_state.get_active_state() != PluginActiveState::Active {
-            return;
+            return None;
         }
 
-        // Allow the plugin's audio thread to be dropped when the new schedule is
-        // sent.
-        //
-        // Note this doesn't actually drop the process thread. It only drops this
-        // struct's pointer to the process thread so that when the process thread
-        // drops its shared pointer, it will be collected by the garbage
-        // collector.
-        self.channel.drop_process_thread_pointer(coll_handle);
+        let plug_proc_to_drop = Some(self.channel.drop_process_thread_pointer(coll_handle));
 
         // Wait for the audio thread part to go to sleep before deactivating.
         self.channel.shared_state.set_active_state(PluginActiveState::WaitingToDrop);
+
+        plug_proc_to_drop
     }
 
-    pub(crate) fn schedule_remove(&mut self, coll_handle: &basedrop::Handle) {
+    pub(crate) fn schedule_remove(
+        &mut self,
+        coll_handle: &basedrop::Handle,
+    ) -> Option<Shared<PluginHostProcessorWrapper>> {
         self.remove_requested = true;
 
-        self.schedule_deactivate(coll_handle);
+        self.schedule_deactivate(coll_handle)
     }
 
     pub(crate) fn update_tempo_map(&mut self, new_tempo_map: &Shared<TempoMap>) {
         self.plug_main_thread.update_tempo_map(new_tempo_map);
     }
 
-    pub(crate) fn shared_processor(&self) -> &SharedPluginHostProcThread {
+    pub(crate) fn shared_processor(&self) -> &SharedPluginHostProcessor {
         self.channel.shared_processor()
     }
 
@@ -673,11 +709,11 @@ impl PluginHostMainThread {
         let mut needs_recompile = false;
 
         let mut id_alias_check: FnvHashSet<u32> = FnvHashSet::default();
-        if let Some(audio_ports) = &self.save_state.backup_audio_ports {
+        let mut status = Ok(());
+        if let Some(audio_ports) = &self.save_state.backup_audio_ports_ext {
             for audio_in_port in audio_ports.inputs.iter() {
                 if !id_alias_check.insert(audio_in_port.stable_id) {
-                    self.schedule_deactivate(coll_handle);
-                    return Err(ActivatePluginError::AudioPortsExtDuplicateID {
+                    status = Err(ActivatePluginError::AudioPortsExtDuplicateID {
                         is_input: true,
                         id: audio_in_port.stable_id,
                     });
@@ -686,20 +722,22 @@ impl PluginHostMainThread {
             id_alias_check.clear();
             for audio_out_port in audio_ports.outputs.iter() {
                 if !id_alias_check.insert(audio_out_port.stable_id) {
-                    self.schedule_deactivate(coll_handle);
-                    return Err(ActivatePluginError::AudioPortsExtDuplicateID {
+                    status = Err(ActivatePluginError::AudioPortsExtDuplicateID {
                         is_input: false,
                         id: audio_out_port.stable_id,
                     });
                 }
             }
         }
+        if let Err(e) = status {
+            self.schedule_deactivate(coll_handle);
+            return Err(e);
+        }
         id_alias_check.clear();
-        if let Some(note_ports) = &self.save_state.backup_note_ports {
+        if let Some(note_ports) = &self.save_state.backup_note_ports_ext {
             for note_in_port in note_ports.inputs.iter() {
                 if !id_alias_check.insert(note_in_port.stable_id) {
-                    self.schedule_deactivate(coll_handle);
-                    return Err(ActivatePluginError::NotePortsExtDuplicateID {
+                    status = Err(ActivatePluginError::NotePortsExtDuplicateID {
                         is_input: true,
                         id: note_in_port.stable_id,
                     });
@@ -708,13 +746,16 @@ impl PluginHostMainThread {
             id_alias_check.clear();
             for note_out_port in note_ports.outputs.iter() {
                 if !id_alias_check.insert(note_out_port.stable_id) {
-                    self.schedule_deactivate(coll_handle);
-                    return Err(ActivatePluginError::NotePortsExtDuplicateID {
+                    status = Err(ActivatePluginError::NotePortsExtDuplicateID {
                         is_input: false,
                         id: note_out_port.stable_id,
                     });
                 }
             }
+        }
+        if let Err(e) = status {
+            self.schedule_deactivate(coll_handle);
+            return Err(e);
         }
 
         graph_helper.set_node_latency(self.id._node_id().into(), new_latency as f64).unwrap();

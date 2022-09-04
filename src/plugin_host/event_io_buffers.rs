@@ -143,7 +143,7 @@ impl PluginEventIoBuffers {
         // TODO: More note through ports when bypassed?
         if self.main_note_through_when_bypassed {
             let in_buf = self.note_in_buffers[0].borrow();
-            let out_buf = self.note_out_buffers[0].borrow_mut();
+            let mut out_buf = self.note_out_buffers[0].borrow_mut();
 
             for event in in_buf.iter() {
                 out_buf.push(*event);

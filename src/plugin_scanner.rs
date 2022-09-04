@@ -331,6 +331,7 @@ impl PluginScanner {
         // TODO: return an actual result
         let mut plugin_bundle = None;
         let mut status = Ok(());
+        let mut loaded = false;
 
         // Always try to use internal plugins when available.
         if save_state.key.format == PluginFormat::Internal || fallback_to_other_formats {
@@ -470,6 +471,7 @@ impl PluginScanner {
             ) {
                 Ok(plug_main_thread) => {
                     status = Ok(());
+                    loaded = true;
 
                     plug_main_thread
                 }
@@ -481,13 +483,20 @@ impl PluginScanner {
 
                     Box::new(MissingPluginMainThread::new(
                         save_state.key.clone(),
-                        save_state.backup_audio_ports.clone(),
-                        save_state.backup_note_ports.clone(),
+                        save_state.backup_audio_ports_ext.clone(),
+                        save_state.backup_note_ports_ext.clone(),
                     ))
                 }
             };
 
-            PluginHostMainThread::new(id, save_state, plug_main_thread, host_request_rx)
+            PluginHostMainThread::new(
+                id,
+                save_state,
+                plug_main_thread,
+                host_request_rx,
+                loaded,
+                &self.coll_handle,
+            )
         } else {
             let rdn = Shared::new(&self.coll_handle, save_state.key.rdn.clone());
 
@@ -500,11 +509,18 @@ impl PluginScanner {
 
             let plug_main_thread = Box::new(MissingPluginMainThread::new(
                 save_state.key.clone(),
-                save_state.backup_audio_ports.clone(),
-                save_state.backup_note_ports.clone(),
+                save_state.backup_audio_ports_ext.clone(),
+                save_state.backup_note_ports_ext.clone(),
             ));
 
-            PluginHostMainThread::new(id, save_state, plug_main_thread, host_request_rx)
+            PluginHostMainThread::new(
+                id,
+                save_state,
+                plug_main_thread,
+                host_request_rx,
+                loaded,
+                &self.coll_handle,
+            )
         };
 
         CreatePluginResult { plugin_host, status }

@@ -6,17 +6,17 @@ use meadowlark_core_types::time::SampleRate;
 
 pub(super) struct MissingPluginMainThread {
     key: ScannedPluginKey,
-    backup_audio_ports: Option<PluginAudioPortsExt>,
-    backup_note_ports: Option<PluginNotePortsExt>,
+    backup_audio_ports_ext: Option<PluginAudioPortsExt>,
+    backup_note_ports_ext: Option<PluginNotePortsExt>,
 }
 
 impl MissingPluginMainThread {
     pub fn new(
         key: ScannedPluginKey,
-        backup_audio_ports: Option<PluginAudioPortsExt>,
-        backup_note_ports: Option<PluginNotePortsExt>,
+        backup_audio_ports_ext: Option<PluginAudioPortsExt>,
+        backup_note_ports_ext: Option<PluginNotePortsExt>,
     ) -> Self {
-        Self { key, backup_audio_ports, backup_note_ports }
+        Self { key, backup_audio_ports_ext, backup_note_ports_ext }
     }
 }
 
@@ -40,7 +40,7 @@ impl PluginMainThread for MissingPluginMainThread {
     }
 
     fn audio_ports_ext(&mut self) -> Result<PluginAudioPortsExt, String> {
-        if let Some(a) = &self.backup_audio_ports {
+        if let Some(a) = &self.backup_audio_ports_ext {
             Ok(a.clone())
         } else {
             Err(format!("Plugin with key {:?} is missing on the system.", &self.key))
@@ -48,7 +48,7 @@ impl PluginMainThread for MissingPluginMainThread {
     }
 
     fn note_ports_ext(&mut self) -> Result<PluginNotePortsExt, String> {
-        if let Some(n) = &self.backup_note_ports {
+        if let Some(n) = &self.backup_note_ports_ext {
             Ok(n.clone())
         } else {
             Err(format!("Plugin with key {:?} is missing on the system.", &self.key))

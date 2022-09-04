@@ -18,7 +18,7 @@ use dropseed_plugin_api::{DSPluginSaveState, PluginInstanceID, PluginInstanceTyp
 
 use crate::engine::request::{ConnectEdgeReq, EdgeReqPortID};
 use crate::engine::{NewPluginRes, OnIdleEvent, PluginStatus};
-use crate::plugin_host::SharedPluginHostProcThread;
+use crate::plugin_host::PluginHostProcessorWrapper;
 use crate::plugin_host::{OnIdleResult, PluginHostMainThread};
 use crate::plugin_scanner::PluginScanner;
 use crate::processor_schedule::tasks::{TransportHandle, TransportTask};
@@ -100,9 +100,11 @@ pub(crate) struct AudioGraph {
 
     /// For the plugins that are queued to be removed, make sure that
     /// the plugin's processor part is dropped in the process thread.
-    plugin_processors_to_stop: Vec<SharedPluginHostProcThread>,
+    plugin_processors_to_stop: Vec<Shared<PluginHostProcessorWrapper>>,
 
     thread_ids: SharedThreadIDs,
+
+    schedule_version: u64,
 }
 
 impl AudioGraph {
@@ -137,6 +139,7 @@ impl AudioGraph {
             note_buffer_size,
             event_buffer_size,
             transport_task,
+            0,
             coll_handle.clone(),
         );
 
@@ -165,6 +168,7 @@ impl AudioGraph {
             max_frames,
             plugin_processors_to_stop: Vec::new(),
             thread_ids,
+            schedule_version: 0,
         };
 
         new_self.reset();
@@ -224,6 +228,7 @@ impl AudioGraph {
             &mut self.graph_helper,
             &mut self.edge_id_to_ds_edge_id,
             self.thread_ids.clone(),
+            self.schedule_version,
             &self.coll_handle,
         ) {
             Ok(res) => PluginStatus::Activated(res),
@@ -259,7 +264,11 @@ impl AudioGraph {
 
             if removed_plugins.insert(id.clone()) {
                 if let Some(plugin_host) = self.shared_pools.plugin_hosts.get_mut(id) {
-                    plugin_host.schedule_remove();
+                    if let Some(plugin_proc_to_drop) =
+                        plugin_host.schedule_remove(&self.coll_handle)
+                    {
+                        self.plugin_processors_to_stop.push(plugin_proc_to_drop);
+                    }
 
                     let removed_edges_res =
                         self.graph_helper.remove_node(id._node_id().into()).unwrap();
@@ -592,7 +601,7 @@ impl AudioGraph {
     pub fn reset(&mut self) {
         // Try to gracefully remove all existing plugins.
         for plugin_host in self.shared_pools.plugin_hosts.iter_mut() {
-            plugin_host.schedule_remove();
+            plugin_host.schedule_remove(&self.coll_handle);
         }
 
         // TODO: Check that the audio thread is still alive.
@@ -617,10 +626,12 @@ impl AudioGraph {
             }
         }
 
+        self.schedule_version += 1;
         self.shared_pools.shared_schedule.set_new_schedule(
             ProcessorSchedule::new_empty(
                 self.max_frames as usize,
                 self.shared_pools.transports.transport.clone(),
+                self.schedule_version,
             ),
             &self.coll_handle,
         );
@@ -666,6 +677,8 @@ impl AudioGraph {
     /// If an error is returned then the graph **MUST** be restored with the previous
     /// working save state.
     pub fn compile(&mut self) -> Result<(), GraphCompilerError> {
+        self.schedule_version += 1;
+
         match compiler::compile_graph(
             &mut self.shared_pools,
             &mut self.graph_helper,
@@ -675,11 +688,11 @@ impl AudioGraph {
             self.graph_out_num_audio_channels,
             self.plugin_processors_to_stop.drain(..).collect(),
             &mut self.verifier,
+            self.schedule_version,
             &self.coll_handle,
         ) {
             Ok(schedule) => {
                 log::debug!("Successfully compiled new schedule:\n{:?}", &schedule);
-
                 self.shared_pools.shared_schedule.set_new_schedule(schedule, &self.coll_handle);
                 Ok(())
             }
@@ -690,6 +703,7 @@ impl AudioGraph {
                     ProcessorSchedule::new_empty(
                         self.max_frames as usize,
                         self.shared_pools.transports.transport.clone(),
+                        self.schedule_version,
                     ),
                     &self.coll_handle,
                 );
@@ -729,6 +743,7 @@ impl AudioGraph {
                 events_out,
                 &mut self.edge_id_to_ds_edge_id,
                 &self.thread_ids,
+                self.schedule_version,
             );
 
             match res {
@@ -752,10 +767,6 @@ impl AudioGraph {
                     });
                 }
                 OnIdleResult::PluginReadyToRemove => {
-                    if let Some(plugin_processor) = plugin_host.shared_processor() {
-                        self.plugin_processors_to_stop.push(plugin_processor.clone());
-                    }
-
                     plugins_to_remove.push(plugin_host.id().clone());
 
                     // The user should have already been alerted of the plugin being removed
@@ -814,13 +825,7 @@ impl AudioGraph {
 
 impl Drop for AudioGraph {
     fn drop(&mut self) {
-        self.shared_pools.shared_schedule.set_new_schedule(
-            ProcessorSchedule::new_empty(
-                self.max_frames as usize,
-                self.shared_pools.transports.transport.clone(),
-            ),
-            &self.coll_handle,
-        );
+        self.reset();
     }
 }
 

@@ -1,10 +1,12 @@
+use basedrop::Shared;
 use dropseed_plugin_api::ProcInfo;
+use std::fmt::Write;
 
 pub(crate) mod tasks;
 
 pub use tasks::TransportHandle;
 
-use crate::{graph::shared_pools::SharedTransportTask, plugin_host::SharedPluginHostProcThread};
+use crate::{graph::shared_pools::SharedTransportTask, plugin_host::PluginHostProcessorWrapper};
 
 use tasks::{GraphInTask, GraphOutTask, Task};
 
@@ -17,9 +19,11 @@ pub struct ProcessorSchedule {
 
     /// For the plugins that are queued to be removed, make sure that
     /// the plugin's processor part is dropped in the process thread.
-    plugin_processors_to_stop: Vec<SharedPluginHostProcThread>,
+    plugin_processors_to_stop: Vec<Shared<PluginHostProcessorWrapper>>,
 
     max_block_size: usize,
+
+    version: u64,
 }
 
 impl ProcessorSchedule {
@@ -30,8 +34,9 @@ impl ProcessorSchedule {
         transport_task: SharedTransportTask,
         // For the plugins that are queued to be removed, make sure that
         // the plugin's processor part is dropped in the process thread.
-        plugin_processors_to_stop: Vec<SharedPluginHostProcThread>,
+        plugin_processors_to_stop: Vec<Shared<PluginHostProcessorWrapper>>,
         max_block_size: usize,
+        version: u64,
     ) -> Self {
         Self {
             tasks,
@@ -40,10 +45,15 @@ impl ProcessorSchedule {
             transport_task,
             plugin_processors_to_stop,
             max_block_size,
+            version,
         }
     }
 
-    pub(crate) fn new_empty(max_block_size: usize, transport_task: SharedTransportTask) -> Self {
+    pub(crate) fn new_empty(
+        max_block_size: usize,
+        transport_task: SharedTransportTask,
+        version: u64,
+    ) -> Self {
         Self {
             tasks: Vec::new(),
             graph_in_task: GraphInTask::default(),
@@ -51,6 +61,7 @@ impl ProcessorSchedule {
             transport_task,
             plugin_processors_to_stop: Vec::new(),
             max_block_size,
+            version,
         }
     }
 
@@ -63,10 +74,10 @@ impl std::fmt::Debug for ProcessorSchedule {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut s = String::new();
 
-        s.push_str("ProcessorSchedule {\n");
+        let _ = write!(f, "ProcessorSchedule | version: {} {{\n", &self.version);
 
         for t in self.tasks.iter() {
-            s.push_str(format!("    {:?},\n", t).as_str());
+            let _ = write!(s, "    {:?},\n", t);
         }
 
         write!(f, "{}", s)
@@ -76,11 +87,10 @@ impl std::fmt::Debug for ProcessorSchedule {
 impl ProcessorSchedule {
     pub fn process_interleaved(&mut self, audio_in: &[f32], audio_out: &mut [f32]) {
         // For the plugins that are queued to be removed, make sure that
-        // we call `stop_processing()` on the process thread before
-        // dropping the plugin's processor.
-        for plugin in self.plugin_processors_to_stop.drain(..) {
-            let mut plugin = plugin.borrow_mut();
-            plugin.stop_processing();
+        // their processors are dropped on the process thread.
+        for plugin_proc in self.plugin_processors_to_stop.drain(..) {
+            let mut plugin_proc = plugin_proc.borrow_mut();
+            *plugin_proc = None;
         }
 
         let audio_in_channels = self.graph_in_task.audio_in.len();
@@ -126,6 +136,7 @@ impl ProcessorSchedule {
                 steady_time: -1, // TODO
                 frames,
                 transport,
+                schedule_version: self.version,
             };
 
             for task in self.tasks.iter_mut() {
