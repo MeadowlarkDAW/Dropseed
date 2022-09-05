@@ -10,8 +10,8 @@ use dropseed_plugin_api::ext::audio_ports::{AudioPortInfo, MainPortsLayout, Plug
 use dropseed_plugin_api::ext::note_ports::{NotePortInfo, PluginNotePortsExt};
 use dropseed_plugin_api::ext::params::{ParamID, ParamInfo, ParamInfoFlags};
 use dropseed_plugin_api::{
-    buffer::EventBuffer, ext, PluginActivatedInfo, PluginMainThread, PluginProcessThread,
-    ProcBuffers, ProcInfo, ProcessStatus,
+    buffer::EventBuffer, ext, PluginActivatedInfo, PluginMainThread, PluginProcessor, ProcBuffers,
+    ProcInfo, ProcessStatus,
 };
 use meadowlark_core_types::time::SampleRate;
 use smallvec::SmallVec;
@@ -245,7 +245,7 @@ impl PluginMainThread for ClapPluginMainThread {
         };
 
         Ok(PluginActivatedInfo {
-            processor: Box::new(ClapPluginProcessThread {
+            processor: Box::new(ClapPluginProcessor {
                 audio_processor: audio_processor.into(),
                 // `PluginHostMainThread` will always call
                 // `ClapPluginMainThread::audio_ports_ext()` before activating
@@ -488,12 +488,12 @@ impl PluginMainThread for ClapPluginMainThread {
     }
 }
 
-struct ClapPluginProcessThread {
+struct ClapPluginProcessor {
     audio_processor: PluginAudioProcessor<ClapHost>,
     process: ClapProcess,
 }
 
-impl PluginProcessThread for ClapPluginProcessThread {
+impl PluginProcessor for ClapPluginProcessor {
     fn start_processing(&mut self) -> Result<(), Box<dyn Error>> {
         log::trace!(
             "clap plugin instance start_processing {}",

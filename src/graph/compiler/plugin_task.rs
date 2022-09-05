@@ -8,7 +8,7 @@ use crate::processor_schedule::tasks::Task;
 
 use super::super::error::GraphCompilerError;
 use super::super::shared_pools::GraphSharedPools;
-use super::super::{ChannelID, PortType};
+use super::super::{PortChannelID, PortType};
 
 mod loaded_plugin_task;
 mod unloaded_plugin_task;
@@ -33,11 +33,11 @@ pub(super) fn construct_plugin_task(
     let maybe_audio_ports_ext = plugin_host.audio_ports_ext();
     let maybe_note_ports_ext = plugin_host.note_ports_ext();
 
-    // --- Construct a map that maps the ChannelID of each port to its assigned buffer ------
+    // --- Construct a map that maps the PortChannelID of each port to its assigned buffer ------
 
-    let mut assigned_audio_buffers: FnvHashMap<ChannelID, (SharedBuffer<f32>, bool)> =
+    let mut assigned_audio_buffers: FnvHashMap<PortChannelID, (SharedBuffer<f32>, bool)> =
         FnvHashMap::default();
-    let mut assigned_note_buffers: FnvHashMap<ChannelID, (SharedBuffer<NoteIoEvent>, bool)> =
+    let mut assigned_note_buffers: FnvHashMap<PortChannelID, (SharedBuffer<NoteIoEvent>, bool)> =
         FnvHashMap::default();
     let mut assigned_automation_in_buffer: Option<(SharedBuffer<AutomationIoEvent>, bool)> = None;
     let mut assigned_automation_out_buffer: Option<SharedBuffer<AutomationIoEvent>> = None;

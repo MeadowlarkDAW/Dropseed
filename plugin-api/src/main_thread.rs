@@ -5,11 +5,11 @@ use meadowlark_core_types::time::SampleRate;
 use std::error::Error;
 
 use super::transport::TempoMap;
-use super::{ext, ParamID, PluginProcessThread};
+use super::{ext, ParamID, PluginProcessor};
 
 /// The methods of an audio plugin instance which run in the "main" thread.
 pub trait PluginMainThread {
-    /// Activate the plugin, and return the `PluginProcessThread` counterpart.
+    /// Activate the plugin, and return the `PluginProcessor` counterpart.
     ///
     /// In this call the plugin may allocate memory and prepare everything needed for the process
     /// call. The process's sample rate will be constant and process's frame count will included in
@@ -50,7 +50,7 @@ pub trait PluginMainThread {
         Ok(())
     }
 
-    /// Deactivate the plugin. When this is called it also means that the `PluginProcessThread`
+    /// Deactivate the plugin. When this is called it also means that the `PluginProcessor`
     /// counterpart will already have been dropped.
     ///
     /// `[main-thread & active_state]`
@@ -234,6 +234,6 @@ pub trait PluginMainThread {
 }
 
 pub struct PluginActivatedInfo {
-    pub processor: Box<dyn PluginProcessThread>,
+    pub processor: Box<dyn PluginProcessor>,
     pub internal_handle: Option<Box<dyn std::any::Any + Send + 'static>>,
 }

@@ -71,11 +71,27 @@ impl Default for PortType {
     }
 }
 
+/// The ID for a particular audio, note, or automation port in the
+/// audio graph.
+///
+/// If this is an audio port, then this is the ID of a particular
+/// channel on that audio port. Otherwise this is just the ID
+/// for the note/automation port altogether.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ChannelID {
+pub struct PortChannelID {
+    /// The unique (and stable) identifier the plugin has assigned
+    /// to this port.
+    ///
+    /// By "stable" I mean that the ID for this port does not change
+    /// between versions of the plugin.
     pub(crate) stable_id: u32,
     pub(crate) port_type: PortType,
+
+    /// `true` if this is an input port, `false` otherwise.
     pub(crate) is_input: bool,
+
+    /// The channel on the audio port. This is irrelevant if this is
+    /// not an audio port.
     pub(crate) channel: u16,
 }
 
@@ -182,7 +198,7 @@ impl AudioGraph {
         plugin_scanner: &mut PluginScanner,
         fallback_to_other_formats: bool,
     ) -> NewPluginRes {
-        let do_activate_plugin = save_state.is_active;
+        let do_activate_plugin = save_state.active;
 
         let node_id = self.graph_helper.add_node(0.0);
         let res = plugin_scanner.create_plugin(save_state, node_id, fallback_to_other_formats);
@@ -393,7 +409,7 @@ impl AudioGraph {
                     }
                 },
                 EdgeReqPortID::StableID(id) => {
-                    let src_channel_id = ChannelID {
+                    let src_channel_id = PortChannelID {
                         port_type: edge.edge_type,
                         stable_id: *id,
                         is_input: false,
@@ -509,7 +525,7 @@ impl AudioGraph {
                     }
                 },
                 EdgeReqPortID::StableID(id) => {
-                    let dst_channel_id = ChannelID {
+                    let dst_channel_id = PortChannelID {
                         port_type: edge.edge_type,
                         stable_id: *id,
                         is_input: true,
@@ -730,9 +746,6 @@ impl AudioGraph {
         let mut plugins_to_remove: SmallVec<[PluginInstanceID; 4]> = SmallVec::new();
         let mut recompile_graph = false;
 
-        // TODO: Optimize by using some kind of hashmap queue that only iterates over the
-        // plugins that have non-zero host request flags, instead of iterating over every
-        // plugin every time?
         for plugin_host in self.shared_pools.plugin_hosts.iter_mut() {
             let (res, modified_params) = plugin_host.on_idle(
                 self.sample_rate,
@@ -749,17 +762,13 @@ impl AudioGraph {
             match res {
                 OnIdleResult::Ok => {}
                 OnIdleResult::PluginDeactivated => {
-                    recompile_graph = true;
-
-                    println!("plugin deactivated");
-
                     events_out.push(OnIdleEvent::PluginDeactivated {
                         plugin_id: plugin_host.id().clone(),
                         status: Ok(()),
                     });
                 }
                 OnIdleResult::PluginActivated(status) => {
-                    recompile_graph = true;
+                    recompile_graph |= status.caused_recompile;
 
                     events_out.push(OnIdleEvent::PluginActivated {
                         plugin_id: plugin_host.id().clone(),
@@ -769,12 +778,11 @@ impl AudioGraph {
                 OnIdleResult::PluginReadyToRemove => {
                     plugins_to_remove.push(plugin_host.id().clone());
 
-                    // The user should have already been alerted of the plugin being removed
-                    // in a previous `OnIdleEvent::AudioGraphModified` event.
+                    // The user is already aware of the plugin being removed since
+                    // they removed it in a previous call to
+                    // DSEngineMainThread::modify_graph()`.
                 }
                 OnIdleResult::PluginFailedToActivate(e) => {
-                    recompile_graph = true;
-
                     events_out.push(OnIdleEvent::PluginDeactivated {
                         plugin_id: plugin_host.id().clone(),
                         status: Err(e),

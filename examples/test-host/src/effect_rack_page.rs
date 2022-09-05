@@ -128,7 +128,7 @@ impl EffectRackPluginState {
 
     pub fn show_gui(&mut self, ds_engine: &mut DSEngineMainThread) {
         if self.has_gui {
-            if let Some(plugin_host) = ds_engine.get_plugin_host_mut(&self.plugin_id) {
+            if let Some(plugin_host) = ds_engine.plugin_host_mut(&self.plugin_id) {
                 match plugin_host.show_gui() {
                     Ok(()) => self.is_gui_open = true,
                     Err(e) => {
@@ -142,7 +142,7 @@ impl EffectRackPluginState {
 
     pub fn close_gui(&mut self, ds_engine: &mut DSEngineMainThread) {
         if self.is_gui_open {
-            if let Some(plugin_host) = ds_engine.get_plugin_host_mut(&self.plugin_id) {
+            if let Some(plugin_host) = ds_engine.plugin_host_mut(&self.plugin_id) {
                 plugin_host.close_gui();
             }
 
@@ -421,7 +421,7 @@ fn show_effect_rack_plugin(
                                     .changed()
                                 {
                                     match ds_engine
-                                        .get_plugin_host_mut(&plugin.plugin_id)
+                                        .plugin_host_mut(&plugin.plugin_id)
                                         .as_mut()
                                         .unwrap()
                                         .set_param_value(param.id, value as f64)
@@ -441,7 +441,7 @@ fn show_effect_rack_plugin(
                                 .changed()
                             {
                                 match ds_engine
-                                    .get_plugin_host_mut(&plugin.plugin_id)
+                                    .plugin_host_mut(&plugin.plugin_id)
                                     .as_mut()
                                     .unwrap()
                                     .set_param_value(param.id, param.value)

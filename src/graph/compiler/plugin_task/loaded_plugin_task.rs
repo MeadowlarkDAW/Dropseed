@@ -13,7 +13,7 @@ use crate::processor_schedule::tasks::{PluginTask, Task};
 
 use super::super::super::error::GraphCompilerError;
 use super::super::super::shared_pools::GraphSharedPools;
-use super::super::super::{ChannelID, PortType};
+use super::super::super::{PortChannelID, PortType};
 
 pub(super) fn construct_loaded_plugin_task(
     scheduled_node: &ScheduledNode,
@@ -22,8 +22,8 @@ pub(super) fn construct_loaded_plugin_task(
     shared_processor: &SharedPluginHostProcessor,
     audio_ports_ext: &PluginAudioPortsExt,
     note_ports_ext: &PluginNotePortsExt,
-    assigned_audio_buffers: FnvHashMap<ChannelID, (SharedBuffer<f32>, bool)>,
-    assigned_note_buffers: FnvHashMap<ChannelID, (SharedBuffer<NoteIoEvent>, bool)>,
+    assigned_audio_buffers: FnvHashMap<PortChannelID, (SharedBuffer<f32>, bool)>,
+    assigned_note_buffers: FnvHashMap<PortChannelID, (SharedBuffer<NoteIoEvent>, bool)>,
     assigned_automation_in_buffer: Option<(SharedBuffer<AutomationIoEvent>, bool)>,
     assigned_automation_out_buffer: Option<SharedBuffer<AutomationIoEvent>>,
 ) -> Result<Task, GraphCompilerError> {
@@ -46,7 +46,7 @@ pub(super) fn construct_loaded_plugin_task(
         let mut buffers: SmallVec<[SharedBuffer<f32>; 2]> =
             SmallVec::with_capacity(usize::from(in_port.channels));
         for channel_i in 0..in_port.channels {
-            let channel_id = ChannelID {
+            let channel_id = PortChannelID {
                 stable_id: in_port.stable_id,
                 port_type: PortType::Audio,
                 is_input: true,
@@ -77,7 +77,7 @@ pub(super) fn construct_loaded_plugin_task(
         let mut buffers: SmallVec<[SharedBuffer<f32>; 2]> =
             SmallVec::with_capacity(usize::from(out_port.channels));
         for channel_i in 0..out_port.channels {
-            let channel_id = ChannelID {
+            let channel_id = PortChannelID {
                 stable_id: out_port.stable_id,
                 port_type: PortType::Audio,
                 is_input: false,
@@ -102,7 +102,7 @@ pub(super) fn construct_loaded_plugin_task(
     }
 
     for in_port in note_ports_ext.inputs.iter() {
-        let channel_id = ChannelID {
+        let channel_id = PortChannelID {
             stable_id: in_port.stable_id,
             port_type: PortType::Note,
             is_input: true,
@@ -123,7 +123,7 @@ pub(super) fn construct_loaded_plugin_task(
         }
     }
     for out_port in note_ports_ext.outputs.iter() {
-        let channel_id = ChannelID {
+        let channel_id = PortChannelID {
             stable_id: out_port.stable_id,
             port_type: PortType::Note,
             is_input: false,

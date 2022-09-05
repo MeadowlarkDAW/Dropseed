@@ -5,7 +5,7 @@ use clack_host::utils::Cookie;
 use dropseed_plugin_api::{
     buffer::EventBuffer,
     event::{ParamModEvent, ParamValueEvent},
-    ParamID, PluginProcessThread,
+    ParamID, PluginProcessor,
 };
 use std::sync::{
     atomic::{AtomicBool, AtomicU32, Ordering},
@@ -19,7 +19,7 @@ use crate::utils::reducing_queue::{
 };
 use crate::utils::thread_id::SharedThreadIDs;
 
-use super::process_thread::PluginHostProcessor;
+use super::processor::PluginHostProcessor;
 
 pub(super) struct PlugHostChannelMainThread {
     pub param_queues: Option<ParamQueuesMainThread>,
@@ -37,9 +37,10 @@ impl PlugHostChannelMainThread {
         }
     }
 
-    pub fn create_processor_channel(
+    /// Send the new processor to the process thread.
+    pub fn new_processor(
         &mut self,
-        plugin_processor: Box<dyn PluginProcessThread>,
+        plugin_processor: Box<dyn PluginProcessor>,
         plugin_instance_id: u64,
         num_params: usize,
         thread_ids: SharedThreadIDs,
@@ -92,7 +93,7 @@ impl PlugHostChannelMainThread {
         );
     }
 
-    pub fn drop_process_thread_pointer(
+    pub fn drop_processor_pointer_on_main_thread(
         &mut self,
         coll_handle: &basedrop::Handle,
     ) -> Shared<PluginHostProcessorWrapper> {
@@ -343,5 +344,3 @@ impl SharedPluginHostProcessor {
         self.shared.get()
     }
 }
-
-unsafe impl Send for SharedPluginHostProcessor {}

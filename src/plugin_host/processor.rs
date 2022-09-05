@@ -1,6 +1,6 @@
 use clack_host::events::Event;
 use dropseed_plugin_api::buffer::EventBuffer;
-use dropseed_plugin_api::{PluginProcessThread, ProcBuffers, ProcInfo, ProcessStatus};
+use dropseed_plugin_api::{PluginProcessor, ProcBuffers, ProcInfo, ProcessStatus};
 
 use crate::utils::thread_id::SharedThreadIDs;
 
@@ -16,7 +16,7 @@ enum ProcessingState {
 }
 
 pub(crate) struct PluginHostProcessor {
-    plugin: Box<dyn PluginProcessThread>,
+    plugin_processor: Box<dyn PluginProcessor>,
     plugin_instance_id: u64,
 
     channel: PlugHostChannelProcThread,
@@ -41,7 +41,7 @@ pub(crate) struct PluginHostProcessor {
 
 impl PluginHostProcessor {
     pub(crate) fn new(
-        plugin: Box<dyn PluginProcessThread>,
+        plugin_processor: Box<dyn PluginProcessor>,
         plugin_instance_id: u64,
         channel: PlugHostChannelProcThread,
         num_params: usize,
@@ -56,7 +56,7 @@ impl PluginHostProcessor {
         let bypass_declick_inc = 1.0 / bypass_declick_frames as f32;
 
         Self {
-            plugin,
+            plugin_processor,
             plugin_instance_id,
             channel,
             in_events: EventBuffer::with_capacity(num_params * 3),
@@ -83,12 +83,17 @@ impl PluginHostProcessor {
         // Always clear event and note output buffers.
         event_buffers.clear_before_process();
 
+        // --- Check for requests to drop or start processing ------------------------------------
+
+        // Get the latest activation state of the plugin.
         let state = self.channel.shared_state.get_active_state();
 
-        // Do we want to deactivate the plugin?
         if state == PluginActiveState::WaitingToDrop {
+            // We got a request to deactivate this plugin, so stop processing
+            // and mark this processor to be dropped.
+
             if let ProcessingState::Started(_) = self.processing_state {
-                self.plugin.stop_processing();
+                self.plugin_processor.stop_processing();
             }
 
             buffers.clear_all_outputs(proc_info);
@@ -97,24 +102,32 @@ impl PluginHostProcessor {
             // Don't process until the expected schedule arrives. This can happen
             // when a plugin restarting causes the graph to recompile, and that
             // new schedule has not yet arrived.
+
             buffers.clear_all_outputs(proc_info);
             return false;
         } else if self.channel.shared_state.process_requested() {
+            // The plugin has requested that we (re)start processing.
+
             if let ProcessingState::Started(_) = self.processing_state {
             } else {
                 self.processing_state = ProcessingState::WaitingForStart;
             }
         }
 
-        // We can't process a plugin which failed to start processing.
         if self.processing_state == ProcessingState::Errored {
+            // We can't process a plugin which failed to start processing.
+
             buffers.clear_all_outputs(proc_info);
             return false;
         }
 
-        // Reading in_events from all sources //
+        // --- Read input events from all sources ------------------------------------------------
+        // Read input events from all sources and store them in the `in_events`
+        // buffer (which is later sent to the plugin's process() method).
 
         self.in_events.clear();
+
+        // Read parameter updates from the main thread.
         let mut has_param_in_event = self
             .channel
             .param_queues
@@ -122,35 +135,36 @@ impl PluginHostProcessor {
             .map(|q| q.consume_into_event_buffer(&mut self.in_events))
             .unwrap_or(false);
 
+        // Read parameter automation events from the automation in port.
         let (has_note_in_event, wrote_param_in_event) =
             event_buffers.write_input_events(&mut self.in_events, self.plugin_instance_id);
+        has_param_in_event |= wrote_param_in_event;
 
-        has_param_in_event = has_param_in_event || wrote_param_in_event;
-
+        // Read transport events from the schedule's transport.
         if let Some(transport_in_event) = proc_info.transport.event() {
             self.in_events.push(transport_in_event.as_unknown());
         }
 
-        // Check if inputs are quiet or not //
+        // --- Check if the plugin should be put to sleep ----------------------------------------
 
         if self.processing_state == ProcessingState::Started(ProcessStatus::ContinueIfNotQuiet)
             && !has_note_in_event
             && buffers.audio_inputs_silent(proc_info.frames)
         {
-            self.plugin.stop_processing();
+            self.plugin_processor.stop_processing();
 
             self.processing_state = ProcessingState::Stopped;
             buffers.clear_all_outputs(proc_info);
 
             if has_param_in_event {
-                self.plugin.param_flush(&self.in_events, &mut self.out_events);
+                self.plugin_processor.param_flush(&self.in_events, &mut self.out_events);
             }
 
             self.in_events.clear();
             return false;
         }
 
-        // Check if the plugin should be waking up //
+        // --- Check if the plugin should be woken up --------------------------------------------
 
         if let ProcessingState::Stopped | ProcessingState::WaitingForStart = self.processing_state {
             if self.processing_state == ProcessingState::Stopped && !has_note_in_event {
@@ -159,14 +173,14 @@ impl PluginHostProcessor {
                 buffers.clear_all_outputs(proc_info);
 
                 if has_param_in_event {
-                    self.plugin.param_flush(&self.in_events, &mut self.out_events);
+                    self.plugin_processor.param_flush(&self.in_events, &mut self.out_events);
                 }
 
                 self.in_events.clear();
                 return false;
             }
 
-            if let Err(e) = self.plugin.start_processing() {
+            if let Err(e) = self.plugin_processor.start_processing() {
                 log::error!("Plugin has failed to start processing: {}", e);
 
                 // The plugin failed to start processing.
@@ -174,7 +188,7 @@ impl PluginHostProcessor {
                 buffers.clear_all_outputs(proc_info);
 
                 if has_param_in_event {
-                    self.plugin.param_flush(&self.in_events, &mut self.out_events);
+                    self.plugin_processor.param_flush(&self.in_events, &mut self.out_events);
                 }
 
                 return false;
@@ -183,28 +197,32 @@ impl PluginHostProcessor {
             self.channel.shared_state.set_active_state(PluginActiveState::Active);
         }
 
-        // Actual processing //
+        // --- Actual processing -----------------------------------------------------------------
 
         self.out_events.clear();
 
-        let new_status =
-            if let Some(automation_out_buffer) = &mut event_buffers.automation_out_buffer {
-                let automation_out_buffer = &mut *automation_out_buffer.borrow_mut();
+        let new_status = if let Some(automation_out_buffer) =
+            &mut event_buffers.automation_out_buffer
+        {
+            let automation_out_buffer = &mut *automation_out_buffer.borrow_mut();
 
-                self.plugin.process_with_automation_out(
-                    proc_info,
-                    buffers,
-                    &self.in_events,
-                    &mut self.out_events,
-                    automation_out_buffer,
-                )
-            } else {
-                self.plugin.process(proc_info, buffers, &self.in_events, &mut self.out_events)
-            };
+            self.plugin_processor.process_with_automation_out(
+                proc_info,
+                buffers,
+                &self.in_events,
+                &mut self.out_events,
+                automation_out_buffer,
+            )
+        } else {
+            self.plugin_processor.process(proc_info, buffers, &self.in_events, &mut self.out_events)
+        };
 
-        // Read from output events queue //
+        // --- Read output events from plugin ----------------------------------------------------
+        // Read output events from the plugin and store them in the automation out port
+        // buffer (if this plugin has one).
 
         if let Some(params_queue) = &mut self.channel.param_queues {
+            // If this plugin has parameters, send parameter updates to the main thread.
             params_queue.to_main_param_value_tx.produce(|mut producer| {
                 event_buffers.read_output_events(
                     &self.out_events,
@@ -222,12 +240,12 @@ impl PluginHostProcessor {
             );
         }
 
-        // Update processing state //
+        // --- Update the processing state -------------------------------------------------------
 
         self.processing_state = match new_status {
             // ProcessStatus::Tail => TODO: handle tail by reading from the tail extension
             ProcessStatus::Sleep => {
-                self.plugin.stop_processing();
+                self.plugin_processor.stop_processing();
 
                 ProcessingState::Stopped
             }
@@ -239,7 +257,7 @@ impl PluginHostProcessor {
             good_status => ProcessingState::Started(good_status),
         };
 
-        // Process bypassing //
+        // --- Process bypassing/unbypassing the plguin ------------------------------------------
 
         if self.bypassed != self.channel.shared_state.bypassed() {
             self.bypassed = self.channel.shared_state.bypassed();
@@ -258,14 +276,19 @@ impl PluginHostProcessor {
         }
 
         if self.bypass_declick_frames_left != 0 {
+            // The plugin is currently in the process of smoothing/declicking the audio
+            // output buffers as a result of bypassing/unbypassing the plugin.
             self.bypass_declick(proc_info, buffers);
         } else if self.bypassed {
+            // The plugin is currently bypassed and has finished smoothing/declicking.
             self.bypass(proc_info, buffers);
         }
 
         false
     }
 
+    /// The plugin is currently in the process of smoothing/declicking the audio
+    /// output buffers as a result of bypassing/unbypassing the plugin.
     fn bypass_declick(&mut self, proc_info: &ProcInfo, buffers: &mut ProcBuffers) {
         let declick_frames = self.bypass_declick_frames_left.min(proc_info.frames);
 
@@ -369,6 +392,7 @@ impl PluginHostProcessor {
         }
     }
 
+    /// The plugin is currently bypassed and has finished smoothing/declicking.
     fn bypass(&mut self, proc_info: &ProcInfo, buffers: &mut ProcBuffers) {
         buffers.clear_all_outputs(proc_info);
 
@@ -398,7 +422,7 @@ impl Drop for PluginHostProcessor {
     fn drop(&mut self) {
         if self.thread_ids.is_process_thread() {
             if let ProcessingState::Started(_) = self.processing_state {
-                self.plugin.stop_processing();
+                self.plugin_processor.stop_processing();
             }
         } else {
             log::error!("Plugin processor was not dropped in the process thread");

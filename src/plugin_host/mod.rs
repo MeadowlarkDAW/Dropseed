@@ -2,7 +2,7 @@ pub mod error;
 
 mod channel;
 mod main_thread;
-mod process_thread;
+mod processor;
 
 pub(crate) mod event_io_buffers;
 pub(crate) mod external;

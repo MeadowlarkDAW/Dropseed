@@ -9,14 +9,16 @@ pub struct DSPluginSaveState {
     pub key: ScannedPluginKey,
 
     /// If this is `false` when receiving a save state, then it means that
-    /// the plugin was deactivated at the time of collecting the save
-    /// state/saving the project.
+    /// the plugin was manually deactivated at the time of collecting the
+    /// save state of the plugin/project.
     ///
     /// If this is `false` when loading a new plugin, then the plugin will
     /// not be activated automatically.
-    pub is_active: bool,
+    pub active: bool,
 
-    pub is_bypassed: bool,
+    /// `True` if this plugin was manually bypassed at the time of collecting
+    /// the save state of the plugin/project.
+    pub bypassed: bool,
 
     /// Use this as a backup in case the plugin fails to load. (Most
     /// likey from a user opening another user's project, but the
@@ -39,8 +41,8 @@ impl DSPluginSaveState {
     pub fn new_with_default_state(key: ScannedPluginKey) -> Self {
         Self {
             key,
-            is_active: true,
-            is_bypassed: false,
+            active: true,
+            bypassed: false,
             backup_audio_ports_ext: None,
             backup_note_ports_ext: None,
             raw_state: None,
@@ -53,8 +55,8 @@ impl Debug for DSPluginSaveState {
         let mut f = f.debug_struct("DSPluginSaveState");
 
         f.field("key", &self.key);
-        f.field("is_active", &self.is_active);
-        f.field("is_bypassed", &self.is_bypassed);
+        f.field("active", &self.active);
+        f.field("bypassed", &self.bypassed);
         f.field("backup_audio_ports_ext", &self.backup_audio_ports_ext);
         f.field("backup_note_ports_ext", &self.backup_note_ports_ext);
 

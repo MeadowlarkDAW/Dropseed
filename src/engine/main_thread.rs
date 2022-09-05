@@ -111,7 +111,7 @@ impl DSEngineMainThread {
     ///
     /// This will return `None` if a plugin with the given ID does not exist/
     /// has been removed.
-    pub fn get_plugin_host(&self, id: &PluginInstanceID) -> Option<&PluginHostMainThread> {
+    pub fn plugin_host(&self, id: &PluginInstanceID) -> Option<&PluginHostMainThread> {
         self.audio_graph.as_ref().and_then(|a| a.get_plugin_host(id))
     }
 
@@ -119,10 +119,7 @@ impl DSEngineMainThread {
     ///
     /// This will return `None` if a plugin with the given ID does not exist/
     /// has been removed.
-    pub fn get_plugin_host_mut(
-        &mut self,
-        id: &PluginInstanceID,
-    ) -> Option<&mut PluginHostMainThread> {
+    pub fn plugin_host_mut(&mut self, id: &PluginInstanceID) -> Option<&mut PluginHostMainThread> {
         self.audio_graph.as_mut().and_then(|a| a.get_plugin_host_mut(id))
     }
 

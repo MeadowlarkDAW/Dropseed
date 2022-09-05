@@ -5,7 +5,7 @@ use super::buffer::EventBuffer;
 use super::process_info::{ProcBuffers, ProcInfo, ProcessStatus};
 
 /// The methods of an audio plugin instance which run in the "process" thread.
-pub trait PluginProcessThread: Send + 'static {
+pub trait PluginProcessor: Send + 'static {
     /// This will be called when the plugin should start processing after just activing/
     /// waking up from sleep.
     ///

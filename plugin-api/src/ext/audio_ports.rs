@@ -45,7 +45,7 @@ impl PluginAudioPortsExt {
     }
 
     pub fn in_channel_index(&self, port_stable_id: u32, port_channel: u16) -> Option<usize> {
-        // TODO: Optimize this? This should be cached in PortChannelId
+        // TODO: Optimize this? This should be cached in PortPortChannelID
 
         let mut channel_i: u16 = 0;
 
@@ -65,7 +65,7 @@ impl PluginAudioPortsExt {
     }
 
     pub fn out_channel_index(&self, port_stable_id: u32, port_channel: u16) -> Option<usize> {
-        // TODO: Optimize this? This should be cached in PortChannelId
+        // TODO: Optimize this? This should be cached in PortPortChannelID
 
         let mut channel_i: u16 = 0;
 

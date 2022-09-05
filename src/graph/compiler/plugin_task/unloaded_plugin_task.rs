@@ -10,7 +10,7 @@ use crate::plugin_host::event_io_buffers::NoteIoEvent;
 use crate::processor_schedule::tasks::{Task, UnloadedPluginTask};
 
 use super::super::super::error::GraphCompilerError;
-use super::super::super::{ChannelID, PortType};
+use super::super::super::{PortChannelID, PortType};
 
 /// In this task, audio and note data is passed through the main ports (if the plugin
 /// has main in/out ports), and then all the other output buffers are cleared.
@@ -18,8 +18,8 @@ pub(super) fn construct_unloaded_plugin_task(
     scheduled_node: &ScheduledNode,
     maybe_audio_ports_ext: Option<&PluginAudioPortsExt>,
     maybe_note_ports_ext: Option<&PluginNotePortsExt>,
-    mut assigned_audio_buffers: FnvHashMap<ChannelID, (SharedBuffer<f32>, bool)>,
-    mut assigned_note_buffers: FnvHashMap<ChannelID, (SharedBuffer<NoteIoEvent>, bool)>,
+    mut assigned_audio_buffers: FnvHashMap<PortChannelID, (SharedBuffer<f32>, bool)>,
+    mut assigned_note_buffers: FnvHashMap<PortChannelID, (SharedBuffer<NoteIoEvent>, bool)>,
     assigned_automation_out_buffer: Option<SharedBuffer<AutomationIoEvent>>,
 ) -> Result<Task, GraphCompilerError> {
     let mut audio_through: SmallVec<[(SharedBuffer<f32>, SharedBuffer<f32>); 4]> = SmallVec::new();
@@ -34,14 +34,14 @@ pub(super) fn construct_unloaded_plugin_task(
                 audio_ports_ext.inputs[0].channels.min(audio_ports_ext.outputs[0].channels);
 
             for i in 0..n_main_channels {
-                let in_channel_id = ChannelID {
+                let in_channel_id = PortChannelID {
                     stable_id: audio_ports_ext.inputs[0].stable_id,
                     port_type: PortType::Audio,
                     is_input: true,
                     channel: i,
                 };
 
-                let out_channel_id = ChannelID {
+                let out_channel_id = PortChannelID {
                     stable_id: audio_ports_ext.outputs[0].stable_id,
                     port_type: PortType::Audio,
                     is_input: false,
@@ -75,14 +75,14 @@ pub(super) fn construct_unloaded_plugin_task(
 
     if let Some(note_ports_ext) = maybe_note_ports_ext {
         if !note_ports_ext.inputs.is_empty() && !note_ports_ext.outputs.is_empty() {
-            let in_channel_id = ChannelID {
+            let in_channel_id = PortChannelID {
                 stable_id: note_ports_ext.inputs[0].stable_id,
                 port_type: PortType::Note,
                 is_input: true,
                 channel: 0,
             };
 
-            let out_channel_id = ChannelID {
+            let out_channel_id = PortChannelID {
                 stable_id: note_ports_ext.outputs[0].stable_id,
                 port_type: PortType::Note,
                 is_input: false,
