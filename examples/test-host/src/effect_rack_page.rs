@@ -40,6 +40,7 @@ pub struct EffectRackPluginState {
     has_gui: bool,
     is_gui_open: bool,
     activated: bool,
+    bypassed: bool,
 
     params: FnvHashMap<ParamID, ParamState>,
 
@@ -61,6 +62,7 @@ impl EffectRackPluginState {
             has_gui: false,
             is_gui_open: false,
             activated: false,
+            bypassed: false,
             audio_ports_ext: None,
             note_ports_ext: None,
             params: FnvHashMap::default(),
@@ -147,6 +149,13 @@ impl EffectRackPluginState {
             }
 
             self.on_plugin_gui_closed();
+        }
+    }
+
+    pub fn set_bypassed(&mut self, bypassed: bool, ds_engine: &mut DSEngineMainThread) {
+        if self.bypassed != bypassed {
+            self.bypassed = bypassed;
+            ds_engine.plugin_host_mut(&self.plugin_id).unwrap().set_bypassed(bypassed);
         }
     }
 }
@@ -375,6 +384,16 @@ fn show_effect_rack_plugin(
                             }
                         } else if ui.small_button("ui").clicked() {
                             plugin.close_gui(ds_engine);
+                        }
+                    }
+
+                    if plugin.bypassed {
+                        if ui.small_button("unbypass").clicked() {
+                            plugin.set_bypassed(false, ds_engine);
+                        }
+                    } else {
+                        if ui.small_button("bypass").clicked() {
+                            plugin.set_bypassed(true, ds_engine);
                         }
                     }
 

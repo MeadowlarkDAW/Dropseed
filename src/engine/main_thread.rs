@@ -402,6 +402,11 @@ impl DSEngineMainThread {
         true
     }
 
+    /// Returns `true` if the engine is currently activated.
+    pub fn is_activated(&self) -> bool {
+        self.audio_graph.is_some()
+    }
+
     /// Collect the latest save states for all plugins.
     ///
     /// This will only return the save states of plugins which have
