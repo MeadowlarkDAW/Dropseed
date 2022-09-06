@@ -397,6 +397,8 @@ impl DSEngineMainThread {
         self.tempo_map_shared = None;
         self.crash_msg = None;
 
+        self.collect_garbage();
+
         true
     }
 
@@ -444,9 +446,9 @@ impl Drop for DSEngineMainThread {
     fn drop(&mut self) {
         if self.audio_graph.is_some() {
             self.deactivate_engine();
+        } else {
+            self.collect_garbage();
         }
-
-        self.collector.collect();
     }
 }
 
