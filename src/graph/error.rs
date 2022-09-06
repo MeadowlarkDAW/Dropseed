@@ -3,7 +3,7 @@ use std::error::Error;
 
 use dropseed_plugin_api::{buffer::DebugBufferID, PluginInstanceID};
 
-use crate::engine::request::ConnectEdgeReq;
+use crate::engine::modify_request::ConnectEdgeReq;
 use crate::processor_schedule::ProcessorSchedule;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

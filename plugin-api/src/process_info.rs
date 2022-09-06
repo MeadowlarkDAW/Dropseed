@@ -117,7 +117,7 @@ impl ProcBuffers {
                 };
 
                 for (in_channel, out_channel) in in_port_iter.zip(out_port_iter) {
-                    let in_channel_data = out_channel.borrow();
+                    let in_channel_data = in_channel.borrow();
                     let mut out_channel_data = out_channel.borrow_mut();
 
                     out_channel_data[0..proc_info.frames]

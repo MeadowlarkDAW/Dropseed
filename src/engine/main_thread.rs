@@ -26,7 +26,7 @@ use crate::processor_schedule::TransportHandle;
 use crate::utils::thread_id::SharedThreadIDs;
 
 use super::error::{EngineCrashError, NewPluginInstanceError};
-use super::request::{ModifyGraphRequest, PluginIDReq};
+use super::modify_request::{ModifyGraphRequest, PluginIDReq};
 
 pub struct DSEngineMainThread {
     audio_graph: Option<AudioGraph>,

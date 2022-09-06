@@ -25,14 +25,14 @@ pub(super) struct PlugHostChannelMainThread {
     pub param_queues: Option<ParamQueuesMainThread>,
     pub shared_state: Arc<SharedPluginHostState>,
 
-    process_thread: SharedPluginHostProcessor,
+    shared_processor: SharedPluginHostProcessor,
 }
 
 impl PlugHostChannelMainThread {
     pub fn new(bypassed: bool, coll_handle: &basedrop::Handle) -> Self {
         Self {
             param_queues: None,
-            process_thread: SharedPluginHostProcessor::new(None, coll_handle),
+            shared_processor: SharedPluginHostProcessor::new(None, coll_handle),
             shared_state: Arc::new(SharedPluginHostState::new(bypassed)),
         }
     }
@@ -79,7 +79,7 @@ impl PlugHostChannelMainThread {
             shared_state: Arc::clone(&self.shared_state),
         };
 
-        self.process_thread.set(
+        self.shared_processor.set(
             PluginHostProcessor::new(
                 plugin_processor,
                 plugin_instance_id,
@@ -98,11 +98,11 @@ impl PlugHostChannelMainThread {
         coll_handle: &basedrop::Handle,
     ) -> Shared<PluginHostProcessorWrapper> {
         self.param_queues = None;
-        self.process_thread.remove(coll_handle)
+        self.shared_processor.remove(coll_handle)
     }
 
     pub fn shared_processor(&self) -> &SharedPluginHostProcessor {
-        &self.process_thread
+        &self.shared_processor
     }
 }
 

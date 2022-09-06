@@ -6,7 +6,7 @@ use dropseed::plugin_api::{DSPluginSaveState, ParamID, PluginInstanceID};
 use dropseed::plugin_host::ParamModifiedInfo;
 use dropseed::{
     engine::{
-        request::{ConnectEdgeReq, EdgeReqPortID, ModifyGraphRequest, PluginIDReq},
+        modify_request::{ConnectEdgeReq, EdgeReqPortID, ModifyGraphRequest, PluginIDReq},
         ActivatedEngineInfo, DSEngineMainThread, PluginActivatedStatus, PluginStatus,
     },
     plugin_api::plugin_scanner::ScannedPluginKey,

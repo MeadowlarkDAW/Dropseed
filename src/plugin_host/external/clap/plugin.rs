@@ -509,7 +509,11 @@ impl PluginProcessor for ClapPluginProcessor {
             &*self.audio_processor.shared_host_data().id
         );
 
-        self.audio_processor.stop_processing().unwrap() // TODO: handle errors
+        if self.audio_processor.is_started() {
+            if let Err(e) = self.audio_processor.stop_processing() {
+                log::error!("{}", e);
+            }
+        }
     }
 
     fn process(

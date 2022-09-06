@@ -16,7 +16,7 @@ pub(crate) mod shared_pools;
 use dropseed_plugin_api::transport::TempoMap;
 use dropseed_plugin_api::{DSPluginSaveState, PluginInstanceID, PluginInstanceType};
 
-use crate::engine::request::{ConnectEdgeReq, EdgeReqPortID};
+use crate::engine::modify_request::{ConnectEdgeReq, EdgeReqPortID};
 use crate::engine::{NewPluginRes, OnIdleEvent, PluginStatus};
 use crate::plugin_host::PluginHostProcessorWrapper;
 use crate::plugin_host::{OnIdleResult, PluginHostMainThread};
@@ -116,7 +116,7 @@ pub(crate) struct AudioGraph {
 
     /// For the plugins that are queued to be removed, make sure that
     /// the plugin's processor part is dropped in the process thread.
-    plugin_processors_to_stop: Vec<Shared<PluginHostProcessorWrapper>>,
+    plugin_processors_to_drop: Vec<Shared<PluginHostProcessorWrapper>>,
 
     thread_ids: SharedThreadIDs,
 
@@ -182,7 +182,7 @@ impl AudioGraph {
             sample_rate,
             min_frames,
             max_frames,
-            plugin_processors_to_stop: Vec::new(),
+            plugin_processors_to_drop: Vec::new(),
             thread_ids,
             schedule_version: 0,
         };
@@ -283,7 +283,7 @@ impl AudioGraph {
                     if let Some(plugin_proc_to_drop) =
                         plugin_host.schedule_remove(&self.coll_handle)
                     {
-                        self.plugin_processors_to_stop.push(plugin_proc_to_drop);
+                        self.plugin_processors_to_drop.push(plugin_proc_to_drop);
                     }
 
                     let removed_edges_res =
@@ -702,7 +702,7 @@ impl AudioGraph {
             &self.graph_out_id,
             self.graph_in_num_audio_channels,
             self.graph_out_num_audio_channels,
-            self.plugin_processors_to_stop.drain(..).collect(),
+            self.plugin_processors_to_drop.drain(..).collect(),
             &mut self.verifier,
             self.schedule_version,
             &self.coll_handle,
@@ -747,7 +747,7 @@ impl AudioGraph {
         let mut recompile_graph = false;
 
         for plugin_host in self.shared_pools.plugin_hosts.iter_mut() {
-            let (res, modified_params) = plugin_host.on_idle(
+            let (res, modified_params, processor_to_drop) = plugin_host.on_idle(
                 self.sample_rate,
                 self.min_frames,
                 self.max_frames,
@@ -795,6 +795,10 @@ impl AudioGraph {
                     plugin_id: plugin_host.id().clone(),
                     modified_params: modified_params.to_owned(),
                 });
+            }
+
+            if let Some(p) = processor_to_drop {
+                self.plugin_processors_to_drop.push(p);
             }
         }
 

@@ -329,8 +329,11 @@ impl PluginHostMainThread {
     /// processor is dropped in the process thread (which in turn sets the
     /// `PluginActiveState::DroppedAndReadyToDeactivate` flag).
     ///
-    /// The returned value is only relevant if the caller is `schedule_remove()`.
-    /// See that method for an explanation on what this value is.
+    /// This returns the plugin host's processor, which is then sent to the
+    /// new schedule to be dropped. This is necessary because otherwise it
+    /// is possible that the new schedule can be sent before the old
+    /// processor has a chance to drop in the process thread, causing it to
+    /// be later dropped in the garbage collector thread (not what we want).
     pub(crate) fn schedule_deactivate(
         &mut self,
         coll_handle: &basedrop::Handle,
@@ -582,26 +585,34 @@ impl PluginHostMainThread {
         edge_id_to_ds_edge_id: &mut FnvHashMap<EdgeID, DSEdgeID>,
         thread_ids: &SharedThreadIDs,
         schedule_version: u64,
-    ) -> (OnIdleResult, SmallVec<[ParamModifiedInfo; 4]>) {
+    ) -> (OnIdleResult, SmallVec<[ParamModifiedInfo; 4]>, Option<Shared<PluginHostProcessorWrapper>>)
+    {
         let mut modified_params: SmallVec<[ParamModifiedInfo; 4]> = SmallVec::new();
+        let mut processor_to_drop = None;
 
         // Get the latest request flags and activation state.
         let request_flags = self.host_request_rx.fetch_requests();
         let mut active_state = self.channel.shared_state.get_active_state();
 
         if request_flags.contains(HostRequestFlags::MARK_DIRTY) {
+            log::trace!("Plugin {:?} manually marked its state as dirty", &self.id);
+
             // The plugin has manually changed its save state, so mark the state
             // as dirty so it can be collected later.
             self.save_state_dirty = true;
         }
 
         if request_flags.contains(HostRequestFlags::CALLBACK) {
+            log::trace!("Plugin {:?} requested the host call `on_main_thread()`", &self.id);
+
             // The plugin has requested the host invoke its `on_main_thread()`
             // method, so call it here.
             self.plug_main_thread.on_main_thread();
         }
 
         if request_flags.contains(HostRequestFlags::RESCAN_PARAMS) {
+            log::trace!("Plugin {:?} requested the host rescan its parameters", &self.id);
+
             // The plugin has requested the host to rescan its list of parameters.
 
             // TODO
@@ -635,6 +646,16 @@ impl PluginHostMainThread {
         }
 
         if request_flags.intersects(HostRequestFlags::RESTART | HostRequestFlags::RESCAN_PORTS) {
+            if request_flags.contains(HostRequestFlags::RESTART) {
+                log::trace!("Plugin {:?} requested the host to restart the plugin", &self.id);
+            }
+            if request_flags.contains(HostRequestFlags::RESCAN_PORTS) {
+                log::trace!(
+                    "Plugin {:?} requested the host to rescan its audio and/or note ports",
+                    &self.id
+                );
+            }
+
             // The plugin has requested the host to restart the plugin (or rescan its
             // audio and/or note ports).
             //
@@ -643,7 +664,7 @@ impl PluginHostMainThread {
             // often anyway.
 
             self.restarting = true;
-            self.schedule_deactivate(coll_handle);
+            processor_to_drop = self.schedule_deactivate(coll_handle);
 
             if active_state == PluginActiveState::Active {
                 active_state = PluginActiveState::WaitingToDrop;
@@ -652,6 +673,8 @@ impl PluginHostMainThread {
 
         if request_flags.intersects(HostRequestFlags::GUI_CLOSED | HostRequestFlags::GUI_DESTROYED)
         {
+            log::trace!("Plugin {:?} has closed its custom GUI", &self.id);
+
             // The plugin has closed its custom GUI.
             self.plug_main_thread
                 .on_gui_closed(request_flags.contains(HostRequestFlags::GUI_DESTROYED));
@@ -697,15 +720,17 @@ impl PluginHostMainThread {
                     self.save_state_dirty = true;
                 }
 
-                return (res, modified_params);
+                return (res, modified_params, processor_to_drop);
             } else {
                 // Plugin is ready to be fully removed/dropped.
-                return (OnIdleResult::PluginReadyToRemove, modified_params);
+                return (OnIdleResult::PluginReadyToRemove, modified_params, processor_to_drop);
             }
         } else if request_flags.contains(HostRequestFlags::PROCESS)
             && !self.remove_requested
             && !self.restarting
         {
+            log::trace!("Plugin {:?} requested the host to start processing the plugin", &self.id);
+
             // The plugin has requested the host to start processing this plugin.
 
             if active_state == PluginActiveState::Active {
@@ -731,11 +756,11 @@ impl PluginHostMainThread {
                     Err(e) => OnIdleResult::PluginFailedToActivate(e),
                 };
 
-                return (res, modified_params);
+                return (res, modified_params, processor_to_drop);
             }
         }
 
-        (OnIdleResult::Ok, modified_params)
+        (OnIdleResult::Ok, modified_params, processor_to_drop)
     }
 }
 
