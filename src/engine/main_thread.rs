@@ -365,7 +365,11 @@ impl DSEngineMainThread {
         }
     }
 
-    /// Gracefully deactivate the engine.
+    /// Gracefully deactivate the engine. This will also reset the audio
+    /// graph and remove all plugins.
+    ///
+    /// Make sure that the engine is deactivated or dropped in the main
+    /// thread before exiting your program.
     ///
     /// This will return `false` if the engine is already deactivated.
     pub fn deactivate_engine(&mut self) -> bool {
@@ -376,12 +380,19 @@ impl DSEngineMainThread {
 
         log::info!("Deactivating RustyDAW engine");
 
-        self.audio_graph = None;
+        if let Some(mut audio_graph) = self.audio_graph.take() {
+            // Make sure that all plugins are removed gracefully.
+            audio_graph.reset();
+        }
 
         if let Some(run_process_thread) = self.run_process_thread.take() {
             run_process_thread.store(false, Ordering::Relaxed);
         }
-        self.process_thread_handle = None;
+        if let Some(process_thread_handle) = self.process_thread_handle.take() {
+            if let Err(e) = process_thread_handle.join() {
+                log::error!("Failed to join process thread handle: {:?}", e);
+            }
+        }
 
         self.tempo_map_shared = None;
         self.crash_msg = None;
@@ -431,18 +442,9 @@ impl DSEngineMainThread {
 
 impl Drop for DSEngineMainThread {
     fn drop(&mut self) {
-        if let Some(run_process_thread) = self.run_process_thread.take() {
-            run_process_thread.store(false, Ordering::Relaxed);
-
-            if let Some(process_thread_handle) = self.process_thread_handle.take() {
-                if let Err(e) = process_thread_handle.join() {
-                    log::error!("Failed to join process thread handle: {:?}", e);
-                }
-            }
+        if self.audio_graph.is_some() {
+            self.deactivate_engine();
         }
-
-        // Make sure all of the stuff in the audio thread gets dropped properly.
-        let _ = self.audio_graph;
 
         self.collector.collect();
     }

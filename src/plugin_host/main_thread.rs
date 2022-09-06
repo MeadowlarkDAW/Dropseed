@@ -611,7 +611,7 @@ impl PluginHostMainThread {
         }
 
         if request_flags.contains(HostRequestFlags::RESCAN_PARAMS) {
-            log::trace!("Plugin {:?} requested the host rescan its parameters", &self.id);
+            log::debug!("Plugin {:?} requested the host rescan its parameters", &self.id);
 
             // The plugin has requested the host to rescan its list of parameters.
 
@@ -647,10 +647,10 @@ impl PluginHostMainThread {
 
         if request_flags.intersects(HostRequestFlags::RESTART | HostRequestFlags::RESCAN_PORTS) {
             if request_flags.contains(HostRequestFlags::RESTART) {
-                log::trace!("Plugin {:?} requested the host to restart the plugin", &self.id);
+                log::debug!("Plugin {:?} requested the host to restart the plugin", &self.id);
             }
             if request_flags.contains(HostRequestFlags::RESCAN_PORTS) {
-                log::trace!(
+                log::debug!(
                     "Plugin {:?} requested the host to rescan its audio and/or note ports",
                     &self.id
                 );

@@ -137,5 +137,9 @@ impl DSEngineProcessThread {
                 }
             }
         }
+
+        // Make sure we drop all plugin processors in the process thread
+        // when deactivating the engine.
+        self.schedule.deactivate();
     }
 }

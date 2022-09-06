@@ -617,13 +617,26 @@ impl AudioGraph {
     pub fn reset(&mut self) {
         // Try to gracefully remove all existing plugins.
         for plugin_host in self.shared_pools.plugin_hosts.iter_mut() {
-            plugin_host.schedule_remove(&self.coll_handle);
+            if let Some(processor_to_drop) = plugin_host.schedule_remove(&self.coll_handle) {
+                self.plugin_processors_to_drop.push(processor_to_drop);
+            }
         }
 
-        // TODO: Check that the audio thread is still alive.
-        let audio_thread_is_alive = true;
+        self.schedule_version += 1;
+        self.shared_pools.shared_schedule.set_new_schedule(
+            ProcessorSchedule::new_empty(
+                self.max_frames as usize,
+                self.shared_pools.transports.transport.clone(),
+                self.plugin_processors_to_drop.drain(..).collect(),
+                self.schedule_version,
+            ),
+            &self.coll_handle,
+        );
 
-        if audio_thread_is_alive {
+        // TODO: Check that the process thread is still alive.
+        let process_thread_is_alive = true;
+
+        if process_thread_is_alive {
             let start_time = std::time::Instant::now();
 
             const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -641,16 +654,6 @@ impl AudioGraph {
                 log::error!("Timed out while removing all plugins");
             }
         }
-
-        self.schedule_version += 1;
-        self.shared_pools.shared_schedule.set_new_schedule(
-            ProcessorSchedule::new_empty(
-                self.max_frames as usize,
-                self.shared_pools.transports.transport.clone(),
-                self.schedule_version,
-            ),
-            &self.coll_handle,
-        );
 
         self.shared_pools.plugin_hosts.clear();
         self.shared_pools.buffers.set_num_buffers(0, 0, 0);
@@ -719,6 +722,7 @@ impl AudioGraph {
                     ProcessorSchedule::new_empty(
                         self.max_frames as usize,
                         self.shared_pools.transports.transport.clone(),
+                        self.plugin_processors_to_drop.drain(..).collect(),
                         self.schedule_version,
                     ),
                     &self.coll_handle,
@@ -832,12 +836,6 @@ impl AudioGraph {
 
     pub fn graph_out_id(&self) -> &PluginInstanceID {
         &self.graph_out_id
-    }
-}
-
-impl Drop for AudioGraph {
-    fn drop(&mut self) {
-        self.reset();
     }
 }
 

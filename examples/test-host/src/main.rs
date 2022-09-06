@@ -347,6 +347,10 @@ impl eframe::App for DSTestHostGUI {
     }
 
     fn on_exit(&mut self, _gl: &eframe::glow::Context) {
+        // Make sure that the engine is deactivated or dropped in the main
+        // thread before exiting your program.
+        self.ds_engine.deactivate_engine();
+
         self._cpal_stream = None;
     }
 }

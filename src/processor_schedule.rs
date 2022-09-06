@@ -52,6 +52,7 @@ impl ProcessorSchedule {
     pub(crate) fn new_empty(
         max_block_size: usize,
         transport_task: SharedTransportTask,
+        plugin_processors_to_stop: Vec<Shared<PluginHostProcessorWrapper>>,
         version: u64,
     ) -> Self {
         Self {
@@ -59,7 +60,7 @@ impl ProcessorSchedule {
             graph_in_task: GraphInTask::default(),
             graph_out_task: GraphOutTask::default(),
             transport_task,
-            plugin_processors_to_stop: Vec::new(),
+            plugin_processors_to_stop,
             max_block_size,
             version,
         }
@@ -155,6 +156,15 @@ impl ProcessorSchedule {
             }
 
             processed_frames += frames;
+        }
+    }
+
+    pub fn deactivate(&mut self) {
+        // Make sure we drop all plugin processors in the process thread
+        // when deactivating the engine.
+        for plugin_proc in self.plugin_processors_to_stop.drain(..) {
+            let mut plugin_proc = plugin_proc.borrow_mut();
+            *plugin_proc = None;
         }
     }
 }

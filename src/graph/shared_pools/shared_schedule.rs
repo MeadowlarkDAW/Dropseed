@@ -80,4 +80,8 @@ impl SharedProcessorSchedule {
 
         schedule.process_interleaved(audio_in, audio_out);
     }
+
+    pub fn deactivate(&mut self) {
+        self.schedule.get().borrow_mut().deactivate();
+    }
 }

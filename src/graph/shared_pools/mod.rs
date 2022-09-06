@@ -39,6 +39,7 @@ impl GraphSharedPools {
         let empty_schedule = ProcessorSchedule::new_empty(
             audio_buffer_size,
             shared_transport_task.clone(),
+            Vec::new(),
             schedule_version,
         );
 
