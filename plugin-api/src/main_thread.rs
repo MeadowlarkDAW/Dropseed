@@ -1,7 +1,8 @@
 use basedrop::Shared;
-use clack_extensions::gui::GuiError;
+use clack_extensions::gui::{GuiResizeHints, GuiSize};
 use clack_host::events::io::EventBuffer;
 use meadowlark_core_types::time::SampleRate;
+use raw_window_handle::RawWindowHandle;
 use std::error::Error;
 
 use super::transport::TempoMap;
@@ -86,6 +87,17 @@ pub trait PluginMainThread {
     #[allow(unused)]
     fn note_ports_ext(&mut self) -> Result<ext::note_ports::PluginNotePortsExt, String> {
         Ok(ext::note_ports::EMPTY_NOTE_PORTS_CONFIG.clone())
+    }
+
+    /// The latency in frames this plugin adds.
+    ///
+    /// The plugin is only allowed to change its latency when it is deactivated.
+    ///
+    /// By default this returns `0` (no latency).
+    ///
+    /// [main-thread & !active_state]
+    fn latency(&self) -> i64 {
+        0
     }
 
     // --- Parameters ---------------------------------------------------------------------------------
@@ -196,40 +208,116 @@ pub trait PluginMainThread {
 
     // --- GUI ---------------------------------------------------------------------------------
 
-    /// Returns whether or not this plugin instance supports opening a floating GUI window.
-    fn has_gui(&self) -> bool {
-        false
-    }
-
-    fn is_gui_open(&self) -> bool {
-        false
-    }
-
-    /// Initializes and opens the plugin's GUI
-    // TODO: better error type
-    fn open_gui(&mut self, _suggested_title: Option<&str>) -> Result<(), GuiError> {
-        Err(GuiError::CreateError)
-    }
-
-    /// Called when the plugin notified its GUI has been closed.
+    /// If `floating` is `true`, then this returns whether or not this plugin instance supports
+    /// creating a custom GUI in a floating window that the plugin manages itself.
     ///
-    /// `destroyed` is set to true if the GUI has also been destroyed completely, e.g. due to a
-    /// lost connection.
+    /// If `floating` is `false`, then this returns whether or not this plugin instance supports
+    /// embedding a custom GUI into a window managed by the host.
+    ///
+    /// By default this returns `false` for both cases.
     #[allow(unused)]
-    fn on_gui_closed(&mut self, destroyed: bool) {}
+    fn supports_gui(&self, floating: bool) -> bool {
+        false
+    }
 
-    /// Closes and destroys the currently active GUI
-    fn close_gui(&mut self) {}
+    /// Create a new floating GUI in a window managed by the plugin itself.
+    ///
+    /// By default this returns an error.
+    #[allow(unused)]
+    fn create_new_floating_gui(
+        &mut self,
+        suggested_title: Option<&str>,
+    ) -> Result<(), Box<dyn Error>> {
+        Err("Plugin does not support a custom floating GUI".into())
+    }
 
-    /// The latency in frames this plugin adds.
+    /// Create a new embedded GUI in a window managed by the host.
     ///
-    /// The plugin is only allowed to change its latency when it is deactivated.
+    /// * `scale` - The absolute GUI scaling factor. This overrides any OS info.
+    ///     * This should not be used if the windowing API relies upon logical pixels
+    /// (such as Cocoa on MacOS).
+    ///     * If this plugin prefers to work out the scaling factor itself by querying
+    /// the OS directly, then ignore this value.
+    /// * `size`
+    ///     * If the plugin's GUI is resizable, and the size is known from previous a
+    /// previous session, then put the size from that previous session here.
+    ///     * If the plugin's GUI is not resizable, then this will be ignored.
+    /// * `parent_window` - The `RawWindowHandle` of the window that the GUI should be
+    /// embedded into.
     ///
-    /// By default this returns `0` (no latency).
+    /// By default this returns an error.
+    #[allow(unused)]
+    fn create_new_embedded_gui(
+        &mut self,
+        scale: Option<f64>,
+        size: Option<ext::gui::GuiSize>,
+        parent_window: RawWindowHandle,
+    ) -> Result<ext::gui::EmbeddedGuiInfo, Box<dyn Error>> {
+        Err("Plugin does not support a custom embedded GUI".into())
+    }
+
+    /// Destroy the currently active GUI.
     ///
-    /// [main-thread & !active_state]
-    fn latency(&self) -> i64 {
-        0
+    /// By default this does nothing.
+    fn destroy_gui(&mut self) {}
+
+    fn gui_resize_hints(&self) -> Option<GuiResizeHints> {
+        None
+    }
+
+    /// If the plugin gui is resizable, then the plugin will calculate the closest
+    /// usable size which fits in the given size. Only for embedded GUIs.
+    ///
+    /// This method does not change the size of the current GUI.
+    ///
+    /// By default this just returns the given value.
+    fn adjust_gui_size(&mut self, size: GuiSize) -> GuiSize {
+        size
+    }
+
+    /// Set the size of the plugin's GUI. Only for embedded GUIs.
+    ///
+    /// On success, this returns the actual size the plugin resized to.
+    #[allow(unused)]
+    fn set_gui_size(&mut self, size: GuiSize) -> Result<GuiSize, Box<dyn Error>> {
+        Err("Plugin does not support a custom embedded GUI".into())
+    }
+
+    /// Set the absolute GUI scaling factor. This overrides any OS info.
+    ///
+    /// This should not be used if the windowing API relies upon logical pixels
+    /// (such as Cocoa on MacOS).
+    ///
+    /// If this plugin prefers to work out the scaling factor itself by querying
+    /// the OS directly, then ignore this value.
+    ///
+    /// Returns `true` if the plugin applied the scaling.
+    /// Returns `false` if the plugin could not apply the scaling, or if the
+    /// plugin ignored the request.
+    ///
+    /// By default this returns `false`.
+    #[allow(unused)]
+    fn set_gui_scale(&mut self, scale: f64) -> bool {
+        false
+    }
+
+    /// Show the currently active GUI.
+    ///
+    /// By default this returns an error.
+    fn show_gui(&mut self) -> Result<(), Box<dyn Error>> {
+        Err("Plugin does not support a custom GUI".into())
+    }
+
+    /// Hide the currently active GUI.
+    ///
+    /// Note that hiding the GUI is not the same as destroying the GUI.
+    /// Hiding only hides the window content, it does not free the GUI's
+    /// resources.  Yet it may be a good idea to stop painting timers
+    /// when a plugin GUI is hidden.
+    ///
+    /// By default this returns an error.
+    fn hide_gui(&mut self) -> Result<(), Box<dyn Error>> {
+        Err("Plugin does not support a custom GUI".into())
     }
 }
 

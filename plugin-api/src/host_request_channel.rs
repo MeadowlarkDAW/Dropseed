@@ -84,29 +84,19 @@ impl HostRequestChannelReceiver {
 
     /// Returns the last GUI size that was requested (through a call to [`request_gui_resize`](HostRequestChannelSender::request_gui_resize)).
     ///
-    /// Calling this method does not clear the last GUI size request. See
-    /// [`clear_gui_size_requested`](HostRequestChannelReceiver::clear_gui_size_requested)) to do this.
-    ///
     /// This returns [`None`] if no new size has been requested for this plugin yet.
     #[inline]
-    pub fn last_gui_size_requested(&self) -> Option<GuiSize> {
-        let size = GuiSize::from_u64(self.contents.last_gui_size_requested.load(Ordering::SeqCst));
+    pub fn fetch_gui_size_request(&self) -> Option<GuiSize> {
+        let size = GuiSize::from_u64(
+            self.contents
+                .last_gui_size_requested
+                .swap(GuiSize { width: u32::MAX, height: u32::MAX }.to_u64(), Ordering::SeqCst),
+        );
 
         match size {
             GuiSize { width: u32::MAX, height: u32::MAX } => None,
             size => Some(size),
         }
-    }
-
-    /// Clears any previously requested GUI size.
-    ///
-    /// This method should be called whenever the UI was destroyed or closed, as its previously know
-    /// size may not make sense for the new window.
-    #[inline]
-    pub fn clear_gui_size_requested(&self) {
-        self.contents
-            .last_gui_size_requested
-            .store(GuiSize { width: u32::MAX, height: u32::MAX }.to_u64(), Ordering::SeqCst);
     }
 }
 

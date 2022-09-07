@@ -1,12 +1,13 @@
 use atomic_refcell::{AtomicRef, AtomicRefMut};
 use clack_extensions::audio_ports::{AudioPortFlags, AudioPortInfoBuffer, PluginAudioPorts};
-use clack_extensions::gui::{GuiApiType, GuiError};
+use clack_extensions::gui::GuiApiType;
 use clack_extensions::note_ports::{NotePortInfoBuffer, PluginNotePorts};
 use clack_host::events::io::{InputEvents, OutputEvents};
 use clack_host::instance::processor::PluginAudioProcessor;
 use clack_host::instance::{PluginAudioConfiguration, PluginInstance};
 use dropseed_plugin_api::buffer::RawAudioChannelBuffers;
 use dropseed_plugin_api::ext::audio_ports::{AudioPortInfo, MainPortsLayout, PluginAudioPortsExt};
+use dropseed_plugin_api::ext::gui::{EmbeddedGuiInfo, GuiSize};
 use dropseed_plugin_api::ext::note_ports::{NotePortInfo, PluginNotePortsExt};
 use dropseed_plugin_api::ext::params::{ParamID, ParamInfo, ParamInfoFlags};
 use dropseed_plugin_api::{
@@ -14,6 +15,7 @@ use dropseed_plugin_api::{
     ProcInfo, ProcessStatus,
 };
 use meadowlark_core_types::time::SampleRate;
+use raw_window_handle::RawWindowHandle;
 use smallvec::SmallVec;
 use std::error::Error;
 use std::ffi::CString;
@@ -436,55 +438,161 @@ impl PluginMainThread for ClapPluginMainThread {
 
     // --- GUI stuff ---------------------------------------------------------------------------------
 
-    fn has_gui(&self) -> bool {
+    fn supports_gui(&self, floating: bool) -> bool {
         if let (Some(gui), Some(api)) =
             (self.instance.shared_host_data().gui_ext, GuiApiType::default_for_current_platform())
         {
-            gui.is_api_supported(&self.instance.main_thread_plugin_data(), api, true)
+            gui.is_api_supported(&self.instance.main_thread_plugin_data(), api, floating)
         } else {
             false
         }
     }
 
-    fn is_gui_open(&self) -> bool {
-        let host = self.instance.main_thread_host_data();
-        host.gui_visible
-    }
-
-    fn open_gui(&mut self, suggested_title: Option<&str>) -> Result<(), GuiError> {
+    fn create_new_floating_gui(
+        &mut self,
+        suggested_title: Option<&str>,
+    ) -> Result<(), Box<dyn Error>> {
         let host = self.instance.main_thread_host_data_mut();
-        let api_type = GuiApiType::default_for_current_platform().unwrap();
 
-        let gui_ext = host.shared.gui_ext.ok_or(GuiError::CreateError)?;
-        let instance = host.instance.as_mut().unwrap(); // TODO: unwrap
+        // TODO: Try to use Wayland on Linux if it is available.
+        let api_type =
+            GuiApiType::default_for_current_platform().ok_or_else(|| -> Box<dyn Error> {
+                "Creating floating GUIs is not supported on this platform".into()
+            })?;
 
-        gui_ext.create(instance, api_type, true)?;
+        let gui_ext = host.shared.gui_ext.ok_or_else(|| -> Box<dyn Error> {
+            "CLAP plugin does not use the GUI extension".into()
+        })?;
+        let instance = host.instance.as_mut().ok_or_else(|| -> Box<dyn Error> {
+            "CLAP plugin does not have an active instance".into()
+        })?;
+
+        gui_ext.create(instance, api_type, true).map_err(|e| -> Box<dyn Error> {
+            format!("CLAP plugin failed to create a new floating GUI window: {}", e).into()
+        })?;
+
         if let Some(title) = suggested_title {
-            let title = CString::new(title.to_string()).unwrap(); // TODO: unwrap
-            gui_ext.suggest_title(instance, &title);
+            match CString::new(title.to_string()) {
+                Ok(title) => {
+                    gui_ext.suggest_title(instance, &title);
+                }
+                Err(e) => {
+                    log::warn!("Failed to convert suggested title {} to CString: {}", title, e);
+                }
+            }
         }
-        gui_ext.show(instance)?;
-
-        host.gui_visible = true;
 
         Ok(())
     }
 
-    fn on_gui_closed(&mut self, destroyed: bool) {
+    fn create_new_embedded_gui(
+        &mut self,
+        scale: Option<f64>,
+        size: Option<GuiSize>,
+        parent_window: RawWindowHandle,
+    ) -> Result<EmbeddedGuiInfo, Box<dyn Error>> {
         let host = self.instance.main_thread_host_data_mut();
-        let gui_ext = host.shared.gui_ext.ok_or(GuiError::CreateError).unwrap();
-        let instance = host.instance.as_mut().unwrap(); // TODO: unwrap
-        host.gui_visible = false;
 
-        if !destroyed {
-            // TODO: unwrap
-            gui_ext.hide(instance).unwrap();
+        // TODO: Try to use Wayland on Linux if it is available.
+        let api_type =
+            GuiApiType::default_for_current_platform().ok_or_else(|| -> Box<dyn Error> {
+                "Creating embedded GUIs is not supported on this platform".into()
+            })?;
+
+        let gui_ext = host.shared.gui_ext.ok_or_else(|| -> Box<dyn Error> {
+            "CLAP plugin does not use the GUI extension".into()
+        })?;
+        let instance = host.instance.as_mut().ok_or_else(|| -> Box<dyn Error> {
+            "CLAP plugin does not have an active instance".into()
+        })?;
+
+        let window = clack_extensions::gui::Window::from_raw_window_handle(parent_window)
+            .ok_or_else(|| -> Box<dyn Error> {
+                "Creating embedded GUIs is not supported on this platform".into()
+            })?;
+
+        gui_ext.create(instance, api_type, false).map_err(|e| -> Box<dyn Error> {
+            format!("CLAP plugin failed to create a new embedded GUI: {}", e).into()
+        })?;
+
+        if let Some(scale) = scale {
+            if let Err(e) = gui_ext.set_scale(instance, scale) {
+                log::warn!(
+                    "CLAP plugin failed to set the scale to {} in its new embedded GUI: {}",
+                    scale,
+                    e
+                );
+            }
         }
-        gui_ext.destroy(instance);
+
+        let resizable = gui_ext.can_resize(instance);
+
+        if size.is_some() && resizable {
+            let size = size.unwrap();
+
+            if let Err(e) = gui_ext.set_size(instance, size) {
+                log::warn!("CLAP plugin failed to set its width and height to {:?} for its new embedded GUI: {}", size, e);
+            }
+        }
+
+        let working_size = if let Some(working_size) = gui_ext.get_size(instance) {
+            working_size
+        } else {
+            gui_ext.destroy(instance);
+            return Err("CLAP plugin failed to return the size of its new embedded GUI".into());
+        };
+
+        let resize_hints = if resizable { gui_ext.get_resize_hints(instance) } else { None };
+
+        Ok(EmbeddedGuiInfo { size: working_size, resizable, resize_hints })
     }
 
-    fn close_gui(&mut self) {
-        self.on_gui_closed(false)
+    fn destroy_gui(&mut self) {
+        let host = self.instance.main_thread_host_data_mut();
+        if let Some(gui_ext) = host.shared.gui_ext {
+            if let Some(instance) = host.instance.as_mut() {
+                gui_ext.destroy(instance);
+            } else {
+                log::warn!(
+                    "Host called `destroy_gui()`, but CLAP plugin does have an active instance"
+                );
+            }
+        } else {
+            log::warn!(
+                "Host called `destroy_gui()`, but CLAP plugin does not use the GUI extension"
+            );
+        }
+    }
+
+    fn show_gui(&mut self) -> Result<(), Box<dyn Error>> {
+        let host = self.instance.main_thread_host_data_mut();
+        let gui_ext = host.shared.gui_ext.ok_or_else(|| -> Box<dyn Error> {
+            "CLAP plugin does not use the GUI extension".into()
+        })?;
+        let instance = host.instance.as_mut().ok_or_else(|| -> Box<dyn Error> {
+            "CLAP plugin does not have an active instance".into()
+        })?;
+
+        gui_ext.show(instance).map_err(|e| -> Box<dyn Error> {
+            format!("CLAP plugin failed to show its GUI: {}", e).into()
+        })
+    }
+
+    /// Hide the currently active GUI
+    ///
+    /// By default this does nothing.
+    fn hide_gui(&mut self) -> Result<(), Box<dyn Error>> {
+        let host = self.instance.main_thread_host_data_mut();
+        let gui_ext = host.shared.gui_ext.ok_or_else(|| -> Box<dyn Error> {
+            "CLAP plugin does not use the GUI extension".into()
+        })?;
+        let instance = host.instance.as_mut().ok_or_else(|| -> Box<dyn Error> {
+            "CLAP plugin does not have an active instance".into()
+        })?;
+
+        gui_ext.show(instance).map_err(|e| -> Box<dyn Error> {
+            format!("CLAP plugin failed to hide its GUI: {}", e).into()
+        })
     }
 }
 

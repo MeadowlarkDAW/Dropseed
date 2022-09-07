@@ -11,6 +11,7 @@ use std::thread::{self, JoinHandle};
 use thread_priority::ThreadPriority;
 
 use dropseed_plugin_api::ext::audio_ports::PluginAudioPortsExt;
+use dropseed_plugin_api::ext::gui::{GuiResizeHints, GuiSize};
 use dropseed_plugin_api::ext::note_ports::PluginNotePortsExt;
 use dropseed_plugin_api::ext::params::ParamInfo;
 use dropseed_plugin_api::plugin_scanner::ScannedPluginKey;
@@ -593,9 +594,6 @@ pub struct PluginActivatedStatus {
     /// then this will be the new custom handle.
     pub internal_handle: Option<Box<dyn std::any::Any + Send + 'static>>,
 
-    /// If `true`, then the plugin has a custom GUI that can be opened.
-    pub has_gui: bool,
-
     /// The latency this plugin adds in frames.
     ///
     /// If the latency has not changed since the last time this plugin
@@ -636,6 +634,14 @@ pub struct NewPluginRes {
 
     /// The status of this plugin.
     pub status: PluginStatus,
+
+    /// Whether or not this plugin instance supports creating a custom
+    /// GUI in a floating window that the plugin manages itself.
+    pub supports_floating_gui: bool,
+
+    /// Whether or not this plugin instance supports embedding a custom
+    /// GUI into a window managed by the host.
+    pub supports_embedded_gui: bool,
 }
 
 #[derive(Debug)]
@@ -667,9 +673,46 @@ pub enum OnIdleEvent {
         modified_params: SmallVec<[ParamModifiedInfo; 4]>,
     },
 
+    /// The plugin requested the app to resize its gui to the given size.
+    ///
+    /// This event will only be sent if using an embedded window for the
+    /// plugin GUI.
+    PluginRequestedToResizeGui { plugin_id: PluginInstanceID, size: GuiSize },
+
+    /// The plugin requested the app to show its GUI.
+    ///
+    /// This event will only be sent if using an embedded window for the
+    /// plugin GUI.
+    PluginRequestedToShowGui { plugin_id: PluginInstanceID },
+
+    /// The plugin requested the app to hide its GUI.
+    ///
+    /// Note that hiding the GUI is not the same as destroying the GUI.
+    /// Hiding only hides the window content, it does not free the GUI's
+    /// resources.  Yet it may be a good idea to stop painting timers
+    /// when a plugin GUI is hidden.
+    ///
+    /// This event will only be sent if using an embedded window for the
+    /// plugin GUI.
+    PluginRequestedToHideGui { plugin_id: PluginInstanceID },
+
     /// Sent when the plugin closed its own GUI by its own means. UI should
     /// be updated accordingly so that the user could open the UI again.
-    PluginGuiClosed { plugin_id: PluginInstanceID },
+    ///
+    /// If `was_destroyed` is `true`, then the app must call
+    /// `PluginHostMainThread::destroy_gui()` to acknowledge the gui
+    /// destruction.
+    PluginGuiClosed { plugin_id: PluginInstanceID, was_destroyed: bool },
+
+    /// Sent when the plugin changed the resize hint information on how
+    /// to resize its GUI.
+    ///
+    /// This event will only be sent if using an embedded window for the
+    /// plugin GUI.
+    PluginChangedGuiResizeHints {
+        plugin_id: PluginInstanceID,
+        resize_hints: Option<GuiResizeHints>,
+    },
 
     /// Sent whenever a plugin becomes activated after being deactivated or
     /// when the plugin restarts.
@@ -678,9 +721,7 @@ pub enum OnIdleEvent {
     /// well as any custom handles.
     PluginActivated { plugin_id: PluginInstanceID, status: PluginActivatedStatus },
 
-    /// Sent whenever a plugin has been deactivated. When a plugin is
-    /// deactivated, you cannot access any of its methods until it is
-    /// reactivated.
+    /// Sent whenever a plugin has been deactivated.
     PluginDeactivated {
         plugin_id: PluginInstanceID,
         /// If this is `Ok(())`, then it means the plugin was gracefully

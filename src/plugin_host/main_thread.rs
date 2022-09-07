@@ -1,6 +1,7 @@
 use audio_graph::{AudioGraphHelper, EdgeID, PortID};
 use basedrop::Shared;
 use dropseed_plugin_api::ext::audio_ports::PluginAudioPortsExt;
+use dropseed_plugin_api::ext::gui::{EmbeddedGuiInfo, GuiResizeHints, GuiSize};
 use dropseed_plugin_api::ext::note_ports::PluginNotePortsExt;
 use dropseed_plugin_api::ext::params::{ParamID, ParamInfo, ParamInfoFlags};
 use dropseed_plugin_api::transport::TempoMap;
@@ -10,7 +11,9 @@ use dropseed_plugin_api::{
 };
 use fnv::FnvHashMap;
 use meadowlark_core_types::time::{SampleRate, Seconds};
+use raw_window_handle::RawWindowHandle;
 use smallvec::SmallVec;
+use std::error::Error;
 
 use crate::engine::{OnIdleEvent, PluginActivatedStatus};
 use crate::graph::{DSEdgeID, PortChannelID};
@@ -19,7 +22,7 @@ use crate::utils::thread_id::SharedThreadIDs;
 use super::channel::{
     MainToProcParamValue, PlugHostChannelMainThread, PluginActiveState, SharedPluginHostProcessor,
 };
-use super::error::{ActivatePluginError, SetParamValueError, ShowGuiError};
+use super::error::{ActivatePluginError, SetParamValueError};
 use super::PluginHostProcessorWrapper;
 
 mod sync_ports;
@@ -258,29 +261,104 @@ impl PluginHostMainThread {
         self.plug_main_thread.param_text_to_value(param_id, text_input)
     }
 
-    /// Tell the plugin to open its custom GUI.
-    pub fn show_gui(&mut self) -> Result<(), ShowGuiError> {
-        if !self.plug_main_thread.is_gui_open() {
-            if let Err(e) = self.plug_main_thread.open_gui(None) {
-                return Err(ShowGuiError::HostError(e));
-            }
-            Ok(())
-        } else {
-            Err(ShowGuiError::AlreadyOpen)
-        }
+    /// If `floating` is `true`, then this returns whether or not this plugin instance supports
+    /// creating a custom GUI in a floating window that the plugin manages itself.
+    ///
+    /// If `floating` is `false`, then this returns whether or not this plugin instance supports
+    /// embedding a custom GUI into a window managed by the host.
+    fn supports_gui(&self, floating: bool) -> bool {
+        self.plug_main_thread.supports_gui(floating)
     }
 
-    /// Tell the plugin to close its custom GUI.
-    pub fn close_gui(&mut self) {
-        if self.plug_main_thread.is_gui_open() {
-            self.plug_main_thread.close_gui();
-        }
+    /// Create a new floating GUI in a window managed by the plugin itself.
+    fn create_new_floating_gui(
+        &mut self,
+        suggested_title: Option<&str>,
+    ) -> Result<(), Box<dyn Error>> {
+        self.plug_main_thread.create_new_floating_gui(suggested_title)
     }
 
-    /// Returns `true` if this plugin has a custom GUI that can be
-    /// opened in a floating window.
-    pub fn has_gui(&self) -> bool {
-        self.plug_main_thread.has_gui()
+    /// Create a new embedded GUI in a window managed by the host.
+    ///
+    /// * `scale` - The absolute GUI scaling factor. This overrides any OS info.
+    ///     * This should not be used if the windowing API relies upon logical pixels
+    /// (such as Cocoa on MacOS).
+    ///     * If this plugin prefers to work out the scaling factor itself by querying
+    /// the OS directly, then ignore this value.
+    /// * `size`
+    ///     * If the plugin's GUI is resizable, and the size is known from previous a
+    /// previous session, then put the size from that previous session here.
+    ///     * If the plugin's GUI is not resizable, then this will be ignored.
+    /// * `parent_window` - The `RawWindowHandle` of the window that the GUI should be
+    /// embedded into.
+    fn create_new_embedded_gui(
+        &mut self,
+        scale: Option<f64>,
+        size: Option<GuiSize>,
+        parent_window: RawWindowHandle,
+    ) -> Result<EmbeddedGuiInfo, Box<dyn Error>> {
+        self.plug_main_thread.create_new_embedded_gui(scale, size, parent_window)
+    }
+
+    /// Destroy the currently active GUI.
+    fn destroy_gui(&mut self) {
+        self.plug_main_thread.destroy_gui();
+    }
+
+    fn gui_resize_hints(&self) -> Option<GuiResizeHints> {
+        self.plug_main_thread.gui_resize_hints()
+    }
+
+    /// If the plugin gui is resizable, then the plugin will calculate the closest
+    /// usable size which fits in the given size. Only for embedded GUIs.
+    ///
+    /// This method does not change the size of the current GUI.
+    fn adjust_gui_size(&mut self, size: GuiSize) -> GuiSize {
+        self.plug_main_thread.adjust_gui_size(size)
+    }
+
+    /// Set the size of the plugin's GUI. Only for embedded GUIs.
+    ///
+    /// On success, this returns the actual size the plugin resized to.
+    fn set_gui_size(&mut self, size: GuiSize) -> Result<GuiSize, Box<dyn Error>> {
+        let res = self.plug_main_thread.set_gui_size(size);
+
+        if let Ok(new_size) = &res {
+            self.save_state.gui_size = Some(*new_size);
+            self.save_state_dirty = true;
+        }
+
+        res
+    }
+
+    /// Set the absolute GUI scaling factor. This overrides any OS info.
+    ///
+    /// This should not be used if the windowing API relies upon logical pixels
+    /// (such as Cocoa on MacOS).
+    ///
+    /// If this plugin prefers to work out the scaling factor itself by querying
+    /// the OS directly, then ignore this value.
+    ///
+    /// Returns `true` if the plugin applied the scaling.
+    /// Returns `false` if the plugin could not apply the scaling, or if the
+    /// plugin ignored the request.
+    fn set_gui_scale(&mut self, scale: f64) -> bool {
+        self.plug_main_thread.set_gui_scale(scale)
+    }
+
+    /// Show the currently active GUI.
+    fn show_gui(&mut self) -> Result<(), Box<dyn Error>> {
+        self.plug_main_thread.show_gui()
+    }
+
+    /// Hide the currently active GUI.
+    ///
+    /// Note that hiding the GUI is not the same as destroying the GUI.
+    /// Hiding only hides the window content, it does not free the GUI's
+    /// resources.  Yet it may be a good idea to stop painting timers
+    /// when a plugin GUI is hidden.
+    fn hide_gui(&mut self) -> Result<(), Box<dyn Error>> {
+        self.plug_main_thread.hide_gui()
     }
 
     /// Returns `Ok(())` if the plugin can be activated right now.
@@ -369,6 +447,8 @@ impl PluginHostMainThread {
         coll_handle: &basedrop::Handle,
     ) -> Option<Shared<PluginHostProcessorWrapper>> {
         self.remove_requested = true;
+
+        self.plug_main_thread.destroy_gui();
 
         self.schedule_deactivate(coll_handle)
     }
@@ -556,7 +636,6 @@ impl PluginHostMainThread {
                     new_audio_ports_ext,
                     new_note_ports_ext,
                     internal_handle: info.internal_handle,
-                    has_gui: self.plug_main_thread.has_gui(),
                     new_latency,
                     removed_edges,
                     caused_recompile: needs_recompile,
@@ -605,8 +684,6 @@ impl PluginHostMainThread {
         if request_flags.contains(HostRequestFlags::CALLBACK) {
             log::trace!("Plugin {:?} requested the host call `on_main_thread()`", &self.id);
 
-            // The plugin has requested the host invoke its `on_main_thread()`
-            // method, so call it here.
             self.plug_main_thread.on_main_thread();
         }
 
@@ -675,11 +752,48 @@ impl PluginHostMainThread {
         {
             log::trace!("Plugin {:?} has closed its custom GUI", &self.id);
 
-            // The plugin has closed its custom GUI.
-            self.plug_main_thread
-                .on_gui_closed(request_flags.contains(HostRequestFlags::GUI_DESTROYED));
+            let was_destroyed = request_flags.contains(HostRequestFlags::GUI_DESTROYED);
 
-            events_out.push(OnIdleEvent::PluginGuiClosed { plugin_id: self.id.clone() });
+            events_out
+                .push(OnIdleEvent::PluginGuiClosed { plugin_id: self.id.clone(), was_destroyed });
+        }
+
+        if request_flags.contains(HostRequestFlags::GUI_SHOW) {
+            log::trace!("Plugin {:?} requested the host to show its GUI", &self.id);
+
+            events_out.push(OnIdleEvent::PluginRequestedToShowGui { plugin_id: self.id.clone() });
+        }
+
+        if request_flags.contains(HostRequestFlags::GUI_HIDE) {
+            log::trace!("Plugin {:?} requested the host to hide its GUI", &self.id);
+
+            events_out.push(OnIdleEvent::PluginRequestedToHideGui { plugin_id: self.id.clone() });
+        }
+
+        if request_flags.contains(HostRequestFlags::GUI_RESIZE) {
+            log::trace!("Plugin {:?} requested the host to resize its GUI", &self.id);
+
+            if let Some(size) = self.host_request_rx.fetch_gui_size_request() {
+                events_out.push(OnIdleEvent::PluginRequestedToResizeGui {
+                    plugin_id: self.id.clone(),
+                    size,
+                });
+            }
+        }
+
+        if request_flags.contains(HostRequestFlags::GUI_HINTS_CHANGED) {
+            let resize_hints = self.plug_main_thread.gui_resize_hints();
+
+            log::trace!(
+                "Plugin {:?} has changed its gui resize hints to {:?}",
+                &self.id,
+                &resize_hints
+            );
+
+            events_out.push(OnIdleEvent::PluginChangedGuiResizeHints {
+                plugin_id: self.id.clone(),
+                resize_hints,
+            });
         }
 
         if active_state == PluginActiveState::DroppedAndReadyToDeactivate {

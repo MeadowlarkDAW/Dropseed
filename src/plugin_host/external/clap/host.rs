@@ -35,12 +35,12 @@ impl<'a> Host<'a> for ClapHost {
 pub struct ClapHostMainThread<'a> {
     pub shared: &'a ClapHostShared<'a>,
     pub instance: Option<PluginMainThreadHandle<'a>>,
-    pub gui_visible: bool,
+    //pub gui_visible: bool,
 }
 
 impl<'a> ClapHostMainThread<'a> {
     pub fn new(shared: &'a ClapHostShared<'a>) -> Self {
-        Self { shared, instance: None, gui_visible: false }
+        Self { shared, instance: None }
     }
 
     pub fn param_flush(&mut self, in_events: &EventBuffer, out_events: &mut EventBuffer) {

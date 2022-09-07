@@ -1,5 +1,7 @@
 use std::fmt::Debug;
 
+use clack_extensions::gui::GuiSize;
+
 use super::ext::audio_ports::PluginAudioPortsExt;
 use super::ext::note_ports::PluginNotePortsExt;
 use crate::plugin_scanner::ScannedPluginKey;
@@ -30,6 +32,9 @@ pub struct DSPluginSaveState {
     /// former user doesn't have this plugin installed on their system.)
     pub backup_note_ports_ext: Option<PluginNotePortsExt>,
 
+    /// The latest recorded size of the plugin's GUI.
+    pub gui_size: Option<GuiSize>,
+
     /// The plugin's state/preset as raw bytes.
     ///
     /// If this is `None`, then the plugin will load its default
@@ -45,6 +50,7 @@ impl DSPluginSaveState {
             bypassed: false,
             backup_audio_ports_ext: None,
             backup_note_ports_ext: None,
+            gui_size: None,
             raw_state: None,
         }
     }
@@ -59,6 +65,7 @@ impl Debug for DSPluginSaveState {
         f.field("bypassed", &self.bypassed);
         f.field("backup_audio_ports_ext", &self.backup_audio_ports_ext);
         f.field("backup_note_ports_ext", &self.backup_note_ports_ext);
+        f.field("gui_size", &self.gui_size);
 
         if let Some(s) = &self.raw_state {
             f.field("raw_state size", &format!("{}", s.len()));
