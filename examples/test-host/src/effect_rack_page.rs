@@ -14,7 +14,11 @@ use dropseed::{
     plugin_api::plugin_scanner::ScannedPluginKey,
 };
 use egui_glow::egui_winit::egui;
+use egui_glow::egui_winit::winit;
 use fnv::FnvHashMap;
+use glutin::window::WindowId;
+use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
+use std::sync::{mpsc, Arc};
 
 use crate::ActivatedState;
 
@@ -46,6 +50,8 @@ pub struct EffectRackPluginState {
     gui_visible: bool,
     gui_resize_hints: Option<GuiResizeHints>,
 
+    embedded_window: Option<winit::window::Window>,
+
     activated: bool,
     bypassed: bool,
 
@@ -68,6 +74,7 @@ impl EffectRackPluginState {
             gui_active: false,
             gui_visible: false,
             gui_resize_hints: None,
+            embedded_window: None,
             activated: false,
             bypassed: false,
             audio_ports_ext: None,
@@ -149,25 +156,106 @@ impl EffectRackPluginState {
         }
     }
 
-    pub fn create_embedded_gui(&mut self, ds_engine: &mut DSEngineMainThread) {
+    pub fn create_embedded_gui(
+        &mut self,
+        ds_engine: &mut DSEngineMainThread,
+        event_loop: &winit::event_loop::EventLoopWindowTarget<()>,
+    ) {
+        use winit::{
+            event::{ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent},
+            event_loop::EventLoop,
+            window::Window,
+        };
+
         if self.supports_embedded_gui && !self.gui_active {
             if let Some(plugin_host) = ds_engine.plugin_host_mut(&self.plugin_id) {
                 /*
-                match plugin_host.create_new_floating_gui(None) {
-                    Ok(()) => {
+                let (spawn_window_res_tx, spawn_window_res_rx) = mpsc::channel::<Option<Arc<Window>>>();
+                let (to_window_tx, from_app_rx) = mpsc::channel::<EmbeddedWindowMsg>();
+                let (to_app_tx, from_window_rx) = mpsc::channel::<EmbeddedWindowMsg>();
+
+                std::thread::spawn(move || {
+                    let event_loop = EventLoop::new();
+
+                    match Window::new(&event_loop) {
+                        Ok(w) => {
+                            let window = Arc::new(w);
+
+                            spawn_window_res_tx.send(Some(Arc::clone(&window))).unwrap();
+
+                            event_loop.run(move |event, event_loop, control_flow| {
+                                control_flow.set_wait();
+
+                                match event {
+                                    Event::WindowEvent { event, window_id } => {
+                                        match event {
+                                            WindowEvent::CloseRequested => {
+                                                to_app_tx.send(EmbeddedWindowMsg::Close).unwrap();
+                                                control_flow.set_exit();
+                                            }
+                                            WindowEvent::Resized(size) => {
+
+                                            }
+                                            _ => (),
+                                        }
+                                    }
+                                    _ => (),
+                                }
+                            })
+                        },
+                        Err(e) => {
+                            log::error!(
+                                "Failed to create window for embedded plugin GUI: {}",
+                                e
+                            );
+
+                            spawn_window_res_tx.send(None).unwrap();
+                        }
+                    };
+                });
+
+                let new_window = if let Some(w) = spawn_window_res_rx.recv().unwrap() {
+                    w
+                } else {
+                    return;
+                };
+                */
+
+                let new_window = match winit::window::Window::new(event_loop) {
+                    Ok(w) => w,
+                    Err(e) => {
+                        log::error!("Failed to create window for embedded plugin GUI: {}", e);
+                        return;
+                    }
+                };
+
+                match plugin_host.create_new_embedded_gui(
+                    None,
+                    None,
+                    new_window.raw_window_handle(),
+                ) {
+                    Ok(info) => {
                         self.gui_active = true;
                         self.gui_visible = false;
-                        self.show_gui(ds_engine);
+
+                        new_window.set_inner_size(winit::dpi::PhysicalSize::new(
+                            info.size.width,
+                            info.size.height,
+                        ));
+                        //self.show_gui(ds_engine);
+
+                        new_window.request_redraw();
+
+                        self.embedded_window = Some(new_window);
                     }
                     Err(e) => {
                         log::error!(
-                            "Failed to create floating GUI for plugin {:?}: {}",
+                            "Failed to create embedded GUI for plugin {:?}: {}",
                             &self.plugin_id,
                             e
                         );
                     }
                 }
-                */
             }
         }
     }
@@ -198,10 +286,14 @@ impl EffectRackPluginState {
         }
     }
 
-    pub fn on_plugin_gui_closed(&mut self, was_destroyed: bool) {
+    pub fn on_plugin_gui_closed(
+        &mut self,
+        was_destroyed: bool,
+        ds_engine: &mut DSEngineMainThread,
+    ) {
         self.gui_visible = false;
         if was_destroyed {
-            self.gui_active = false;
+            self.destroy_gui(ds_engine)
         }
     }
 
@@ -237,6 +329,10 @@ impl EffectRackPluginState {
                 plugin_host.destroy_gui();
             }
         }
+
+        self.embedded_window = None;
+        self.gui_active = false;
+        self.gui_visible = false;
     }
 
     pub fn resize_hints_changed(&mut self, resize_hints: Option<GuiResizeHints>) {
@@ -247,6 +343,16 @@ impl EffectRackPluginState {
         if self.bypassed != bypassed {
             self.bypassed = bypassed;
             ds_engine.plugin_host_mut(&self.plugin_id).unwrap().set_bypassed(bypassed);
+        }
+    }
+
+    pub fn embedded_window_id(&self) -> Option<winit::window::WindowId> {
+        self.embedded_window.as_ref().map(|w| w.id())
+    }
+
+    pub fn refresh_embedded_window(&mut self) {
+        if let Some(window) = &self.embedded_window {
+            window.request_redraw();
         }
     }
 }
@@ -275,6 +381,10 @@ impl EffectRackState {
     }
     */
 
+    pub fn plugins_mut(&mut self) -> impl IntoIterator<Item = &mut EffectRackPluginState> {
+        self.plugins.iter_mut()
+    }
+
     pub fn plugin_mut(
         &mut self,
         plugin_id: &PluginInstanceID,
@@ -284,6 +394,22 @@ impl EffectRackState {
             if &p.plugin_id == plugin_id {
                 found = Some(p);
                 break;
+            }
+        }
+        found
+    }
+
+    pub fn plugin_mut_from_embedded_window_id(
+        &mut self,
+        window_id: WindowId,
+    ) -> Option<&mut EffectRackPluginState> {
+        let mut found = None;
+        for p in self.plugins.iter_mut() {
+            if let Some(window) = &p.embedded_window {
+                if window.id() == window_id {
+                    found = Some(p);
+                    break;
+                }
             }
         }
         found
@@ -387,6 +513,7 @@ pub(crate) fn show(
     ds_engine: &mut DSEngineMainThread,
     activated_state: Option<&mut ActivatedState>,
     ui: &mut egui::Ui,
+    event_loop: &winit::event_loop::EventLoopWindowTarget<()>,
 ) {
     if let Some(activated_state) = activated_state {
         let ActivatedState { effect_rack_state, scanned_plugin_list, engine_info, .. } =
@@ -430,7 +557,7 @@ pub(crate) fn show(
 
         let mut plugins_to_remove: Vec<PluginInstanceID> = Vec::new();
         for (plugin_i, plugin) in effect_rack_state.plugins.iter_mut().enumerate() {
-            if show_effect_rack_plugin(ui, plugin_i, plugin, ds_engine) {
+            if show_effect_rack_plugin(ui, plugin_i, plugin, ds_engine, event_loop) {
                 plugins_to_remove.push(plugin.plugin_id.clone());
             }
         }
@@ -448,6 +575,7 @@ fn show_effect_rack_plugin(
     plugin_i: usize,
     plugin: &mut EffectRackPluginState,
     ds_engine: &mut DSEngineMainThread,
+    event_loop: &winit::event_loop::EventLoopWindowTarget<()>,
 ) -> bool {
     let mut remove = false;
 
@@ -504,7 +632,7 @@ fn show_effect_rack_plugin(
                             }
                             if plugin.supports_embedded_gui {
                                 if ui.button("create embedded gui").clicked() {
-                                    plugin.create_embedded_gui(ds_engine);
+                                    plugin.create_embedded_gui(ds_engine, event_loop);
                                 }
                             }
                         }

@@ -9,7 +9,9 @@ use dropseed::engine::{
 use dropseed::plugin_api::HostInfo;
 use dropseed::plugin_scanner::ScannedPluginInfo;
 use egui_glow::egui_winit::egui;
+use egui_glow::egui_winit::winit;
 use fern::colors::ColoredLevelConfig;
+use glutin::window::WindowId;
 use log::LevelFilter;
 use meadowlark_core_types::time::SampleRate;
 use std::sync::Arc;
@@ -283,7 +285,7 @@ impl DSTestHostGUI {
                         .effect_rack_state
                         .plugin_mut(&plugin_id)
                     {
-                        plugin.on_plugin_gui_closed(was_destroyed);
+                        plugin.on_plugin_gui_closed(was_destroyed, &mut self.ds_engine);
                     }
                 }
 
@@ -368,7 +370,11 @@ impl DSTestHostGUI {
         self.ds_engine.collect_garbage();
     }
 
-    fn update(&mut self, ctx: &egui::Context) {
+    fn update(
+        &mut self,
+        ctx: &egui::Context,
+        event_loop: &winit::event_loop::EventLoopWindowTarget<()>,
+    ) {
         self.on_idle();
 
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
@@ -415,11 +421,40 @@ impl DSTestHostGUI {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| match self.current_tab {
-            Tab::EffectRack => {
-                effect_rack_page::show(&mut self.ds_engine, self.activated_state.as_mut(), ui)
-            }
+            Tab::EffectRack => effect_rack_page::show(
+                &mut self.ds_engine,
+                self.activated_state.as_mut(),
+                ui,
+                event_loop,
+            ),
             Tab::ScannedPlugins => scanned_plugins_page::show(self, ui),
         });
+    }
+
+    fn on_plugin_window_closed(&mut self, window_id: WindowId) {
+        if self.activated_state.is_none() {
+            return;
+        }
+
+        if let Some(plugin) = self
+            .activated_state
+            .as_mut()
+            .unwrap()
+            .effect_rack_state
+            .plugin_mut_from_embedded_window_id(window_id)
+        {
+            plugin.on_plugin_gui_closed(true, &mut self.ds_engine);
+        }
+    }
+
+    fn refresh_plugin_windows(&mut self) {
+        if self.activated_state.is_none() {
+            return;
+        }
+
+        for plugin in self.activated_state.as_mut().unwrap().effect_rack_state.plugins_mut() {
+            plugin.refresh_embedded_window();
+        }
     }
 
     fn on_exit(&mut self) {
@@ -473,10 +508,12 @@ fn run_ui_event_loop(
     mut egui_glow: egui_glow::EguiGlow,
     mut app: DSTestHostGUI,
 ) {
-    event_loop.run(move |event, _, control_flow| {
+    let main_window_id = gl_window.window().id();
+
+    event_loop.run(move |event, event_loop, control_flow| {
         let mut redraw = || {
             let repaint_after = egui_glow.run(gl_window.window(), |egui_ctx| {
-                app.update(egui_ctx);
+                app.update(egui_ctx, event_loop);
             });
 
             if repaint_after.is_zero() {
@@ -511,28 +548,39 @@ fn run_ui_event_loop(
             // Platform-dependent event handlers to workaround a winit bug
             // See: https://github.com/rust-windowing/winit/issues/987
             // See: https://github.com/rust-windowing/winit/issues/1619
-            glutin::event::Event::RedrawEventsCleared if cfg!(windows) => redraw(),
-            glutin::event::Event::RedrawRequested(_) if !cfg!(windows) => redraw(),
+            //glutin::event::Event::RedrawEventsCleared if cfg!(windows) => redraw(),
+            glutin::event::Event::RedrawRequested(window_id) => {
+                if window_id == main_window_id {
+                    redraw()
+                }
+            }
 
-            glutin::event::Event::WindowEvent { event, .. } => {
+            glutin::event::Event::WindowEvent { window_id, event } => {
                 use glutin::event::WindowEvent;
-                if matches!(event, WindowEvent::CloseRequested | WindowEvent::Destroyed) {
-                    *control_flow = glutin::event_loop::ControlFlow::Exit;
+
+                if window_id == main_window_id {
+                    if matches!(event, WindowEvent::CloseRequested | WindowEvent::Destroyed) {
+                        *control_flow = glutin::event_loop::ControlFlow::Exit;
+                    }
+
+                    if let glutin::event::WindowEvent::Resized(physical_size) = &event {
+                        gl_window.resize(*physical_size);
+                    } else if let glutin::event::WindowEvent::ScaleFactorChanged {
+                        new_inner_size,
+                        ..
+                    } = &event
+                    {
+                        gl_window.resize(**new_inner_size);
+                    }
+
+                    egui_glow.on_event(&event);
+
+                    gl_window.window().request_redraw();
+                } else {
+                    if matches!(event, WindowEvent::CloseRequested | WindowEvent::Destroyed) {
+                        app.on_plugin_window_closed(window_id);
+                    }
                 }
-
-                if let glutin::event::WindowEvent::Resized(physical_size) = &event {
-                    gl_window.resize(*physical_size);
-                } else if let glutin::event::WindowEvent::ScaleFactorChanged {
-                    new_inner_size,
-                    ..
-                } = &event
-                {
-                    gl_window.resize(**new_inner_size);
-                }
-
-                egui_glow.on_event(&event);
-
-                gl_window.window().request_redraw();
             }
             glutin::event::Event::LoopDestroyed => {
                 app.on_exit();
@@ -542,6 +590,7 @@ fn run_ui_event_loop(
                 ..
             }) => {
                 gl_window.window().request_redraw();
+                app.refresh_plugin_windows();
             }
 
             _ => (),

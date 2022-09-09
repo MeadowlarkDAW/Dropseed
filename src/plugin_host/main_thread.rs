@@ -48,6 +48,10 @@ pub struct PluginHostMainThread {
     gesturing_params: FnvHashMap<ParamID, bool>,
     latency: i64,
     is_loaded: bool,
+    gui_active: bool,
+    gui_visible: bool,
+    supports_floating_gui: bool,
+    supports_embedded_gui: bool,
 
     num_audio_in_channels: usize,
     num_audio_out_channels: usize,
@@ -97,6 +101,9 @@ impl PluginHostMainThread {
 
         let bypassed = save_state.bypassed;
 
+        let supports_floating_gui = plug_main_thread.supports_gui(true);
+        let supports_embedded_gui = plug_main_thread.supports_gui(false);
+
         Self {
             id,
             plug_main_thread,
@@ -109,6 +116,10 @@ impl PluginHostMainThread {
             gesturing_params: FnvHashMap::default(),
             latency: 0,
             is_loaded: plugin_loaded,
+            gui_active: false,
+            gui_visible: false,
+            supports_floating_gui,
+            supports_embedded_gui,
             num_audio_in_channels,
             num_audio_out_channels,
             host_request_rx,
@@ -261,13 +272,16 @@ impl PluginHostMainThread {
         self.plug_main_thread.param_text_to_value(param_id, text_input)
     }
 
-    /// If `floating` is `true`, then this returns whether or not this plugin instance supports
-    /// creating a custom GUI in a floating window that the plugin manages itself.
-    ///
-    /// If `floating` is `false`, then this returns whether or not this plugin instance supports
-    /// embedding a custom GUI into a window managed by the host.
-    pub fn supports_gui(&self, floating: bool) -> bool {
-        self.plug_main_thread.supports_gui(floating)
+    /// Returns whether or not this plugin instance supports creating a
+    /// custom GUI in a floating window that the plugin manages itself.
+    pub fn supports_floating_gui(&self) -> bool {
+        self.supports_floating_gui
+    }
+
+    /// Returns whether or not this plugin instance supports embedding
+    /// a custom GUI into a window managed by the host.
+    pub fn supports_embedded_gui(&self) -> bool {
+        self.supports_embedded_gui
     }
 
     /// Create a new floating GUI in a window managed by the plugin itself.
@@ -275,7 +289,31 @@ impl PluginHostMainThread {
         &mut self,
         suggested_title: Option<&str>,
     ) -> Result<(), Box<dyn Error>> {
-        self.plug_main_thread.create_new_floating_gui(suggested_title)
+        if self.gui_active {
+            return Err(
+                "Could not create new embedded GUI for plugin: plugin GUI is already active".into(),
+            );
+        }
+        if self.remove_requested {
+            return Err(
+                "Ignored request to create new plugin GUI: plugin is scheduled to be removed"
+                    .into(),
+            );
+        }
+        if !self.supports_floating_gui {
+            return Err(
+                "Could not create new floating GUI for plugin: plugin does not support floating GUIs".into(),
+            );
+        }
+
+        let res = self.plug_main_thread.create_new_floating_gui(suggested_title);
+
+        if let Ok(_) = &res {
+            self.gui_active = true;
+            self.gui_visible = false;
+        }
+
+        res
     }
 
     /// Create a new embedded GUI in a window managed by the host.
@@ -297,18 +335,55 @@ impl PluginHostMainThread {
         size: Option<GuiSize>,
         parent_window: RawWindowHandle,
     ) -> Result<EmbeddedGuiInfo, Box<dyn Error>> {
-        self.plug_main_thread.create_new_embedded_gui(scale, size, parent_window)
+        if self.gui_active {
+            return Err(
+                "Could not create new embedded GUI for plugin: plugin GUI is already active".into(),
+            );
+        }
+        if self.remove_requested {
+            return Err(
+                "Ignored request to create new plugin GUI: plugin is scheduled to be removed"
+                    .into(),
+            );
+        }
+        if !self.supports_embedded_gui {
+            return Err(
+                "Could not create new embedded GUI for plugin: plugin does not support embedded GUIs".into(),
+            );
+        }
+
+        let res = self.plug_main_thread.create_new_embedded_gui(scale, size, parent_window);
+
+        if let Ok(_) = &res {
+            self.gui_active = true;
+            self.gui_visible = false;
+        }
+
+        res
     }
 
     /// Destroy the currently active GUI.
     pub fn destroy_gui(&mut self) {
-        self.plug_main_thread.destroy_gui();
+        if self.gui_active {
+            self.plug_main_thread.destroy_gui();
+            self.gui_active = false;
+            self.gui_visible = false;
+        } else {
+            log::warn!("Ignored request to destroy plugin GUI: plugin has no active GUI");
+        }
     }
 
     /// Information provided by the plugin to improve window resizing when initiated
     /// by the host or window manager. Only for plugins with resizable GUIs.
     pub fn gui_resize_hints(&self) -> Option<GuiResizeHints> {
-        self.plug_main_thread.gui_resize_hints()
+        if self.gui_active {
+            self.plug_main_thread.gui_resize_hints()
+        } else {
+            log::warn!(
+                "Called `PluginHostMainThread::gui_resize_hints()` on plugin with no active GUI"
+            );
+            None
+        }
     }
 
     /// If the plugin gui is resizable, then the plugin will calculate the closest
@@ -319,11 +394,22 @@ impl PluginHostMainThread {
     /// If the plugin does not support changing the size of its GUI, then this
     /// will return `None`.
     pub fn adjust_gui_size(&mut self, size: GuiSize) -> Option<GuiSize> {
-        self.plug_main_thread.adjust_gui_size(size)
+        if self.gui_active {
+            self.plug_main_thread.adjust_gui_size(size)
+        } else {
+            log::warn!(
+                "Called `PluginHostMainThread::adjust_gui_size()` on plugin with no active GUI"
+            );
+            None
+        }
     }
 
     /// Set the size of the plugin's GUI. Only for embedded GUIs.
     pub fn set_gui_size(&mut self, size: GuiSize) -> Result<(), Box<dyn Error>> {
+        if !self.gui_active {
+            return Err("Could not set GUI size for plugin: plugin has no active GUI".into());
+        }
+
         let res = self.plug_main_thread.set_gui_size(size);
 
         if res.is_ok() {
@@ -346,12 +432,25 @@ impl PluginHostMainThread {
     /// Returns `false` if the plugin could not apply the scaling, or if the
     /// plugin ignored the request.
     pub fn set_gui_scale(&mut self, scale: f64) -> bool {
-        self.plug_main_thread.set_gui_scale(scale)
+        if self.gui_active {
+            self.plug_main_thread.set_gui_scale(scale)
+        } else {
+            log::warn!(
+                "Called `PluginHostMainThread::set_gui_scale()` on plugin with no active GUI"
+            );
+            false
+        }
     }
 
     /// Show the currently active GUI.
     pub fn show_gui(&mut self) -> Result<(), Box<dyn Error>> {
-        self.plug_main_thread.show_gui()
+        if !self.gui_active {
+            return Err("Could not show plugin GUI: plugin has no active GUI".into());
+        }
+
+        let res = self.plug_main_thread.show_gui();
+        self.gui_visible = res.is_ok();
+        res
     }
 
     /// Hide the currently active GUI.
@@ -361,7 +460,24 @@ impl PluginHostMainThread {
     /// resources.  Yet it may be a good idea to stop painting timers
     /// when a plugin GUI is hidden.
     pub fn hide_gui(&mut self) -> Result<(), Box<dyn Error>> {
-        self.plug_main_thread.hide_gui()
+        if !self.gui_active {
+            return Err("Could not hide plugin GUI: plugin has no active GUI".into());
+        }
+
+        let res = self.plug_main_thread.hide_gui();
+        self.gui_visible = !res.is_ok();
+        res
+    }
+
+    /// Returns `true` if the plugin currently has an actively loaded GUI.
+    pub fn is_gui_active(&self) -> bool {
+        self.gui_active
+    }
+
+    /// Returns `true` if the plugin currently has an actively loaded GUI
+    /// that is visible.
+    pub fn is_gui_visible(&self) -> bool {
+        self.gui_visible
     }
 
     /// Returns `Ok(())` if the plugin can be activated right now.
@@ -451,7 +567,9 @@ impl PluginHostMainThread {
     ) -> Option<Shared<PluginHostProcessorWrapper>> {
         self.remove_requested = true;
 
-        self.plug_main_thread.destroy_gui();
+        if self.gui_active {
+            self.plug_main_thread.destroy_gui();
+        }
 
         self.schedule_deactivate(coll_handle)
     }
@@ -764,7 +882,9 @@ impl PluginHostMainThread {
                 if was_destroyed {
                     // As per the spec, we must call `destroy()` to acknowledge the GUI
                     // destruction.
-                    self.plug_main_thread.destroy_gui();
+                    if self.gui_active {
+                        self.plug_main_thread.destroy_gui();
+                    }
                 }
 
                 events_out.push(OnIdleEvent::PluginGuiClosed {

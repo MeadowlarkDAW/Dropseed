@@ -217,8 +217,8 @@ impl AudioGraph {
             }
         }
 
-        let supports_floating_gui = res.plugin_host.supports_gui(true);
-        let supports_embedded_gui = res.plugin_host.supports_gui(false);
+        let supports_floating_gui = res.plugin_host.supports_floating_gui();
+        let supports_embedded_gui = res.plugin_host.supports_embedded_gui();
 
         if self.shared_pools.plugin_hosts.insert(plugin_id.clone(), res.plugin_host).is_some() {
             panic!("Something went wrong when allocating a new slot for a plugin");
