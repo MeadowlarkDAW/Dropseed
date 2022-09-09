@@ -325,6 +325,11 @@ pub trait PluginMainThread {
     fn hide_gui(&mut self) -> Result<(), Box<dyn Error>> {
         Err("Plugin does not support a custom GUI".into())
     }
+
+    // --- Timer -------------------------------------------------------------------------------
+
+    #[allow(unused)]
+    fn on_timer(&mut self, timer_id: u32) {}
 }
 
 pub struct PluginActivatedInfo {

@@ -1,13 +1,13 @@
 pub mod automation;
 pub mod buffer;
 pub mod ext;
+pub mod host_request_channel;
 pub mod plugin_scanner;
 pub mod transport;
 
 mod descriptor;
 mod factory;
 mod host_info;
-mod host_request_channel;
 mod instance_id;
 mod main_thread;
 mod process_info;

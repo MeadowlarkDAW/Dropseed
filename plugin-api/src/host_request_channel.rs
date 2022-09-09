@@ -2,6 +2,7 @@ use bitflags::bitflags;
 use clack_extensions::gui::GuiSize;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::Mutex;
 
 bitflags! {
     /// A bitmask of all possible requests to make to the Host's main thread.
@@ -49,6 +50,8 @@ bitflags! {
         /// (Note that when a parameter value changes, it is implicit that
         /// the state is dirty and no there is no need to set this flag.)
         const MARK_DIRTY = 1 << 13;
+
+        const TIMER_REQUEST = 1 << 14;
     }
 }
 
@@ -64,12 +67,18 @@ bitflags! {
 /// have its own channel.
 pub struct HostRequestChannelReceiver {
     contents: Arc<HostChannelContents>,
+    requested_timers: Arc<Mutex<Vec<HostTimerRequest>>>,
 }
 
 impl HostRequestChannelReceiver {
-    pub fn new_channel() -> (Self, HostRequestChannelSender) {
+    pub fn new_channel(main_thread_id: std::thread::ThreadId) -> (Self, HostRequestChannelSender) {
         let contents = Arc::new(HostChannelContents::default());
-        (Self { contents: contents.clone() }, HostRequestChannelSender { contents })
+        let requested_timers = Arc::new(Mutex::new(Vec::new()));
+
+        (
+            Self { contents: contents.clone(), requested_timers: Arc::clone(&requested_timers) },
+            HostRequestChannelSender { contents, requested_timers, main_thread_id },
+        )
     }
 
     /// Returns all the requests that have been made to the channel since the last call to [`fetch_requests`].
@@ -98,6 +107,19 @@ impl HostRequestChannelReceiver {
             size => Some(size),
         }
     }
+
+    pub fn fetch_timer_requests(&mut self) -> Vec<HostTimerRequest> {
+        let mut v = Vec::new();
+
+        // Using a mutex here is realtime-safe because this is only used in the main
+        // thread.
+        let mut requested_timers = self.requested_timers.lock().unwrap();
+        if !requested_timers.is_empty() {
+            std::mem::swap(&mut *requested_timers, &mut v)
+        }
+
+        v
+    }
 }
 
 /// The sender end of the Host Request Channel.
@@ -109,18 +131,46 @@ impl HostRequestChannelReceiver {
 #[derive(Clone)]
 pub struct HostRequestChannelSender {
     contents: Arc<HostChannelContents>,
+    requested_timers: Arc<Mutex<Vec<HostTimerRequest>>>,
+    main_thread_id: std::thread::ThreadId,
 }
 
 impl HostRequestChannelSender {
-    #[inline]
     pub fn request(&self, flags: HostRequestFlags) {
         self.contents.request_flags.fetch_or(flags.bits, Ordering::SeqCst);
     }
 
-    #[inline]
     pub fn request_gui_resize(&self, new_size: GuiSize) {
         self.contents.last_gui_size_requested.store(new_size.to_u64(), Ordering::SeqCst);
         self.request(HostRequestFlags::GUI_RESIZE)
+    }
+
+    /// Request the host to register a timer for this plugin.
+    ///
+    /// This can only be called on the main thread.
+    pub fn register_timer(&mut self, period_ms: u32, timer_id: u32) {
+        if std::thread::current().id() == self.main_thread_id {
+            // Using a mutex here is realtime-safe because we only allow this mutex
+            // to be used in the main thread.
+            let mut requested_timers = self.requested_timers.lock().unwrap();
+            requested_timers.push(HostTimerRequest { timer_id, period_ms, register: true });
+
+            self.request(HostRequestFlags::TIMER_REQUEST);
+        }
+    }
+
+    /// Request the host to unregister a timer for this plugin.
+    ///
+    /// This can only be called on the main thread.
+    pub fn unregister_timer(&mut self, timer_id: u32) {
+        // Using a mutex here is realtime-safe because we only allow this mutex
+        // to be used in the main thread.
+        if std::thread::current().id() == self.main_thread_id {
+            let mut requested_timers = self.requested_timers.lock().unwrap();
+            requested_timers.push(HostTimerRequest { timer_id, period_ms: 0, register: false });
+
+            self.request(HostRequestFlags::TIMER_REQUEST);
+        }
     }
 }
 
@@ -138,4 +188,13 @@ impl Default for HostChannelContents {
             ),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HostTimerRequest {
+    pub timer_id: u32,
+    pub period_ms: u32,
+
+    /// `true` = register, `false` = unregister
+    pub register: bool,
 }

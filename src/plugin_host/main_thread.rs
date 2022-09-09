@@ -4,6 +4,7 @@ use dropseed_plugin_api::ext::audio_ports::PluginAudioPortsExt;
 use dropseed_plugin_api::ext::gui::{EmbeddedGuiInfo, GuiResizeHints, GuiSize};
 use dropseed_plugin_api::ext::note_ports::PluginNotePortsExt;
 use dropseed_plugin_api::ext::params::{ParamID, ParamInfo, ParamInfoFlags};
+use dropseed_plugin_api::host_request_channel::HostTimerRequest;
 use dropseed_plugin_api::transport::TempoMap;
 use dropseed_plugin_api::{
     DSPluginSaveState, HostRequestChannelReceiver, HostRequestFlags, PluginInstanceID,
@@ -969,6 +970,13 @@ impl PluginHostMainThread {
                     };
 
                     return (res, modified_params, processor_to_drop);
+                }
+            }
+
+            if request_flags.contains(HostRequestFlags::TIMER_REQUEST) {
+                let timer_requests = self.host_request_rx.fetch_timer_requests();
+                for req in timer_requests.iter() {
+                    // TODO
                 }
             }
         }
