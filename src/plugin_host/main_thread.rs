@@ -266,12 +266,12 @@ impl PluginHostMainThread {
     ///
     /// If `floating` is `false`, then this returns whether or not this plugin instance supports
     /// embedding a custom GUI into a window managed by the host.
-    fn supports_gui(&self, floating: bool) -> bool {
+    pub fn supports_gui(&self, floating: bool) -> bool {
         self.plug_main_thread.supports_gui(floating)
     }
 
     /// Create a new floating GUI in a window managed by the plugin itself.
-    fn create_new_floating_gui(
+    pub fn create_new_floating_gui(
         &mut self,
         suggested_title: Option<&str>,
     ) -> Result<(), Box<dyn Error>> {
@@ -291,7 +291,7 @@ impl PluginHostMainThread {
     ///     * If the plugin's GUI is not resizable, then this will be ignored.
     /// * `parent_window` - The `RawWindowHandle` of the window that the GUI should be
     /// embedded into.
-    fn create_new_embedded_gui(
+    pub fn create_new_embedded_gui(
         &mut self,
         scale: Option<f64>,
         size: Option<GuiSize>,
@@ -301,11 +301,13 @@ impl PluginHostMainThread {
     }
 
     /// Destroy the currently active GUI.
-    fn destroy_gui(&mut self) {
+    pub fn destroy_gui(&mut self) {
         self.plug_main_thread.destroy_gui();
     }
 
-    fn gui_resize_hints(&self) -> Option<GuiResizeHints> {
+    /// Information provided by the plugin to improve window resizing when initiated
+    /// by the host or window manager. Only for plugins with resizable GUIs.
+    pub fn gui_resize_hints(&self) -> Option<GuiResizeHints> {
         self.plug_main_thread.gui_resize_hints()
     }
 
@@ -313,18 +315,19 @@ impl PluginHostMainThread {
     /// usable size which fits in the given size. Only for embedded GUIs.
     ///
     /// This method does not change the size of the current GUI.
-    fn adjust_gui_size(&mut self, size: GuiSize) -> GuiSize {
+    ///
+    /// If the plugin does not support changing the size of its GUI, then this
+    /// will return `None`.
+    pub fn adjust_gui_size(&mut self, size: GuiSize) -> Option<GuiSize> {
         self.plug_main_thread.adjust_gui_size(size)
     }
 
     /// Set the size of the plugin's GUI. Only for embedded GUIs.
-    ///
-    /// On success, this returns the actual size the plugin resized to.
-    fn set_gui_size(&mut self, size: GuiSize) -> Result<GuiSize, Box<dyn Error>> {
+    pub fn set_gui_size(&mut self, size: GuiSize) -> Result<(), Box<dyn Error>> {
         let res = self.plug_main_thread.set_gui_size(size);
 
-        if let Ok(new_size) = &res {
-            self.save_state.gui_size = Some(*new_size);
+        if res.is_ok() {
+            self.save_state.gui_size = Some(size);
             self.save_state_dirty = true;
         }
 
@@ -342,12 +345,12 @@ impl PluginHostMainThread {
     /// Returns `true` if the plugin applied the scaling.
     /// Returns `false` if the plugin could not apply the scaling, or if the
     /// plugin ignored the request.
-    fn set_gui_scale(&mut self, scale: f64) -> bool {
+    pub fn set_gui_scale(&mut self, scale: f64) -> bool {
         self.plug_main_thread.set_gui_scale(scale)
     }
 
     /// Show the currently active GUI.
-    fn show_gui(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn show_gui(&mut self) -> Result<(), Box<dyn Error>> {
         self.plug_main_thread.show_gui()
     }
 
@@ -357,7 +360,7 @@ impl PluginHostMainThread {
     /// Hiding only hides the window content, it does not free the GUI's
     /// resources.  Yet it may be a good idea to stop painting timers
     /// when a plugin GUI is hidden.
-    fn hide_gui(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn hide_gui(&mut self) -> Result<(), Box<dyn Error>> {
         self.plug_main_thread.hide_gui()
     }
 
@@ -673,28 +676,6 @@ impl PluginHostMainThread {
         let request_flags = self.host_request_rx.fetch_requests();
         let mut active_state = self.channel.shared_state.get_active_state();
 
-        if request_flags.contains(HostRequestFlags::MARK_DIRTY) {
-            log::trace!("Plugin {:?} manually marked its state as dirty", &self.id);
-
-            // The plugin has manually changed its save state, so mark the state
-            // as dirty so it can be collected later.
-            self.save_state_dirty = true;
-        }
-
-        if request_flags.contains(HostRequestFlags::CALLBACK) {
-            log::trace!("Plugin {:?} requested the host call `on_main_thread()`", &self.id);
-
-            self.plug_main_thread.on_main_thread();
-        }
-
-        if request_flags.contains(HostRequestFlags::RESCAN_PARAMS) {
-            log::debug!("Plugin {:?} requested the host rescan its parameters", &self.id);
-
-            // The plugin has requested the host to rescan its list of parameters.
-
-            // TODO
-        }
-
         // Poll for parameter updates from the plugin host's processor.
         if let Some(params_queue) = &mut self.channel.param_queues {
             params_queue.from_proc_param_value_rx.consume(|param_id, new_value| {
@@ -722,78 +703,154 @@ impl PluginHostMainThread {
             });
         }
 
-        if request_flags.intersects(HostRequestFlags::RESTART | HostRequestFlags::RESCAN_PORTS) {
-            if request_flags.contains(HostRequestFlags::RESTART) {
-                log::debug!("Plugin {:?} requested the host to restart the plugin", &self.id);
+        // More often than not, these flags will be empty. So optimize by only checking
+        // individual flags when necessary.
+        if !request_flags.is_empty() {
+            if request_flags.contains(HostRequestFlags::MARK_DIRTY) {
+                log::trace!("Plugin {:?} manually marked its state as dirty", &self.id);
+
+                // The plugin has manually changed its save state, so mark the state
+                // as dirty so it can be collected later.
+                self.save_state_dirty = true;
             }
-            if request_flags.contains(HostRequestFlags::RESCAN_PORTS) {
-                log::debug!(
-                    "Plugin {:?} requested the host to rescan its audio and/or note ports",
-                    &self.id
-                );
+
+            if request_flags.contains(HostRequestFlags::CALLBACK) {
+                log::trace!("Plugin {:?} requested the host call `on_main_thread()`", &self.id);
+
+                self.plug_main_thread.on_main_thread();
             }
 
-            // The plugin has requested the host to restart the plugin (or rescan its
-            // audio and/or note ports).
-            //
-            // We just do a full restart and rescan for all "rescan port" requests for
-            // simplicity. I don't expect plugins to change the state of their ports
-            // often anyway.
+            if request_flags.contains(HostRequestFlags::RESCAN_PARAMS) {
+                log::debug!("Plugin {:?} requested the host rescan its parameters", &self.id);
 
-            self.restarting = true;
-            processor_to_drop = self.schedule_deactivate(coll_handle);
+                // The plugin has requested the host to rescan its list of parameters.
 
-            if active_state == PluginActiveState::Active {
-                active_state = PluginActiveState::WaitingToDrop;
+                // TODO
             }
-        }
 
-        if request_flags.intersects(HostRequestFlags::GUI_CLOSED | HostRequestFlags::GUI_DESTROYED)
-        {
-            log::trace!("Plugin {:?} has closed its custom GUI", &self.id);
+            if request_flags.intersects(HostRequestFlags::RESTART | HostRequestFlags::RESCAN_PORTS)
+            {
+                if request_flags.contains(HostRequestFlags::RESTART) {
+                    log::debug!("Plugin {:?} requested the host to restart the plugin", &self.id);
+                }
+                if request_flags.contains(HostRequestFlags::RESCAN_PORTS) {
+                    log::debug!(
+                        "Plugin {:?} requested the host to rescan its audio and/or note ports",
+                        &self.id
+                    );
+                }
 
-            let was_destroyed = request_flags.contains(HostRequestFlags::GUI_DESTROYED);
+                // The plugin has requested the host to restart the plugin (or rescan its
+                // audio and/or note ports).
+                //
+                // We just do a full restart and rescan for all "rescan port" requests for
+                // simplicity. I don't expect plugins to change the state of their ports
+                // often anyway.
 
-            events_out
-                .push(OnIdleEvent::PluginGuiClosed { plugin_id: self.id.clone(), was_destroyed });
-        }
+                self.restarting = true;
+                processor_to_drop = self.schedule_deactivate(coll_handle);
 
-        if request_flags.contains(HostRequestFlags::GUI_SHOW) {
-            log::trace!("Plugin {:?} requested the host to show its GUI", &self.id);
+                if active_state == PluginActiveState::Active {
+                    active_state = PluginActiveState::WaitingToDrop;
+                }
+            }
 
-            events_out.push(OnIdleEvent::PluginRequestedToShowGui { plugin_id: self.id.clone() });
-        }
+            if request_flags
+                .intersects(HostRequestFlags::GUI_CLOSED | HostRequestFlags::GUI_DESTROYED)
+            {
+                log::trace!("Plugin {:?} has closed its custom GUI", &self.id);
 
-        if request_flags.contains(HostRequestFlags::GUI_HIDE) {
-            log::trace!("Plugin {:?} requested the host to hide its GUI", &self.id);
+                let was_destroyed = request_flags.contains(HostRequestFlags::GUI_DESTROYED);
+                if was_destroyed {
+                    // As per the spec, we must call `destroy()` to acknowledge the GUI
+                    // destruction.
+                    self.plug_main_thread.destroy_gui();
+                }
 
-            events_out.push(OnIdleEvent::PluginRequestedToHideGui { plugin_id: self.id.clone() });
-        }
-
-        if request_flags.contains(HostRequestFlags::GUI_RESIZE) {
-            log::trace!("Plugin {:?} requested the host to resize its GUI", &self.id);
-
-            if let Some(size) = self.host_request_rx.fetch_gui_size_request() {
-                events_out.push(OnIdleEvent::PluginRequestedToResizeGui {
+                events_out.push(OnIdleEvent::PluginGuiClosed {
                     plugin_id: self.id.clone(),
-                    size,
+                    was_destroyed,
                 });
             }
-        }
 
-        if request_flags.contains(HostRequestFlags::GUI_HINTS_CHANGED) {
-            let resize_hints = self.plug_main_thread.gui_resize_hints();
+            if request_flags.contains(HostRequestFlags::GUI_SHOW) {
+                log::trace!("Plugin {:?} requested the host to show its GUI", &self.id);
 
-            log::trace!(
-                "Plugin {:?} has changed its gui resize hints to {:?}",
-                &self.id,
-                &resize_hints
-            );
+                events_out
+                    .push(OnIdleEvent::PluginRequestedToShowGui { plugin_id: self.id.clone() });
+            }
 
-            events_out.push(OnIdleEvent::PluginChangedGuiResizeHints {
-                plugin_id: self.id.clone(),
-                resize_hints,
-            });
+            if request_flags.contains(HostRequestFlags::GUI_HIDE) {
+                log::trace!("Plugin {:?} requested the host to hide its GUI", &self.id);
+
+                events_out
+                    .push(OnIdleEvent::PluginRequestedToHideGui { plugin_id: self.id.clone() });
+            }
+
+            if request_flags.contains(HostRequestFlags::GUI_RESIZE) {
+                log::trace!("Plugin {:?} requested the host to resize its GUI", &self.id);
+
+                if let Some(size) = self.host_request_rx.fetch_gui_size_request() {
+                    events_out.push(OnIdleEvent::PluginRequestedToResizeGui {
+                        plugin_id: self.id.clone(),
+                        size,
+                    });
+                }
+            }
+
+            if request_flags.contains(HostRequestFlags::GUI_HINTS_CHANGED) {
+                let resize_hints = self.plug_main_thread.gui_resize_hints();
+
+                log::trace!(
+                    "Plugin {:?} has changed its gui resize hints to {:?}",
+                    &self.id,
+                    &resize_hints
+                );
+
+                events_out.push(OnIdleEvent::PluginChangedGuiResizeHints {
+                    plugin_id: self.id.clone(),
+                    resize_hints,
+                });
+            }
+
+            if request_flags.contains(HostRequestFlags::PROCESS)
+                && !self.remove_requested
+                && !self.restarting
+                && active_state != PluginActiveState::DroppedAndReadyToDeactivate
+            {
+                log::trace!(
+                    "Plugin {:?} requested the host to start processing the plugin",
+                    &self.id
+                );
+
+                // The plugin has requested the host to start processing this plugin.
+
+                if active_state == PluginActiveState::Active {
+                    self.channel.shared_state.set_process_requested();
+                } else if active_state == PluginActiveState::Inactive
+                    || active_state == PluginActiveState::InactiveWithError
+                {
+                    let res = match self.activate(
+                        sample_rate,
+                        min_frames,
+                        max_frames,
+                        graph_helper,
+                        edge_id_to_ds_edge_id,
+                        thread_ids.clone(),
+                        schedule_version,
+                        coll_handle,
+                    ) {
+                        Ok(r) => {
+                            self.save_state_dirty = true;
+
+                            OnIdleResult::PluginActivated(r)
+                        }
+                        Err(e) => OnIdleResult::PluginFailedToActivate(e),
+                    };
+
+                    return (res, modified_params, processor_to_drop);
+                }
+            }
         }
 
         if active_state == PluginActiveState::DroppedAndReadyToDeactivate {
@@ -838,39 +895,6 @@ impl PluginHostMainThread {
             } else {
                 // Plugin is ready to be fully removed/dropped.
                 return (OnIdleResult::PluginReadyToRemove, modified_params, processor_to_drop);
-            }
-        } else if request_flags.contains(HostRequestFlags::PROCESS)
-            && !self.remove_requested
-            && !self.restarting
-        {
-            log::trace!("Plugin {:?} requested the host to start processing the plugin", &self.id);
-
-            // The plugin has requested the host to start processing this plugin.
-
-            if active_state == PluginActiveState::Active {
-                self.channel.shared_state.set_process_requested();
-            } else if active_state == PluginActiveState::Inactive
-                || active_state == PluginActiveState::InactiveWithError
-            {
-                let res = match self.activate(
-                    sample_rate,
-                    min_frames,
-                    max_frames,
-                    graph_helper,
-                    edge_id_to_ds_edge_id,
-                    thread_ids.clone(),
-                    schedule_version,
-                    coll_handle,
-                ) {
-                    Ok(r) => {
-                        self.save_state_dirty = true;
-
-                        OnIdleResult::PluginActivated(r)
-                    }
-                    Err(e) => OnIdleResult::PluginFailedToActivate(e),
-                };
-
-                return (res, modified_params, processor_to_drop);
             }
         }
 

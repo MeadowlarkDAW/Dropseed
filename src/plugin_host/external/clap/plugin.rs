@@ -544,6 +544,15 @@ impl PluginMainThread for ClapPluginMainThread {
 
         let resize_hints = if resizable { gui_ext.get_resize_hints(instance) } else { None };
 
+        if let Err(e) = gui_ext.set_parent(instance, &window) {
+            gui_ext.destroy(instance);
+            return Err(format!(
+                "CLAP plugin failed to set its embedded GUI to the given parent window: {}",
+                e
+            )
+            .into());
+        }
+
         Ok(EmbeddedGuiInfo { size: working_size, resizable, resize_hints })
     }
 
@@ -562,6 +571,39 @@ impl PluginMainThread for ClapPluginMainThread {
                 "Host called `destroy_gui()`, but CLAP plugin does not use the GUI extension"
             );
         }
+    }
+
+    fn adjust_gui_size(&mut self, size: GuiSize) -> Option<GuiSize> {
+        let host = self.instance.main_thread_host_data_mut();
+        if let Some(gui_ext) = host.shared.gui_ext {
+            if let Some(instance) = host.instance.as_mut() {
+                return gui_ext.adjust_size(instance, size);
+            } else {
+                log::warn!(
+                    "Host called `adjust_gui_size()`, but CLAP plugin does have an active instance"
+                );
+            }
+        } else {
+            log::warn!(
+                "Host called `adjust_gui_size()`, but CLAP plugin does not use the GUI extension"
+            );
+        }
+
+        None
+    }
+
+    fn set_gui_size(&mut self, size: GuiSize) -> Result<(), Box<dyn Error>> {
+        let host = self.instance.main_thread_host_data_mut();
+        let gui_ext = host.shared.gui_ext.ok_or_else(|| -> Box<dyn Error> {
+            "CLAP plugin does not use the GUI extension".into()
+        })?;
+        let instance = host.instance.as_mut().ok_or_else(|| -> Box<dyn Error> {
+            "CLAP plugin does not have an active instance".into()
+        })?;
+
+        gui_ext.set_size(instance, size).map_err(|e| -> Box<dyn Error> {
+            format!("CLAP plugin failed to set the size of its GUI to {:?}: {}", size, e).into()
+        })
     }
 
     fn show_gui(&mut self) -> Result<(), Box<dyn Error>> {

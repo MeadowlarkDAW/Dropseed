@@ -217,6 +217,9 @@ impl AudioGraph {
             }
         }
 
+        let supports_floating_gui = res.plugin_host.supports_gui(true);
+        let supports_embedded_gui = res.plugin_host.supports_gui(false);
+
         if self.shared_pools.plugin_hosts.insert(plugin_id.clone(), res.plugin_host).is_some() {
             panic!("Something went wrong when allocating a new slot for a plugin");
         }
@@ -227,7 +230,12 @@ impl AudioGraph {
             PluginStatus::Inactive
         };
 
-        NewPluginRes { plugin_id, status: activation_status }
+        NewPluginRes {
+            plugin_id,
+            status: activation_status,
+            supports_floating_gui,
+            supports_embedded_gui,
+        }
     }
 
     pub fn activate_plugin_instance(&mut self, id: &PluginInstanceID) -> Result<PluginStatus, ()> {

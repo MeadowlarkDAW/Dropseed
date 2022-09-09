@@ -1,5 +1,7 @@
+use dropseed::engine::NewPluginRes;
 use dropseed::graph::PortType;
 use dropseed::plugin_api::ext::audio_ports::PluginAudioPortsExt;
+use dropseed::plugin_api::ext::gui::{GuiResizeHints, GuiSize};
 use dropseed::plugin_api::ext::note_ports::PluginNotePortsExt;
 use dropseed::plugin_api::ext::params::ParamInfoFlags;
 use dropseed::plugin_api::{DSPluginSaveState, ParamID, PluginInstanceID};
@@ -11,7 +13,7 @@ use dropseed::{
     },
     plugin_api::plugin_scanner::ScannedPluginKey,
 };
-use eframe::egui;
+use egui_glow::egui_winit::egui;
 use fnv::FnvHashMap;
 
 use crate::ActivatedState;
@@ -37,8 +39,13 @@ pub struct EffectRackPluginState {
     plugin_id: PluginInstanceID,
     plugin_name: String,
 
-    has_gui: bool,
-    is_gui_open: bool,
+    supports_floating_gui: bool,
+    supports_embedded_gui: bool,
+    gui_resizable: bool,
+    gui_active: bool,
+    gui_visible: bool,
+    gui_resize_hints: Option<GuiResizeHints>,
+
     activated: bool,
     bypassed: bool,
 
@@ -51,16 +58,16 @@ pub struct EffectRackPluginState {
 }
 
 impl EffectRackPluginState {
-    pub fn new(
-        plugin_id: PluginInstanceID,
-        plugin_name: String,
-        plugin_status: PluginStatus,
-    ) -> Self {
+    pub fn new(new_plugin_res: NewPluginRes, plugin_name: String) -> Self {
         let mut new_self = Self {
-            plugin_id,
+            plugin_id: new_plugin_res.plugin_id,
             plugin_name,
-            has_gui: false,
-            is_gui_open: false,
+            supports_floating_gui: new_plugin_res.supports_floating_gui,
+            supports_embedded_gui: new_plugin_res.supports_embedded_gui,
+            gui_resizable: false,
+            gui_active: false,
+            gui_visible: false,
+            gui_resize_hints: None,
             activated: false,
             bypassed: false,
             audio_ports_ext: None,
@@ -69,7 +76,7 @@ impl EffectRackPluginState {
             internal_handle: None,
         };
 
-        if let PluginStatus::Activated(status) = plugin_status {
+        if let PluginStatus::Activated(status) = new_plugin_res.status {
             new_self.on_activated(status);
         }
 
@@ -102,13 +109,10 @@ impl EffectRackPluginState {
         }
 
         self.internal_handle = status.internal_handle.take();
-
-        self.has_gui = status.has_gui;
     }
 
     pub fn on_deactivated(&mut self) {
         self.activated = false;
-        self.has_gui = false;
         self.params.clear();
     }
 
@@ -124,32 +128,119 @@ impl EffectRackPluginState {
         }
     }
 
-    pub fn on_plugin_gui_closed(&mut self) {
-        self.is_gui_open = false;
-    }
-
-    pub fn show_gui(&mut self, ds_engine: &mut DSEngineMainThread) {
-        if self.has_gui {
+    pub fn create_floating_gui(&mut self, ds_engine: &mut DSEngineMainThread) {
+        if self.supports_floating_gui && !self.gui_active {
             if let Some(plugin_host) = ds_engine.plugin_host_mut(&self.plugin_id) {
-                match plugin_host.show_gui() {
-                    Ok(()) => self.is_gui_open = true,
+                match plugin_host.create_new_floating_gui(None) {
+                    Ok(()) => {
+                        self.gui_active = true;
+                        self.gui_visible = false;
+                        self.show_gui(ds_engine);
+                    }
                     Err(e) => {
-                        log::error!("Failed to open GUI for plugin {:?}: {}", &self.plugin_id, e);
-                        self.is_gui_open = false;
+                        log::error!(
+                            "Failed to create floating GUI for plugin {:?}: {}",
+                            &self.plugin_id,
+                            e
+                        );
                     }
                 }
             }
         }
     }
 
-    pub fn close_gui(&mut self, ds_engine: &mut DSEngineMainThread) {
-        if self.is_gui_open {
+    pub fn create_embedded_gui(&mut self, ds_engine: &mut DSEngineMainThread) {
+        if self.supports_embedded_gui && !self.gui_active {
             if let Some(plugin_host) = ds_engine.plugin_host_mut(&self.plugin_id) {
-                plugin_host.close_gui();
+                /*
+                match plugin_host.create_new_floating_gui(None) {
+                    Ok(()) => {
+                        self.gui_active = true;
+                        self.gui_visible = false;
+                        self.show_gui(ds_engine);
+                    }
+                    Err(e) => {
+                        log::error!(
+                            "Failed to create floating GUI for plugin {:?}: {}",
+                            &self.plugin_id,
+                            e
+                        );
+                    }
+                }
+                */
             }
-
-            self.on_plugin_gui_closed();
         }
+    }
+
+    pub fn resize_gui(&mut self, size: GuiSize, ds_engine: &mut DSEngineMainThread) {
+        if self.gui_active && self.gui_resizable {
+            if let Some(plugin_host) = ds_engine.plugin_host_mut(&self.plugin_id) {
+                if let Some(working_size) = plugin_host.adjust_gui_size(size) {
+                    match plugin_host.set_gui_size(working_size) {
+                        Ok(()) => {}
+                        Err(e) => {
+                            log::error!(
+                                "Failed to set size of plugin GUI to {:?} on plugin {:?}: {}",
+                                working_size,
+                                &self.plugin_id,
+                                e
+                            );
+                        }
+                    }
+                } else {
+                    log::error!(
+                        "Failed to set size of plugin GUI to {:?} on plugin {:?}",
+                        size,
+                        &self.plugin_id
+                    );
+                }
+            }
+        }
+    }
+
+    pub fn on_plugin_gui_closed(&mut self, was_destroyed: bool) {
+        self.gui_visible = false;
+        if was_destroyed {
+            self.gui_active = false;
+        }
+    }
+
+    pub fn show_gui(&mut self, ds_engine: &mut DSEngineMainThread) {
+        if self.gui_active && !self.gui_visible {
+            if let Some(plugin_host) = ds_engine.plugin_host_mut(&self.plugin_id) {
+                match plugin_host.show_gui() {
+                    Ok(()) => self.gui_visible = true,
+                    Err(e) => {
+                        log::error!("Failed to show GUI for plugin {:?}: {}", &self.plugin_id, e);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn hide_gui(&mut self, ds_engine: &mut DSEngineMainThread) {
+        if self.gui_active && self.gui_visible {
+            if let Some(plugin_host) = ds_engine.plugin_host_mut(&self.plugin_id) {
+                match plugin_host.hide_gui() {
+                    Ok(()) => self.gui_visible = false,
+                    Err(e) => {
+                        log::error!("Failed to hide GUI for plugin {:?}: {}", &self.plugin_id, e);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn destroy_gui(&mut self, ds_engine: &mut DSEngineMainThread) {
+        if self.gui_active {
+            if let Some(plugin_host) = ds_engine.plugin_host_mut(&self.plugin_id) {
+                plugin_host.destroy_gui();
+            }
+        }
+    }
+
+    pub fn resize_hints_changed(&mut self, resize_hints: Option<GuiResizeHints>) {
+        self.gui_resize_hints = resize_hints;
     }
 
     pub fn set_bypassed(&mut self, bypassed: bool, ds_engine: &mut DSEngineMainThread) {
@@ -260,11 +351,7 @@ impl EffectRackState {
         let mut result = ds_engine.modify_graph(request).unwrap();
         let new_plugin_res = result.new_plugins.remove(0);
 
-        let new_plugin_state = EffectRackPluginState::new(
-            new_plugin_res.plugin_id,
-            plugin_name,
-            new_plugin_res.status,
-        );
+        let new_plugin_state = EffectRackPluginState::new(new_plugin_res, plugin_name);
 
         self.plugins.push(new_plugin_state);
     }
@@ -373,29 +460,57 @@ fn show_effect_rack_plugin(
             egui::ScrollArea::vertical().id_source(&format!("plugin{}hscroll", plugin_i)).show(
                 ui,
                 |ui| {
-                    if ui.small_button("x").clicked() {
+                    if ui.button("remove").clicked() {
                         remove = true;
                     }
 
-                    if plugin.has_gui {
-                        if plugin.is_gui_open {
-                            if ui.small_button("close ui").clicked() {
-                                plugin.show_gui(ds_engine);
-                            }
-                        } else if ui.small_button("ui").clicked() {
-                            plugin.close_gui(ds_engine);
-                        }
-                    }
+                    ui.label(&plugin.plugin_name);
+                    ui.label(&format!("id: {:?}", plugin.plugin_id));
+
+                    ui.separator();
 
                     if plugin.bypassed {
-                        if ui.small_button("unbypass").clicked() {
+                        if ui.button("unbypass").clicked() {
                             plugin.set_bypassed(false, ds_engine);
                         }
                     } else {
-                        if ui.small_button("bypass").clicked() {
+                        if ui.button("bypass").clicked() {
                             plugin.set_bypassed(true, ds_engine);
                         }
                     }
+
+                    ui.separator();
+
+                    if plugin.supports_floating_gui || plugin.supports_embedded_gui {
+                        if plugin.gui_active {
+                            if plugin.gui_visible {
+                                if ui.button("hide gui").clicked() {
+                                    plugin.hide_gui(ds_engine);
+                                }
+                            } else {
+                                if ui.button("show gui").clicked() {
+                                    plugin.show_gui(ds_engine);
+                                }
+                            }
+
+                            if ui.button("destroy gui").clicked() {
+                                plugin.destroy_gui(ds_engine);
+                            }
+                        } else {
+                            if plugin.supports_floating_gui {
+                                if ui.button("create floating gui").clicked() {
+                                    plugin.create_floating_gui(ds_engine);
+                                }
+                            }
+                            if plugin.supports_embedded_gui {
+                                if ui.button("create embedded gui").clicked() {
+                                    plugin.create_embedded_gui(ds_engine);
+                                }
+                            }
+                        }
+                    }
+
+                    ui.separator();
 
                     // TODO: Let the user activate/deactive the plugin in this GUI.
 
@@ -405,9 +520,6 @@ fn show_effect_rack_plugin(
                         ui.colored_label(egui::Color32::RED, "deactivated");
                         return;
                     }
-
-                    ui.label(&plugin.plugin_name);
-                    ui.label(&format!("id: {:?}", plugin.plugin_id));
 
                     ui.separator();
 

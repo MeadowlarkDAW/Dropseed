@@ -261,6 +261,10 @@ pub trait PluginMainThread {
     /// By default this does nothing.
     fn destroy_gui(&mut self) {}
 
+    /// Information provided by the plugin to improve window resizing when initiated
+    /// by the host or window manager. Only for plugins with resizable GUIs.
+    ///
+    /// By default this returns `None`.
     fn gui_resize_hints(&self) -> Option<GuiResizeHints> {
         None
     }
@@ -270,16 +274,18 @@ pub trait PluginMainThread {
     ///
     /// This method does not change the size of the current GUI.
     ///
-    /// By default this just returns the given value.
-    fn adjust_gui_size(&mut self, size: GuiSize) -> GuiSize {
-        size
+    /// If the plugin does not support changing the size of its GUI, then this
+    /// will return `None`.
+    ///
+    /// By default this returns `None`.
+    #[allow(unused)]
+    fn adjust_gui_size(&mut self, size: GuiSize) -> Option<GuiSize> {
+        None
     }
 
     /// Set the size of the plugin's GUI. Only for embedded GUIs.
-    ///
-    /// On success, this returns the actual size the plugin resized to.
     #[allow(unused)]
-    fn set_gui_size(&mut self, size: GuiSize) -> Result<GuiSize, Box<dyn Error>> {
+    fn set_gui_size(&mut self, size: GuiSize) -> Result<(), Box<dyn Error>> {
         Err("Plugin does not support a custom embedded GUI".into())
     }
 
