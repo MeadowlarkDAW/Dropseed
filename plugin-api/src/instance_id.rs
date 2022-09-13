@@ -110,7 +110,7 @@ impl Clone for PluginInstanceID {
 
 impl PartialEq for PluginInstanceID {
     fn eq(&self, other: &Self) -> bool {
-        self.node_id.eq(&other.node_id)
+        self.unique_id.eq(&other.unique_id)
     }
 }
 
@@ -118,7 +118,7 @@ impl Eq for PluginInstanceID {}
 
 impl Hash for PluginInstanceID {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.node_id.hash(state);
+        //self.node_id.hash(state);
         self.unique_id.hash(state);
     }
 }

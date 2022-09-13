@@ -11,10 +11,12 @@ use dropseed::plugin_scanner::ScannedPluginInfo;
 use egui_glow::egui_winit::egui;
 use egui_glow::egui_winit::winit;
 use fern::colors::ColoredLevelConfig;
+use glutin::event_loop::ControlFlow;
 use glutin::window::WindowId;
 use log::LevelFilter;
 use meadowlark_core_types::time::SampleRate;
 use std::sync::Arc;
+use std::time::Instant;
 
 mod effect_rack_page;
 mod scanned_plugins_page;
@@ -190,10 +192,12 @@ impl DSTestHostGUI {
         }
     }
 
-    fn on_idle(&mut self) {
+    fn on_idle(&mut self) -> Option<Instant> {
         if self.activated_state.is_none() {
-            return;
+            return None;
         }
+
+        let mut next_timer_instant: Option<Instant> = None;
 
         // This must be called periodically (i.e. once every frame).
         //
@@ -345,6 +349,18 @@ impl DSTestHostGUI {
                     }
                 }
 
+                // Sent when a plugin has registered a timer, and thus the method
+                // `EngineMainThread::advance_timer()` must be called after the given
+                // instant has elapsed.
+                //
+                // This event will only be sent when the engine went from no timers being
+                // registered to at least one new timer being registered. The method
+                // `EngineMainThread::advance_timer()` will return the next instant
+                // needed to call that same method in order to keep the timer running.
+                OnIdleEvent::RunTimer(instant) => {
+                    next_timer_instant = Some(instant);
+                }
+
                 // Sent whenever the engine has been deactivated, whether gracefully or
                 // because of a crash.
                 OnIdleEvent::EngineDeactivated(status) => {
@@ -368,14 +384,16 @@ impl DSTestHostGUI {
 
         // TODO: Only call this every 3 seconds or so.
         self.ds_engine.collect_garbage();
+
+        next_timer_instant
     }
 
     fn update(
         &mut self,
         ctx: &egui::Context,
         event_loop: &winit::event_loop::EventLoopWindowTarget<()>,
-    ) {
-        self.on_idle();
+    ) -> Option<Instant> {
+        let next_timer_instant = self.on_idle();
 
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -429,6 +447,8 @@ impl DSTestHostGUI {
             ),
             Tab::ScannedPlugins => scanned_plugins_page::show(self, ui),
         });
+
+        next_timer_instant
     }
 
     fn on_plugin_window_closed(&mut self, window_id: WindowId) {
@@ -447,14 +467,8 @@ impl DSTestHostGUI {
         }
     }
 
-    fn refresh_plugin_windows(&mut self) {
-        if self.activated_state.is_none() {
-            return;
-        }
-
-        for plugin in self.activated_state.as_mut().unwrap().effect_rack_state.plugins_mut() {
-            plugin.refresh_embedded_window();
-        }
+    fn on_timer(&mut self) -> Option<Instant> {
+        self.ds_engine.advance_timer()
     }
 
     fn on_exit(&mut self) {
@@ -510,10 +524,16 @@ fn run_ui_event_loop(
 ) {
     let main_window_id = gl_window.window().id();
 
+    let mut requested_timer_instant = Instant::now();
+    let mut requested_repaint_instant = Instant::now();
+
     event_loop.run(move |event, event_loop, control_flow| {
         let mut redraw = || {
             let repaint_after = egui_glow.run(gl_window.window(), |egui_ctx| {
-                app.update(egui_ctx, event_loop);
+                if let Some(timer_instant) = app.update(egui_ctx, event_loop) {
+                    requested_timer_instant = timer_instant;
+                    control_flow.set_wait_until(timer_instant);
+                }
             });
 
             if repaint_after.is_zero() {
@@ -522,6 +542,7 @@ fn run_ui_event_loop(
             } else if let Some(repaint_after_instant) =
                 std::time::Instant::now().checked_add(repaint_after)
             {
+                requested_repaint_instant = repaint_after_instant;
                 glutin::event_loop::ControlFlow::WaitUntil(repaint_after_instant)
             } else {
                 glutin::event_loop::ControlFlow::Wait
@@ -587,10 +608,19 @@ fn run_ui_event_loop(
                 egui_glow.destroy();
             }
             glutin::event::Event::NewEvents(glutin::event::StartCause::ResumeTimeReached {
+                requested_resume,
                 ..
             }) => {
-                gl_window.window().request_redraw();
-                app.refresh_plugin_windows();
+                if requested_resume == requested_timer_instant {
+                    if let Some(next_timer_instant) = app.on_timer() {
+                        requested_timer_instant = next_timer_instant;
+                        control_flow.set_wait_until(next_timer_instant);
+                    }
+                }
+
+                if requested_resume == requested_repaint_instant {
+                    gl_window.window().request_redraw();
+                }
             }
 
             _ => (),

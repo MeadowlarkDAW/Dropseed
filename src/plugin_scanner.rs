@@ -382,7 +382,8 @@ impl PluginScanner {
 
         let mut format = PluginInstanceType::Unloaded;
 
-        let (host_request_rx, channel_send) = HostRequestChannelReceiver::new_channel();
+        let (host_request_rx, channel_send) =
+            HostRequestChannelReceiver::new_channel(self.thread_ids.main_thread_id().unwrap());
 
         let plugin_factory = if let Some(plugin_bundle) = plugin_bundle {
             let loaded_factories =

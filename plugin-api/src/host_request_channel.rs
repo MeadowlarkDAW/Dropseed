@@ -4,6 +4,8 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use super::ext::timer::TimerID;
+
 bitflags! {
     /// A bitmask of all possible requests to make to the Host's main thread.
     ///
@@ -77,7 +79,12 @@ impl HostRequestChannelReceiver {
 
         (
             Self { contents: contents.clone(), requested_timers: Arc::clone(&requested_timers) },
-            HostRequestChannelSender { contents, requested_timers, main_thread_id },
+            HostRequestChannelSender {
+                contents,
+                requested_timers,
+                main_thread_id,
+                next_timer_id: 0,
+            },
         )
     }
 
@@ -133,6 +140,7 @@ pub struct HostRequestChannelSender {
     contents: Arc<HostChannelContents>,
     requested_timers: Arc<Mutex<Vec<HostTimerRequest>>>,
     main_thread_id: std::thread::ThreadId,
+    next_timer_id: u32,
 }
 
 impl HostRequestChannelSender {
@@ -147,22 +155,29 @@ impl HostRequestChannelSender {
 
     /// Request the host to register a timer for this plugin.
     ///
-    /// This can only be called on the main thread.
-    pub fn register_timer(&mut self, period_ms: u32, timer_id: u32) {
+    /// This will return an error if not called on the main thread.
+    pub fn register_timer(&mut self, period_ms: u32) -> Result<TimerID, ()> {
         if std::thread::current().id() == self.main_thread_id {
+            let timer_id = TimerID(self.next_timer_id);
+            self.next_timer_id += 1;
+
             // Using a mutex here is realtime-safe because we only allow this mutex
             // to be used in the main thread.
             let mut requested_timers = self.requested_timers.lock().unwrap();
             requested_timers.push(HostTimerRequest { timer_id, period_ms, register: true });
 
             self.request(HostRequestFlags::TIMER_REQUEST);
+
+            Ok(timer_id)
+        } else {
+            Err(())
         }
     }
 
     /// Request the host to unregister a timer for this plugin.
     ///
     /// This can only be called on the main thread.
-    pub fn unregister_timer(&mut self, timer_id: u32) {
+    pub fn unregister_timer(&mut self, timer_id: TimerID) {
         // Using a mutex here is realtime-safe because we only allow this mutex
         // to be used in the main thread.
         if std::thread::current().id() == self.main_thread_id {
@@ -192,7 +207,7 @@ impl Default for HostChannelContents {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HostTimerRequest {
-    pub timer_id: u32,
+    pub timer_id: TimerID,
     pub period_ms: u32,
 
     /// `true` = register, `false` = unregister

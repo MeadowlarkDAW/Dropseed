@@ -8,6 +8,7 @@ use std::sync::{
     Arc,
 };
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 use thread_priority::ThreadPriority;
 
 use dropseed_plugin_api::ext::audio_ports::PluginAudioPortsExt;
@@ -28,6 +29,7 @@ use crate::utils::thread_id::SharedThreadIDs;
 
 use super::error::{EngineCrashError, NewPluginInstanceError};
 use super::modify_request::{ModifyGraphRequest, PluginIDReq};
+use super::timer::HostTimer;
 
 pub struct DSEngineMainThread {
     audio_graph: Option<AudioGraph>,
@@ -39,6 +41,8 @@ pub struct DSEngineMainThread {
     process_thread_handle: Option<JoinHandle<()>>,
     tempo_map_shared: Option<Shared<SharedCell<(Shared<TempoMap>, u64)>>>,
     crash_msg: Option<EngineCrashError>,
+    host_timer: HostTimer,
+    timer_running: bool,
 }
 
 impl DSEngineMainThread {
@@ -79,6 +83,8 @@ impl DSEngineMainThread {
                 process_thread_handle: None,
                 tempo_map_shared: None,
                 crash_msg: None,
+                host_timer: HostTimer::new(),
+                timer_running: false,
             },
             internal_plugins_res,
         )
@@ -137,14 +143,54 @@ impl DSEngineMainThread {
         }
 
         if let Some(audio_graph) = &mut self.audio_graph {
-            let recompile = audio_graph.on_idle(&mut events_out);
+            let recompile = audio_graph.on_idle(&mut events_out, &mut self.host_timer);
 
             if recompile {
                 self.compile_audio_graph();
             }
         }
 
+        if self.timer_running {
+            if self.host_timer.is_empty() {
+                self.timer_running = false;
+            }
+        } else if !self.host_timer.is_empty() {
+            self.timer_running = true;
+            events_out.push(OnIdleEvent::RunTimer(Instant::now() + Duration::from_millis(1)));
+        }
+
         events_out
+    }
+
+    /// Call this after recieving an `OnIdleEvent::RunTimer` event.
+    ///
+    /// If this method returns `Some(instant)`, then this method must be
+    /// called again after that returned instant has elapsed.
+    ///
+    /// If this method returns `None`, then it means all timers have been
+    /// unregistered and this method does not need to be called anymore
+    /// until the next `OnIdleEvent::RunTimer` event.
+    pub fn advance_timer(&mut self) -> Option<Instant> {
+        if self.audio_graph.is_none() {
+            return None;
+        }
+
+        let audio_graph = self.audio_graph.as_mut().unwrap();
+
+        if let Some((entries, next_instant)) = self.host_timer.advance() {
+            for entry in entries.iter() {
+                if let Some(plugin_host) =
+                    audio_graph.get_plugin_host_by_unique_id_mut(entry.key.plugin_id)
+                {
+                    plugin_host.on_timer(entry.key.timer_id);
+                }
+            }
+
+            Some(next_instant)
+        } else {
+            self.timer_running = false;
+            None
+        }
     }
 
     /// Invoke the realtime-safe garbage collector to deallocate unused memory.
@@ -203,6 +249,8 @@ impl DSEngineMainThread {
         let event_buffer_size = settings.event_buffer_size;
         let transport_declick_time = settings.transport_declick_time;
 
+        self.host_timer = HostTimer::new();
+
         let (audio_graph, shared_schedule, transport_handle) = AudioGraph::new(
             self.collector.handle(),
             usize::from(num_audio_in_channels),
@@ -214,6 +262,7 @@ impl DSEngineMainThread {
             event_buffer_size,
             self.thread_ids.clone(),
             transport_declick_time,
+            &mut self.host_timer,
         );
 
         self.audio_graph = Some(audio_graph);
@@ -291,8 +340,8 @@ impl DSEngineMainThread {
                 }
             }
 
-            let (mut removed_plugins, removed_edges) =
-                audio_graph.remove_plugin_instances(&request.remove_plugin_instances);
+            let (mut removed_plugins, removed_edges) = audio_graph
+                .remove_plugin_instances(&request.remove_plugin_instances, &mut self.host_timer);
 
             let new_plugins_res: Vec<NewPluginRes> = request
                 .add_plugin_instances
@@ -383,7 +432,7 @@ impl DSEngineMainThread {
 
         if let Some(mut audio_graph) = self.audio_graph.take() {
             // Make sure that all plugins are removed gracefully.
-            audio_graph.reset();
+            audio_graph.reset(&mut self.host_timer);
         }
 
         if let Some(run_process_thread) = self.run_process_thread.take() {
@@ -731,6 +780,16 @@ pub enum OnIdleEvent {
         /// because it failed to restart.
         status: Result<(), ActivatePluginError>,
     },
+
+    /// Sent when a plugin has registered a timer, and thus the method
+    /// `EngineMainThread::advance_timer()` must be called after the given
+    /// instant has elapsed.
+    ///
+    /// This event will only be sent when the engine went from no timers being
+    /// registered to at least one new timer being registered. The method
+    /// `EngineMainThread::advance_timer()` will return the next instant
+    /// needed to call that same method in order to keep the timer running.
+    RunTimer(Instant),
 
     /// Sent whenever the engine has been deactivated, whether gracefully or
     /// because of a crash.

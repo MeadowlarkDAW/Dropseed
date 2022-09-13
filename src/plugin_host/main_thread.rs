@@ -4,7 +4,7 @@ use dropseed_plugin_api::ext::audio_ports::PluginAudioPortsExt;
 use dropseed_plugin_api::ext::gui::{EmbeddedGuiInfo, GuiResizeHints, GuiSize};
 use dropseed_plugin_api::ext::note_ports::PluginNotePortsExt;
 use dropseed_plugin_api::ext::params::{ParamID, ParamInfo, ParamInfoFlags};
-use dropseed_plugin_api::host_request_channel::HostTimerRequest;
+use dropseed_plugin_api::ext::timer::TimerID;
 use dropseed_plugin_api::transport::TempoMap;
 use dropseed_plugin_api::{
     DSPluginSaveState, HostRequestChannelReceiver, HostRequestFlags, PluginInstanceID,
@@ -16,7 +16,7 @@ use raw_window_handle::RawWindowHandle;
 use smallvec::SmallVec;
 use std::error::Error;
 
-use crate::engine::{OnIdleEvent, PluginActivatedStatus};
+use crate::engine::{timer::HostTimer, OnIdleEvent, PluginActivatedStatus};
 use crate::graph::{DSEdgeID, PortChannelID};
 use crate::utils::thread_id::SharedThreadIDs;
 
@@ -565,12 +565,15 @@ impl PluginHostMainThread {
     pub(crate) fn schedule_remove(
         &mut self,
         coll_handle: &basedrop::Handle,
+        host_timer: &mut HostTimer,
     ) -> Option<Shared<PluginHostProcessorWrapper>> {
         self.remove_requested = true;
 
         if self.gui_active {
             self.plug_main_thread.destroy_gui();
         }
+
+        host_timer.remove_all_with_plugin(self.id.unique_id());
 
         self.schedule_deactivate(coll_handle)
     }
@@ -770,6 +773,10 @@ impl PluginHostMainThread {
         }
     }
 
+    pub(crate) fn on_timer(&mut self, timer_id: TimerID) {
+        self.plug_main_thread.on_timer(timer_id);
+    }
+
     /// Poll parameter updates and requests from the plugin and the plugin host's
     /// processor.
     ///
@@ -786,6 +793,7 @@ impl PluginHostMainThread {
         edge_id_to_ds_edge_id: &mut FnvHashMap<EdgeID, DSEdgeID>,
         thread_ids: &SharedThreadIDs,
         schedule_version: u64,
+        host_timer: &mut HostTimer,
     ) -> (OnIdleResult, SmallVec<[ParamModifiedInfo; 4]>, Option<Shared<PluginHostProcessorWrapper>>)
     {
         let mut modified_params: SmallVec<[ParamModifiedInfo; 4]> = SmallVec::new();
@@ -976,7 +984,11 @@ impl PluginHostMainThread {
             if request_flags.contains(HostRequestFlags::TIMER_REQUEST) {
                 let timer_requests = self.host_request_rx.fetch_timer_requests();
                 for req in timer_requests.iter() {
-                    // TODO
+                    if req.register {
+                        host_timer.insert(self.id.unique_id(), req.timer_id, req.period_ms);
+                    } else {
+                        host_timer.remove(self.id.unique_id(), req.timer_id);
+                    }
                 }
             }
         }

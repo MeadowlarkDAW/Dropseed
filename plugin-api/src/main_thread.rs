@@ -5,6 +5,8 @@ use meadowlark_core_types::time::SampleRate;
 use raw_window_handle::RawWindowHandle;
 use std::error::Error;
 
+use crate::ext::timer::TimerID;
+
 use super::transport::TempoMap;
 use super::{ext, ParamID, PluginProcessor};
 
@@ -329,7 +331,7 @@ pub trait PluginMainThread {
     // --- Timer -------------------------------------------------------------------------------
 
     #[allow(unused)]
-    fn on_timer(&mut self, timer_id: u32) {}
+    fn on_timer(&mut self, timer_id: TimerID) {}
 }
 
 pub struct PluginActivatedInfo {
