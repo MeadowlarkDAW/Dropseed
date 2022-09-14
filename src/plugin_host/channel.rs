@@ -223,6 +223,7 @@ impl ProcToMainParamValue {
 pub(crate) struct SharedPluginHostState {
     active_state: AtomicU32,
     process_requested: AtomicBool,
+    param_flush_requested: AtomicBool,
     bypassed: AtomicBool,
 }
 
@@ -231,6 +232,7 @@ impl SharedPluginHostState {
         Self {
             active_state: AtomicU32::new(0),
             process_requested: AtomicBool::new(false),
+            param_flush_requested: AtomicBool::new(false),
             bypassed: AtomicBool::new(bypassed),
         }
     }
@@ -252,6 +254,14 @@ impl SharedPluginHostState {
         self.process_requested.store(true, Ordering::SeqCst)
     }
 
+    pub fn param_flush_requested(&self) -> bool {
+        self.param_flush_requested.swap(false, Ordering::SeqCst)
+    }
+
+    pub fn set_param_flush_requested(&self) {
+        self.param_flush_requested.store(true, Ordering::SeqCst)
+    }
+
     pub fn bypassed(&self) -> bool {
         self.bypassed.load(Ordering::SeqCst)
     }
@@ -261,7 +271,7 @@ impl SharedPluginHostState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u32)]
 pub(crate) enum PluginActiveState {
     // TODO: this state shouldn't be able to exist for the process thread
@@ -280,6 +290,12 @@ pub(crate) enum PluginActiveState {
     /// The plugin is not used anymore by the audio engine and can be deactivated on the main
     /// thread.
     DroppedAndReadyToDeactivate = 4,
+}
+
+impl PluginActiveState {
+    pub fn is_active(&self) -> bool {
+        !(*self == PluginActiveState::Inactive || *self == PluginActiveState::InactiveWithError)
+    }
 }
 
 impl From<u32> for PluginActiveState {

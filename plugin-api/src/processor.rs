@@ -51,7 +51,7 @@ pub trait PluginProcessor: Send + 'static {
     ///
     /// By default this does nothing.
     ///
-    /// [active && !processing : process-thread]
+    /// [active ? process-thread : main-thread]
     #[allow(unused)]
     fn param_flush(&mut self, in_events: &EventBuffer, out_events: &mut EventBuffer) {}
 

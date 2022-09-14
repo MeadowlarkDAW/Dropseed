@@ -593,9 +593,7 @@ fn run_ui_event_loop(
                     control_flow.set_wait_until(next_timer_instant);
                 }
 
-                if requested_resume == requested_repaint_instant {
-                    gl_window.window().request_redraw();
-                }
+                gl_window.window().request_redraw();
             }
 
             _ => (),

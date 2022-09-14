@@ -1,5 +1,8 @@
 use audio_graph::{AudioGraphHelper, EdgeID, PortID};
 use basedrop::Shared;
+use clack_host::events::{Event, EventFlags, EventHeader};
+use clack_host::utils::Cookie;
+use dropseed_plugin_api::event::{ParamModEvent, ParamValueEvent};
 use dropseed_plugin_api::ext::audio_ports::PluginAudioPortsExt;
 use dropseed_plugin_api::ext::gui::{EmbeddedGuiInfo, GuiResizeHints, GuiSize};
 use dropseed_plugin_api::ext::note_ports::PluginNotePortsExt;
@@ -10,6 +13,8 @@ use dropseed_plugin_api::{
     DSPluginSaveState, HostRequestChannelReceiver, HostRequestFlags, PluginInstanceID,
     PluginMainThread,
 };
+
+use dropseed_plugin_api::buffer::EventBuffer;
 use fnv::FnvHashMap;
 use meadowlark_core_types::time::{SampleRate, Seconds};
 use raw_window_handle::RawWindowHandle;
@@ -21,9 +26,11 @@ use crate::graph::{DSEdgeID, PortChannelID};
 use crate::utils::thread_id::SharedThreadIDs;
 
 use super::channel::{
-    MainToProcParamValue, PlugHostChannelMainThread, PluginActiveState, SharedPluginHostProcessor,
+    MainToProcParamValue, PlugHostChannelMainThread, PluginActiveState, ProcToMainParamValue,
+    SharedPluginHostProcessor,
 };
 use super::error::{ActivatePluginError, SetParamValueError};
+use super::event_io_buffers::{PluginEventOutputSanitizer, PluginIoEvent};
 use super::PluginHostProcessorWrapper;
 
 mod sync_ports;
@@ -31,6 +38,12 @@ mod sync_ports;
 // The amount of time to smooth/declick the audio outputs when
 // bypassing/unbypassing the plugin.
 static BYPASS_DECLICK_SECS: Seconds = Seconds(3.0 / 1000.0);
+
+struct DeactivatedEventBuffers {
+    in_events: EventBuffer,
+    out_events: EventBuffer,
+    sanitizer: PluginEventOutputSanitizer,
+}
 
 pub struct PluginHostMainThread {
     id: PluginInstanceID,
@@ -56,6 +69,9 @@ pub struct PluginHostMainThread {
 
     num_audio_in_channels: usize,
     num_audio_out_channels: usize,
+
+    deactivated_event_buffers: Option<DeactivatedEventBuffers>,
+    modified_params: Vec<ParamModifiedInfo>,
 
     host_request_rx: HostRequestChannelReceiver,
     remove_requested: bool,
@@ -123,6 +139,8 @@ impl PluginHostMainThread {
             supports_embedded_gui,
             num_audio_in_channels,
             num_audio_out_channels,
+            deactivated_event_buffers: None,
+            modified_params: Vec::new(),
             host_request_rx,
             remove_requested: false,
             save_state_dirty: false,
@@ -214,7 +232,9 @@ impl PluginHostMainThread {
                         .set(param_id, MainToProcParamValue { value });
                     param_queues.to_proc_param_value_tx.producer_done();
                 } else {
-                    // TODO: Flush parameters on main thread.
+                    let mut modified_params =
+                        self.flush_params_on_main_thread(Some((param_id, value, false)));
+                    self.modified_params.append(&mut modified_params);
                 }
 
                 self.save_state_dirty = true;
@@ -247,7 +267,9 @@ impl PluginHostMainThread {
                         .set(param_id, MainToProcParamValue { value: mod_amount });
                     param_queues.to_proc_param_mod_tx.producer_done();
                 } else {
-                    // TODO: Flush parameters on main thread.
+                    let mut modified_params =
+                        self.flush_params_on_main_thread(Some((param_id, mod_amount, true)));
+                    self.modified_params.append(&mut modified_params);
                 }
 
                 Ok(mod_amount)
@@ -631,6 +653,8 @@ impl PluginHostMainThread {
             }
         };
 
+        self.deactivated_event_buffers = None;
+
         // Retrieve the (new) parameters on this plugin.
         let num_params = self.plug_main_thread.num_params() as usize;
         let mut new_params: FnvHashMap<ParamID, ParamInfo> = FnvHashMap::default();
@@ -801,6 +825,105 @@ impl PluginHostMainThread {
         }
     }
 
+    fn flush_params_on_main_thread(
+        &mut self,
+        in_param_event: Option<(ParamID, f64, bool)>,
+    ) -> Vec<ParamModifiedInfo> {
+        let mut modified_params: Vec<ParamModifiedInfo> = Vec::new();
+
+        if !self.channel.shared_state.get_active_state().is_active() && !self.params.is_empty() {
+            if self.deactivated_event_buffers.is_none() {
+                self.deactivated_event_buffers = Some(DeactivatedEventBuffers {
+                    in_events: EventBuffer::with_capacity(4),
+                    out_events: EventBuffer::with_capacity(self.params.len() * 3),
+                    sanitizer: PluginEventOutputSanitizer::new(self.params.len()),
+                });
+            }
+
+            let deactivated_event_buffers = self.deactivated_event_buffers.as_mut().unwrap();
+            deactivated_event_buffers.in_events.clear();
+            deactivated_event_buffers.out_events.clear();
+
+            if let Some((param_id, value, is_mod)) = in_param_event {
+                if is_mod {
+                    let event = ParamModEvent::new(
+                        EventHeader::new_core(0, EventFlags::empty()),
+                        Cookie::empty(),
+                        -1, // note_id
+                        param_id.as_u32(),
+                        -1, // port_index
+                        -1, // channel
+                        -1, // key
+                        value,
+                    );
+
+                    deactivated_event_buffers.in_events.push(event.as_unknown());
+                } else {
+                    let event = ParamValueEvent::new(
+                        EventHeader::new_core(0, EventFlags::empty()),
+                        Cookie::empty(),
+                        -1, // note_id
+                        param_id.as_u32(),
+                        -1, // port_index
+                        -1, // channel
+                        -1, // key
+                        value,
+                    );
+
+                    deactivated_event_buffers.in_events.push(event.as_unknown());
+                }
+            }
+
+            self.plug_main_thread.param_flush(
+                &deactivated_event_buffers.in_events,
+                &mut deactivated_event_buffers.out_events,
+            );
+
+            let events_iter = deactivated_event_buffers
+                .out_events
+                .iter()
+                .filter_map(PluginIoEvent::read_from_clap);
+            let events_iter = deactivated_event_buffers.sanitizer.sanitize(events_iter, None);
+
+            for event in events_iter {
+                match event {
+                    PluginIoEvent::AutomationEvent { cookie: _, event } => {
+                        if let Some(new_value) =
+                            ProcToMainParamValue::from_param_event(event.event_type)
+                        {
+                            let param_id = ParamID::new(event.parameter_id);
+
+                            let is_gesturing = if let Some(gesture) = new_value.gesture {
+                                let _ = self.gesturing_params.insert(param_id, gesture.is_begin);
+
+                                if !gesture.is_begin {
+                                    // Only mark the state dirty once the user has finished adjusting
+                                    // the parameter.
+                                    self.save_state_dirty = true;
+                                }
+
+                                gesture.is_begin
+                            } else {
+                                self.save_state_dirty = true;
+
+                                *self.gesturing_params.get(&param_id).unwrap_or(&false)
+                            };
+
+                            modified_params.push(ParamModifiedInfo {
+                                param_id,
+                                new_value: new_value.value,
+                                is_gesturing,
+                            })
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        modified_params
+    }
+
     /// Poll parameter updates and requests from the plugin and the plugin host's
     /// processor.
     ///
@@ -826,6 +949,12 @@ impl PluginHostMainThread {
         // Get the latest request flags and activation state.
         let request_flags = self.host_request_rx.fetch_requests();
         let mut active_state = self.channel.shared_state.get_active_state();
+
+        // Collect any parameter updates that happened in previous calls to
+        // `flush_params_on_main_thread()`.
+        for event in self.modified_params.drain(..) {
+            modified_params.push(event);
+        }
 
         // Poll for parameter updates from the plugin host's processor.
         if let Some(params_queue) = &mut self.channel.param_queues {
@@ -877,6 +1006,19 @@ impl PluginHostMainThread {
                 // The plugin has requested the host to rescan its list of parameters.
 
                 // TODO
+            }
+
+            if request_flags.contains(HostRequestFlags::FLUSH_PARAMS) {
+                log::trace!("Plugin {:?} requested the host flush its parameters", &self.id);
+
+                if active_state.is_active() {
+                    self.channel.shared_state.set_param_flush_requested();
+                } else {
+                    self.modified_params = self.flush_params_on_main_thread(None);
+                    for event in self.modified_params.drain(..) {
+                        modified_params.push(event);
+                    }
+                }
             }
 
             if request_flags.intersects(HostRequestFlags::RESTART | HostRequestFlags::RESCAN_PORTS)
