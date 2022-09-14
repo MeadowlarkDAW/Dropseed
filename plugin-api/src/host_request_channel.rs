@@ -83,7 +83,7 @@ impl HostRequestChannelReceiver {
                 contents,
                 requested_timers,
                 main_thread_id,
-                next_timer_id: 0,
+                next_timer_id: Arc::new(AtomicU32::new(0)),
             },
         )
     }
@@ -115,6 +115,14 @@ impl HostRequestChannelReceiver {
         }
     }
 
+    /// Only checks if the plugin has a new timer request. Used to make sure that
+    /// a plugin hasn't unregistered a timer before calling its `on_timer()`
+    /// method.
+    pub fn has_timer_request(&self) -> bool {
+        HostRequestFlags::from_bits_truncate(self.contents.request_flags.load(Ordering::SeqCst))
+            .contains(HostRequestFlags::TIMER_REQUEST)
+    }
+
     pub fn fetch_timer_requests(&mut self) -> Vec<HostTimerRequest> {
         let mut v = Vec::new();
 
@@ -140,7 +148,7 @@ pub struct HostRequestChannelSender {
     contents: Arc<HostChannelContents>,
     requested_timers: Arc<Mutex<Vec<HostTimerRequest>>>,
     main_thread_id: std::thread::ThreadId,
-    next_timer_id: u32,
+    next_timer_id: Arc<AtomicU32>,
 }
 
 impl HostRequestChannelSender {
@@ -156,10 +164,10 @@ impl HostRequestChannelSender {
     /// Request the host to register a timer for this plugin.
     ///
     /// This will return an error if not called on the main thread.
-    pub fn register_timer(&mut self, period_ms: u32) -> Result<TimerID, ()> {
+    pub fn register_timer(&self, period_ms: u32) -> Result<TimerID, ()> {
         if std::thread::current().id() == self.main_thread_id {
-            let timer_id = TimerID(self.next_timer_id);
-            self.next_timer_id += 1;
+            let timer_id = TimerID(self.next_timer_id.load(Ordering::SeqCst));
+            self.next_timer_id.store(timer_id.0 + 1, Ordering::SeqCst);
 
             // Using a mutex here is realtime-safe because we only allow this mutex
             // to be used in the main thread.
@@ -177,7 +185,7 @@ impl HostRequestChannelSender {
     /// Request the host to unregister a timer for this plugin.
     ///
     /// This can only be called on the main thread.
-    pub fn unregister_timer(&mut self, timer_id: TimerID) {
+    pub fn unregister_timer(&self, timer_id: TimerID) {
         // Using a mutex here is realtime-safe because we only allow this mutex
         // to be used in the main thread.
         if std::thread::current().id() == self.main_thread_id {

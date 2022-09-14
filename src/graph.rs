@@ -17,7 +17,7 @@ use dropseed_plugin_api::transport::TempoMap;
 use dropseed_plugin_api::{DSPluginSaveState, PluginInstanceID, PluginInstanceType};
 
 use crate::engine::modify_request::{ConnectEdgeReq, EdgeReqPortID};
-use crate::engine::timer::HostTimer;
+use crate::engine::timer_wheel::EngineTimerWheel;
 use crate::engine::{NewPluginRes, OnIdleEvent, PluginStatus};
 use crate::plugin_host::PluginHostProcessorWrapper;
 use crate::plugin_host::{OnIdleResult, PluginHostMainThread};
@@ -136,7 +136,7 @@ impl AudioGraph {
         event_buffer_size: usize,
         thread_ids: SharedThreadIDs,
         transport_declick_time: Option<Seconds>,
-        host_timer: &mut HostTimer,
+        engine_timer: &mut EngineTimerWheel,
     ) -> (Self, SharedProcessorSchedule, TransportHandle) {
         //assert!(graph_in_channels > 0);
         assert!(graph_out_channels > 0);
@@ -189,7 +189,7 @@ impl AudioGraph {
             schedule_version: 0,
         };
 
-        new_self.reset(host_timer);
+        new_self.reset(engine_timer);
 
         (new_self, shared_schedule, transport_handle)
     }
@@ -278,7 +278,7 @@ impl AudioGraph {
     pub fn remove_plugin_instances(
         &mut self,
         plugin_ids: &[PluginInstanceID],
-        host_timer: &mut HostTimer,
+        engine_timer: &mut EngineTimerWheel,
     ) -> (FnvHashSet<PluginInstanceID>, Vec<DSEdgeID>) {
         let mut removed_plugins: FnvHashSet<PluginInstanceID> = FnvHashSet::default();
         let mut removed_edges: Vec<DSEdgeID> = Vec::new();
@@ -292,7 +292,7 @@ impl AudioGraph {
             if removed_plugins.insert(id.clone()) {
                 if let Some(plugin_host) = self.shared_pools.plugin_hosts.get_mut(id) {
                     if let Some(plugin_proc_to_drop) =
-                        plugin_host.schedule_remove(&self.coll_handle, host_timer)
+                        plugin_host.schedule_remove(&self.coll_handle, engine_timer)
                     {
                         self.plugin_processors_to_drop.push(plugin_proc_to_drop);
                     }
@@ -625,11 +625,11 @@ impl AudioGraph {
         }
     }
 
-    pub fn reset(&mut self, host_timer: &mut HostTimer) {
+    pub fn reset(&mut self, engine_timer: &mut EngineTimerWheel) {
         // Try to gracefully remove all existing plugins.
         for plugin_host in self.shared_pools.plugin_hosts.iter_mut() {
             if let Some(processor_to_drop) =
-                plugin_host.schedule_remove(&self.coll_handle, host_timer)
+                plugin_host.schedule_remove(&self.coll_handle, engine_timer)
             {
                 self.plugin_processors_to_drop.push(processor_to_drop);
             }
@@ -660,7 +660,7 @@ impl AudioGraph {
 
                 let mut _events_out: SmallVec<[OnIdleEvent; 32]> = SmallVec::new();
 
-                let _ = self.on_idle(&mut _events_out, host_timer);
+                let _ = self.on_idle(&mut _events_out, engine_timer);
             }
 
             if !self.shared_pools.plugin_hosts.is_empty() {
@@ -762,7 +762,7 @@ impl AudioGraph {
     pub fn on_idle(
         &mut self,
         events_out: &mut SmallVec<[OnIdleEvent; 32]>,
-        host_timer: &mut HostTimer,
+        engine_timer: &mut EngineTimerWheel,
     ) -> bool {
         let mut plugins_to_remove: SmallVec<[PluginInstanceID; 4]> = SmallVec::new();
         let mut recompile_graph = false;
@@ -778,7 +778,7 @@ impl AudioGraph {
                 &mut self.edge_id_to_ds_edge_id,
                 &self.thread_ids,
                 self.schedule_version,
-                host_timer,
+                engine_timer,
             );
 
             match res {

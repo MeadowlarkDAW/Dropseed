@@ -16,7 +16,7 @@ use raw_window_handle::RawWindowHandle;
 use smallvec::SmallVec;
 use std::error::Error;
 
-use crate::engine::{timer::HostTimer, OnIdleEvent, PluginActivatedStatus};
+use crate::engine::{timer_wheel::EngineTimerWheel, OnIdleEvent, PluginActivatedStatus};
 use crate::graph::{DSEdgeID, PortChannelID};
 use crate::utils::thread_id::SharedThreadIDs;
 
@@ -565,7 +565,7 @@ impl PluginHostMainThread {
     pub(crate) fn schedule_remove(
         &mut self,
         coll_handle: &basedrop::Handle,
-        host_timer: &mut HostTimer,
+        engine_timer: &mut EngineTimerWheel,
     ) -> Option<Shared<PluginHostProcessorWrapper>> {
         self.remove_requested = true;
 
@@ -573,7 +573,7 @@ impl PluginHostMainThread {
             self.plug_main_thread.destroy_gui();
         }
 
-        host_timer.remove_all_with_plugin(self.id.unique_id());
+        engine_timer.unregister_all_timers_on_plugin(self.id.unique_id());
 
         self.schedule_deactivate(coll_handle)
     }
@@ -773,8 +773,32 @@ impl PluginHostMainThread {
         }
     }
 
-    pub(crate) fn on_timer(&mut self, timer_id: TimerID) {
-        self.plug_main_thread.on_timer(timer_id);
+    pub(crate) fn on_timer(&mut self, timer_id: TimerID, engine_timer: &mut EngineTimerWheel) {
+        // Make sure that plugin hasn't requested to unregister the timer
+        // here before calling its `on_timer()` method.
+        let mut timer_still_registered = true;
+        if self.host_request_rx.has_timer_request() {
+            let timer_requests = self.host_request_rx.fetch_timer_requests();
+            for req in timer_requests.iter() {
+                if req.register {
+                    engine_timer.register_plugin_timer(
+                        self.id.unique_id(),
+                        req.timer_id,
+                        req.period_ms,
+                    );
+                } else {
+                    if req.timer_id == timer_id {
+                        timer_still_registered = false;
+                    }
+
+                    engine_timer.unregister_plugin_timer(self.id.unique_id(), req.timer_id);
+                }
+            }
+        }
+
+        if timer_still_registered {
+            self.plug_main_thread.on_timer(timer_id);
+        }
     }
 
     /// Poll parameter updates and requests from the plugin and the plugin host's
@@ -793,7 +817,7 @@ impl PluginHostMainThread {
         edge_id_to_ds_edge_id: &mut FnvHashMap<EdgeID, DSEdgeID>,
         thread_ids: &SharedThreadIDs,
         schedule_version: u64,
-        host_timer: &mut HostTimer,
+        engine_timer: &mut EngineTimerWheel,
     ) -> (OnIdleResult, SmallVec<[ParamModifiedInfo; 4]>, Option<Shared<PluginHostProcessorWrapper>>)
     {
         let mut modified_params: SmallVec<[ParamModifiedInfo; 4]> = SmallVec::new();
@@ -985,9 +1009,13 @@ impl PluginHostMainThread {
                 let timer_requests = self.host_request_rx.fetch_timer_requests();
                 for req in timer_requests.iter() {
                     if req.register {
-                        host_timer.insert(self.id.unique_id(), req.timer_id, req.period_ms);
+                        engine_timer.register_plugin_timer(
+                            self.id.unique_id(),
+                            req.timer_id,
+                            req.period_ms,
+                        );
                     } else {
-                        host_timer.remove(self.id.unique_id(), req.timer_id);
+                        engine_timer.unregister_plugin_timer(self.id.unique_id(), req.timer_id);
                     }
                 }
             }

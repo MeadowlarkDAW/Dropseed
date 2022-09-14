@@ -17,8 +17,7 @@ use egui_glow::egui_winit::egui;
 use egui_glow::egui_winit::winit;
 use fnv::FnvHashMap;
 use glutin::window::WindowId;
-use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
-use std::sync::{mpsc, Arc};
+use raw_window_handle::HasRawWindowHandle;
 
 use crate::ActivatedState;
 
@@ -161,66 +160,8 @@ impl EffectRackPluginState {
         ds_engine: &mut DSEngineMainThread,
         event_loop: &winit::event_loop::EventLoopWindowTarget<()>,
     ) {
-        use winit::{
-            event::{ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent},
-            event_loop::EventLoop,
-            window::Window,
-        };
-
         if self.supports_embedded_gui && !self.gui_active {
             if let Some(plugin_host) = ds_engine.plugin_host_mut(&self.plugin_id) {
-                /*
-                let (spawn_window_res_tx, spawn_window_res_rx) = mpsc::channel::<Option<Arc<Window>>>();
-                let (to_window_tx, from_app_rx) = mpsc::channel::<EmbeddedWindowMsg>();
-                let (to_app_tx, from_window_rx) = mpsc::channel::<EmbeddedWindowMsg>();
-
-                std::thread::spawn(move || {
-                    let event_loop = EventLoop::new();
-
-                    match Window::new(&event_loop) {
-                        Ok(w) => {
-                            let window = Arc::new(w);
-
-                            spawn_window_res_tx.send(Some(Arc::clone(&window))).unwrap();
-
-                            event_loop.run(move |event, event_loop, control_flow| {
-                                control_flow.set_wait();
-
-                                match event {
-                                    Event::WindowEvent { event, window_id } => {
-                                        match event {
-                                            WindowEvent::CloseRequested => {
-                                                to_app_tx.send(EmbeddedWindowMsg::Close).unwrap();
-                                                control_flow.set_exit();
-                                            }
-                                            WindowEvent::Resized(size) => {
-
-                                            }
-                                            _ => (),
-                                        }
-                                    }
-                                    _ => (),
-                                }
-                            })
-                        },
-                        Err(e) => {
-                            log::error!(
-                                "Failed to create window for embedded plugin GUI: {}",
-                                e
-                            );
-
-                            spawn_window_res_tx.send(None).unwrap();
-                        }
-                    };
-                });
-
-                let new_window = if let Some(w) = spawn_window_res_rx.recv().unwrap() {
-                    w
-                } else {
-                    return;
-                };
-                */
-
                 let new_window = match winit::window::Window::new(event_loop) {
                     Ok(w) => w,
                     Err(e) => {
@@ -238,15 +179,15 @@ impl EffectRackPluginState {
                         self.gui_active = true;
                         self.gui_visible = false;
 
+                        new_window.set_resizable(info.resizable);
                         new_window.set_inner_size(winit::dpi::PhysicalSize::new(
                             info.size.width,
                             info.size.height,
                         ));
-                        //self.show_gui(ds_engine);
-
-                        new_window.request_redraw();
 
                         self.embedded_window = Some(new_window);
+
+                        self.show_gui(ds_engine);
                     }
                     Err(e) => {
                         log::error!(
@@ -260,27 +201,46 @@ impl EffectRackPluginState {
         }
     }
 
-    pub fn resize_gui(&mut self, size: GuiSize, ds_engine: &mut DSEngineMainThread) {
-        if self.gui_active && self.gui_resizable {
-            if let Some(plugin_host) = ds_engine.plugin_host_mut(&self.plugin_id) {
-                if let Some(working_size) = plugin_host.adjust_gui_size(size) {
-                    match plugin_host.set_gui_size(working_size) {
-                        Ok(()) => {}
-                        Err(e) => {
-                            log::error!(
-                                "Failed to set size of plugin GUI to {:?} on plugin {:?}: {}",
-                                working_size,
-                                &self.plugin_id,
-                                e
-                            );
+    pub fn resize_gui(
+        &mut self,
+        size: GuiSize,
+        initated_by_plugin: bool,
+        ds_engine: &mut DSEngineMainThread,
+    ) {
+        if self.gui_active {
+            if initated_by_plugin {
+                if let Some(embedded_window) = &mut self.embedded_window {
+                    embedded_window
+                        .set_inner_size(winit::dpi::PhysicalSize::new(size.width, size.height));
+                }
+            } else if self.gui_resizable {
+                if let Some(plugin_host) = ds_engine.plugin_host_mut(&self.plugin_id) {
+                    if let Some(working_size) = plugin_host.adjust_gui_size(size) {
+                        match plugin_host.set_gui_size(working_size) {
+                            Ok(()) => {
+                                self.embedded_window.as_mut().unwrap().set_inner_size(
+                                    winit::dpi::PhysicalSize::new(
+                                        working_size.width,
+                                        working_size.height,
+                                    ),
+                                );
+                            }
+                            Err(e) => {
+                                log::error!(
+                                    "Failed to set size of plugin GUI to {:?} on plugin {:?}: {}",
+                                    working_size,
+                                    &self.plugin_id,
+                                    e
+                                );
+                            }
                         }
+                    } else {
+                        log::error!(
+                            "Failed to set size of plugin GUI to {:?} on plugin {:?}",
+                            size,
+                            &self.plugin_id
+                        );
                     }
-                } else {
-                    log::error!(
-                        "Failed to set size of plugin GUI to {:?} on plugin {:?}",
-                        size,
-                        &self.plugin_id
-                    );
                 }
             }
         }
@@ -345,16 +305,6 @@ impl EffectRackPluginState {
             ds_engine.plugin_host_mut(&self.plugin_id).unwrap().set_bypassed(bypassed);
         }
     }
-
-    pub fn embedded_window_id(&self) -> Option<winit::window::WindowId> {
-        self.embedded_window.as_ref().map(|w| w.id())
-    }
-
-    pub fn refresh_embedded_window(&mut self) {
-        if let Some(window) = &self.embedded_window {
-            window.request_redraw();
-        }
-    }
 }
 
 pub struct EffectRackState {
@@ -366,23 +316,6 @@ pub struct EffectRackState {
 impl EffectRackState {
     pub fn new() -> Self {
         Self { selected_plugin_to_add_i: None, plugins: Vec::new() }
-    }
-
-    /*
-    pub fn plugin(&self, plugin_id: &PluginInstanceID) -> Option<&EffectRackPluginState> {
-        let mut found = None;
-        for p in self.plugins.iter() {
-            if &p.plugin_id == plugin_id {
-                found = Some(p);
-                break;
-            }
-        }
-        found
-    }
-    */
-
-    pub fn plugins_mut(&mut self) -> impl IntoIterator<Item = &mut EffectRackPluginState> {
-        self.plugins.iter_mut()
     }
 
     pub fn plugin_mut(

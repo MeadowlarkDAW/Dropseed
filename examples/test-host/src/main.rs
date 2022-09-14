@@ -4,14 +4,13 @@ use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::Stream;
 use dropseed::engine::{
     ActivateEngineSettings, ActivatedEngineInfo, DSEngineAudioThread, DSEngineMainThread,
-    EngineDeactivatedStatus, OnIdleEvent,
+    EngineDeactivatedStatus, EngineSettings, OnIdleEvent,
 };
 use dropseed::plugin_api::HostInfo;
 use dropseed::plugin_scanner::ScannedPluginInfo;
 use egui_glow::egui_winit::egui;
 use egui_glow::egui_winit::winit;
 use fern::colors::ColoredLevelConfig;
-use glutin::event_loop::ControlFlow;
 use glutin::window::WindowId;
 use log::LevelFilter;
 use meadowlark_core_types::time::SampleRate;
@@ -107,13 +106,14 @@ fn main() {
 
     // ---  Initialize Dropseed Engine  -------------------------------------------
 
-    let (mut ds_engine, internal_plugins_scan_res) = DSEngineMainThread::new(
+    let (mut ds_engine, first_timer_instant, internal_plugins_scan_res) = DSEngineMainThread::new(
         HostInfo::new(
             "Dropseed Test Host".into(),                              // host name
             env!("CARGO_PKG_VERSION").into(),                         // host version
             Some("Meadowlark".into()),                                // vendor
             Some("https://github.com/MeadowlarkDAW/dropseed".into()), // url
         ),
+        EngineSettings::default(),
         vec![], // list of internal plugins
     );
 
@@ -143,7 +143,7 @@ fn main() {
         to_audio_thread_tx,
     );
 
-    run_ui_event_loop(event_loop, gl_window, gl, egui_glow, app);
+    run_ui_event_loop(event_loop, gl_window, gl, egui_glow, app, first_timer_instant);
 }
 
 #[derive(Debug)]
@@ -192,17 +192,71 @@ impl DSTestHostGUI {
         }
     }
 
-    fn on_idle(&mut self) -> Option<Instant> {
-        if self.activated_state.is_none() {
-            return None;
-        }
+    fn update(
+        &mut self,
+        ctx: &egui::Context,
+        event_loop: &winit::event_loop::EventLoopWindowTarget<()>,
+    ) {
+        egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.current_tab, Tab::EffectRack, "FX Rack");
+                ui.selectable_value(&mut self.current_tab, Tab::ScannedPlugins, "Scanned Plugins");
 
-        let mut next_timer_instant: Option<Instant> = None;
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                    if self.activated_state.is_some() {
+                        ui.label(format!("sample rate: {}", self.sample_rate.as_u16()));
+                        ui.colored_label(egui::Color32::GREEN, "active");
+                        ui.label("engine status:");
 
-        // This must be called periodically (i.e. once every frame).
+                        if ui.button("deactivate").clicked() {
+                            if self.ds_engine.deactivate_engine() {
+                                self.activated_state = None;
+
+                                self.to_audio_thread_tx
+                                    .push(UIToAudioThreadMsg::DropEngineAudioThread)
+                                    .unwrap();
+
+                                log::info!("Deactivated dropseed engine gracefully");
+                            }
+                        }
+                    } else {
+                        ui.colored_label(egui::Color32::RED, "inactive");
+                        ui.label("engine status:");
+
+                        if ui.button("activate").clicked() {
+                            let (activated_state, ds_engine_audio_thread) =
+                                activate_engine(&mut self.ds_engine, self.sample_rate);
+
+                            self.to_audio_thread_tx
+                                .push(UIToAudioThreadMsg::NewEngineAudioThread(
+                                    ds_engine_audio_thread,
+                                ))
+                                .unwrap();
+
+                            self.activated_state = Some(activated_state);
+                        }
+                    }
+                });
+            });
+        });
+
+        egui::CentralPanel::default().show(ctx, |ui| match self.current_tab {
+            Tab::EffectRack => effect_rack_page::show(
+                &mut self.ds_engine,
+                self.activated_state.as_mut(),
+                ui,
+                event_loop,
+            ),
+            Tab::ScannedPlugins => scanned_plugins_page::show(self, ui),
+        });
+    }
+
+    fn on_timer(&mut self) -> Instant {
+        // This must be called periodically.
         //
-        // This will return a list of events that have occured.
-        let mut events = self.ds_engine.on_idle();
+        // This will return a list of events that have occured, as well as the next
+        // instant that this method should be called again.
+        let (mut events, next_timer_instant) = self.ds_engine.on_timer();
         for event in events.drain(..) {
             match event {
                 // The plugin's parameters have been modified via the plugin's custom
@@ -234,7 +288,7 @@ impl DSTestHostGUI {
                         .effect_rack_state
                         .plugin_mut(&plugin_id)
                     {
-                        plugin.resize_gui(size, &mut self.ds_engine);
+                        plugin.resize_gui(size, true, &mut self.ds_engine);
                     }
                 }
 
@@ -349,18 +403,6 @@ impl DSTestHostGUI {
                     }
                 }
 
-                // Sent when a plugin has registered a timer, and thus the method
-                // `EngineMainThread::advance_timer()` must be called after the given
-                // instant has elapsed.
-                //
-                // This event will only be sent when the engine went from no timers being
-                // registered to at least one new timer being registered. The method
-                // `EngineMainThread::advance_timer()` will return the next instant
-                // needed to call that same method in order to keep the timer running.
-                OnIdleEvent::RunTimer(instant) => {
-                    next_timer_instant = Some(instant);
-                }
-
                 // Sent whenever the engine has been deactivated, whether gracefully or
                 // because of a crash.
                 OnIdleEvent::EngineDeactivated(status) => {
@@ -382,72 +424,6 @@ impl DSTestHostGUI {
             }
         }
 
-        // TODO: Only call this every 3 seconds or so.
-        self.ds_engine.collect_garbage();
-
-        next_timer_instant
-    }
-
-    fn update(
-        &mut self,
-        ctx: &egui::Context,
-        event_loop: &winit::event_loop::EventLoopWindowTarget<()>,
-    ) -> Option<Instant> {
-        let next_timer_instant = self.on_idle();
-
-        egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.current_tab, Tab::EffectRack, "FX Rack");
-                ui.selectable_value(&mut self.current_tab, Tab::ScannedPlugins, "Scanned Plugins");
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                    if self.activated_state.is_some() {
-                        ui.label(format!("sample rate: {}", self.sample_rate.as_u16()));
-                        ui.colored_label(egui::Color32::GREEN, "active");
-                        ui.label("engine status:");
-
-                        if ui.button("deactivate").clicked() {
-                            if self.ds_engine.deactivate_engine() {
-                                self.activated_state = None;
-
-                                self.to_audio_thread_tx
-                                    .push(UIToAudioThreadMsg::DropEngineAudioThread)
-                                    .unwrap();
-
-                                log::info!("Deactivated dropseed engine gracefully");
-                            }
-                        }
-                    } else {
-                        ui.colored_label(egui::Color32::RED, "inactive");
-                        ui.label("engine status:");
-
-                        if ui.button("activate").clicked() {
-                            let (activated_state, ds_engine_audio_thread) =
-                                activate_engine(&mut self.ds_engine, self.sample_rate);
-
-                            self.to_audio_thread_tx
-                                .push(UIToAudioThreadMsg::NewEngineAudioThread(
-                                    ds_engine_audio_thread,
-                                ))
-                                .unwrap();
-
-                            self.activated_state = Some(activated_state);
-                        }
-                    }
-                });
-            });
-        });
-
-        egui::CentralPanel::default().show(ctx, |ui| match self.current_tab {
-            Tab::EffectRack => effect_rack_page::show(
-                &mut self.ds_engine,
-                self.activated_state.as_mut(),
-                ui,
-                event_loop,
-            ),
-            Tab::ScannedPlugins => scanned_plugins_page::show(self, ui),
-        });
-
         next_timer_instant
     }
 
@@ -465,10 +441,6 @@ impl DSTestHostGUI {
         {
             plugin.on_plugin_gui_closed(true, &mut self.ds_engine);
         }
-    }
-
-    fn on_timer(&mut self) -> Option<Instant> {
-        self.ds_engine.advance_timer()
     }
 
     fn on_exit(&mut self) {
@@ -521,19 +493,18 @@ fn run_ui_event_loop(
     gl: Arc<egui_glow::glow::Context>,
     mut egui_glow: egui_glow::EguiGlow,
     mut app: DSTestHostGUI,
+    first_timer_instant: Instant,
 ) {
     let main_window_id = gl_window.window().id();
 
+    let mut first_timer_instant = Some(first_timer_instant);
     let mut requested_timer_instant = Instant::now();
     let mut requested_repaint_instant = Instant::now();
 
     event_loop.run(move |event, event_loop, control_flow| {
         let mut redraw = || {
             let repaint_after = egui_glow.run(gl_window.window(), |egui_ctx| {
-                if let Some(timer_instant) = app.update(egui_ctx, event_loop) {
-                    requested_timer_instant = timer_instant;
-                    control_flow.set_wait_until(timer_instant);
-                }
+                app.update(egui_ctx, event_loop);
             });
 
             if repaint_after.is_zero() {
@@ -564,6 +535,11 @@ fn run_ui_event_loop(
                 gl_window.swap_buffers().unwrap();
             }
         };
+
+        if let Some(first_timer_instant) = first_timer_instant.take() {
+            requested_timer_instant = first_timer_instant;
+            control_flow.set_wait_until(first_timer_instant);
+        }
 
         match event {
             // Platform-dependent event handlers to workaround a winit bug
@@ -612,10 +588,9 @@ fn run_ui_event_loop(
                 ..
             }) => {
                 if requested_resume == requested_timer_instant {
-                    if let Some(next_timer_instant) = app.on_timer() {
-                        requested_timer_instant = next_timer_instant;
-                        control_flow.set_wait_until(next_timer_instant);
-                    }
+                    let next_timer_instant = app.on_timer();
+                    requested_timer_instant = next_timer_instant;
+                    control_flow.set_wait_until(next_timer_instant);
                 }
 
                 if requested_resume == requested_repaint_instant {

@@ -2,6 +2,7 @@ use atomic_refcell::{AtomicRef, AtomicRefMut};
 use clack_extensions::audio_ports::{AudioPortFlags, AudioPortInfoBuffer, PluginAudioPorts};
 use clack_extensions::gui::GuiApiType;
 use clack_extensions::note_ports::{NotePortInfoBuffer, PluginNotePorts};
+use clack_extensions::timer::TimerId;
 use clack_host::events::io::{InputEvents, OutputEvents};
 use clack_host::instance::processor::PluginAudioProcessor;
 use clack_host::instance::{PluginAudioConfiguration, PluginInstance};
@@ -433,6 +434,12 @@ impl PluginMainThread for ClapPluginMainThread {
             params_ext.text_to_value(&self.instance, param_id.0, &c_string)
         } else {
             None
+        }
+    }
+
+    fn on_timer(&mut self, timer_id: ext::timer::TimerID) {
+        if let Some(timer_ext) = self.instance.shared_host_data().timer_ext {
+            timer_ext.on_timer(&mut self.instance.main_thread_plugin_data(), TimerId(timer_id.0));
         }
     }
 

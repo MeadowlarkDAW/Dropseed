@@ -3,12 +3,13 @@ use fnv::FnvHashSet;
 use meadowlark_core_types::time::{SampleRate, Seconds};
 use smallvec::SmallVec;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use thread_priority::ThreadPriority;
 
 use dropseed_plugin_api::ext::audio_ports::PluginAudioPortsExt;
@@ -29,33 +30,73 @@ use crate::utils::thread_id::SharedThreadIDs;
 
 use super::error::{EngineCrashError, NewPluginInstanceError};
 use super::modify_request::{ModifyGraphRequest, PluginIDReq};
-use super::timer::HostTimer;
+use super::timer_wheel::{EngineTimerWheel, TimerEntry, TimerEntryKey};
+use super::{DEFAULT_GARBAGE_COLLECT_INTERVAL_MS, DEFAULT_IDLE_INTERVAL_MS};
+
+struct ActivatedState {
+    audio_graph: AudioGraph,
+    run_process_thread: Arc<AtomicBool>,
+    process_thread_handle: Option<JoinHandle<()>>,
+    tempo_map_shared: Shared<SharedCell<(Shared<TempoMap>, u64)>>,
+}
+
+impl Drop for ActivatedState {
+    fn drop(&mut self) {
+        // Attempt to gracefully stop the process thread.
+        self.run_process_thread.store(false, Ordering::Relaxed);
+
+        if let Some(process_thread_handle) = self.process_thread_handle.take() {
+            if let Err(e) = process_thread_handle.join() {
+                log::error!("Failed to join process thread handle: {:?}", e);
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EngineSettings {
+    pub main_idle_interval_ms: u32,
+    pub garbage_collect_interval_ms: u32,
+}
+
+impl Default for EngineSettings {
+    fn default() -> Self {
+        Self {
+            main_idle_interval_ms: DEFAULT_IDLE_INTERVAL_MS,
+            garbage_collect_interval_ms: DEFAULT_GARBAGE_COLLECT_INTERVAL_MS,
+        }
+    }
+}
 
 pub struct DSEngineMainThread {
-    audio_graph: Option<AudioGraph>,
+    activated_state: Option<ActivatedState>,
+    timer_wheel: EngineTimerWheel,
     host_info: Shared<HostInfo>,
     plugin_scanner: PluginScanner,
     thread_ids: SharedThreadIDs,
     collector: Collector,
-    run_process_thread: Option<Arc<AtomicBool>>,
-    process_thread_handle: Option<JoinHandle<()>>,
-    tempo_map_shared: Option<Shared<SharedCell<(Shared<TempoMap>, u64)>>>,
     crash_msg: Option<EngineCrashError>,
-    host_timer: HostTimer,
-    timer_running: bool,
+    cached_elapsed_entries: Option<Vec<Rc<TimerEntry>>>,
 }
 
 impl DSEngineMainThread {
     /// Construct a new Dropseed engine.
     ///
     /// * `host_info` - The information about this host.
+    /// * `engine_settings` - Additional settings for the engine.
     /// * `internal_plugins` - A list of plugin factories for internal plugins.
     ///
-    /// This also returns the result of scanning the internal plugins.
+    /// This returns:
+    /// * (
+    ///     * Self,
+    ///     * The first timer instant when `Self::on_timer()` must be called,
+    ///     * The result of scanning internal plugins
+    /// * )
     pub fn new(
         host_info: HostInfo,
+        settings: EngineSettings,
         mut internal_plugins: Vec<Box<dyn PluginFactory>>,
-    ) -> (Self, Vec<Result<ScannedPluginKey, String>>) {
+    ) -> (Self, Instant, Vec<Result<ScannedPluginKey, String>>) {
         // Set up and run garbage collector wich collects and safely drops garbage from
         // the audio thread.
         let collector = Collector::new();
@@ -72,20 +113,25 @@ impl DSEngineMainThread {
         let internal_plugins_res: Vec<Result<ScannedPluginKey, String>> =
             internal_plugins.drain(..).map(|p| plugin_scanner.scan_internal_plugin(p)).collect();
 
+        let timer_wheel = EngineTimerWheel::new(
+            settings.main_idle_interval_ms,
+            settings.garbage_collect_interval_ms,
+        );
+
+        let next_timer_callback_instant = timer_wheel.next_expected_tick_instant();
+
         (
             Self {
-                audio_graph: None,
+                activated_state: None,
+                timer_wheel,
                 host_info,
                 plugin_scanner,
                 thread_ids,
                 collector,
-                run_process_thread: None,
-                process_thread_handle: None,
-                tempo_map_shared: None,
                 crash_msg: None,
-                host_timer: HostTimer::new(),
-                timer_running: false,
+                cached_elapsed_entries: None,
             },
+            next_timer_callback_instant,
             internal_plugins_res,
         )
     }
@@ -98,19 +144,17 @@ impl DSEngineMainThread {
     // TODO: multiple transports
     /// Replace the old tempo map with this new one.
     pub fn update_tempo_map(&mut self, new_tempo_map: TempoMap) {
-        if let Some(tempo_map_shared) = &self.tempo_map_shared {
-            let tempo_map_version = tempo_map_shared.get().1;
+        if let Some(activated_state) = &mut self.activated_state {
+            let tempo_map_version = activated_state.tempo_map_shared.get().1;
 
             let new_tempo_map_shared = Shared::new(&self.collector.handle(), new_tempo_map);
 
-            tempo_map_shared.set(Shared::new(
+            activated_state.tempo_map_shared.set(Shared::new(
                 &self.collector.handle(),
                 (Shared::clone(&new_tempo_map_shared), tempo_map_version + 1),
             ));
 
-            if let Some(audio_graph) = &mut self.audio_graph {
-                audio_graph.update_tempo_map(new_tempo_map_shared);
-            }
+            activated_state.audio_graph.update_tempo_map(new_tempo_map_shared);
         }
     }
 
@@ -119,7 +163,7 @@ impl DSEngineMainThread {
     /// This will return `None` if a plugin with the given ID does not exist/
     /// has been removed.
     pub fn plugin_host(&self, id: &PluginInstanceID) -> Option<&PluginHostMainThread> {
-        self.audio_graph.as_ref().and_then(|a| a.get_plugin_host(id))
+        self.activated_state.as_ref().and_then(|a| a.audio_graph.get_plugin_host(id))
     }
 
     /// Get a mutable reference to the host for a particular plugin.
@@ -127,13 +171,14 @@ impl DSEngineMainThread {
     /// This will return `None` if a plugin with the given ID does not exist/
     /// has been removed.
     pub fn plugin_host_mut(&mut self, id: &PluginInstanceID) -> Option<&mut PluginHostMainThread> {
-        self.audio_graph.as_mut().and_then(|a| a.get_plugin_host_mut(id))
+        self.activated_state.as_mut().and_then(|a| a.audio_graph.get_plugin_host_mut(id))
     }
 
-    /// This must be called periodically (i.e. once every frame).
+    /// This must be called periodically.
     ///
-    /// This will return a list of events that have occured.
-    pub fn on_idle(&mut self) -> SmallVec<[OnIdleEvent; 32]> {
+    /// This will return a list of events that have occured, as well as the next
+    /// instant that this method should be called again.
+    pub fn on_timer(&mut self) -> (SmallVec<[OnIdleEvent; 32]>, Instant) {
         let mut events_out: SmallVec<[OnIdleEvent; 32]> = SmallVec::new();
 
         if let Some(msg) = self.crash_msg.take() {
@@ -142,63 +187,44 @@ impl DSEngineMainThread {
             ));
         }
 
-        if let Some(audio_graph) = &mut self.audio_graph {
-            let recompile = audio_graph.on_idle(&mut events_out, &mut self.host_timer);
+        let mut elapsed_entries =
+            self.cached_elapsed_entries.take().unwrap_or_else(|| Vec::with_capacity(32));
+        elapsed_entries.clear();
+        self.timer_wheel.advance(&mut elapsed_entries);
+        let next_timer_instant = self.timer_wheel.next_expected_tick_instant();
 
-            if recompile {
-                self.compile_audio_graph();
-            }
-        }
+        for elapsed_entry in elapsed_entries.drain(..) {
+            match elapsed_entry.key {
+                TimerEntryKey::MainIdleTimer => {
+                    if let Some(activated_state) = &mut self.activated_state {
+                        let recompile = activated_state
+                            .audio_graph
+                            .on_idle(&mut events_out, &mut self.timer_wheel);
 
-        if self.timer_running {
-            if self.host_timer.is_empty() {
-                self.timer_running = false;
-            }
-        } else if !self.host_timer.is_empty() {
-            self.timer_running = true;
-            events_out.push(OnIdleEvent::RunTimer(Instant::now() + Duration::from_millis(1)));
-        }
-
-        events_out
-    }
-
-    /// Call this after recieving an `OnIdleEvent::RunTimer` event.
-    ///
-    /// If this method returns `Some(instant)`, then this method must be
-    /// called again after that returned instant has elapsed.
-    ///
-    /// If this method returns `None`, then it means all timers have been
-    /// unregistered and this method does not need to be called anymore
-    /// until the next `OnIdleEvent::RunTimer` event.
-    pub fn advance_timer(&mut self) -> Option<Instant> {
-        if self.audio_graph.is_none() {
-            return None;
-        }
-
-        let audio_graph = self.audio_graph.as_mut().unwrap();
-
-        if let Some((entries, next_instant)) = self.host_timer.advance() {
-            for entry in entries.iter() {
-                if let Some(plugin_host) =
-                    audio_graph.get_plugin_host_by_unique_id_mut(entry.key.plugin_id)
-                {
-                    plugin_host.on_timer(entry.key.timer_id);
+                        if recompile {
+                            self.compile_audio_graph();
+                        }
+                    }
+                }
+                TimerEntryKey::GarbageCollectTimer => {
+                    self.collect_garbage();
+                }
+                TimerEntryKey::PluginRegisteredTimer { plugin_unique_id, timer_id } => {
+                    if let Some(activated_state) = &mut self.activated_state {
+                        if let Some(plugin_host) = activated_state
+                            .audio_graph
+                            .get_plugin_host_by_unique_id_mut(plugin_unique_id)
+                        {
+                            plugin_host.on_timer(timer_id, &mut self.timer_wheel);
+                        }
+                    }
                 }
             }
-
-            Some(next_instant)
-        } else {
-            self.timer_running = false;
-            None
         }
-    }
 
-    /// Invoke the realtime-safe garbage collector to deallocate unused memory.
-    ///
-    /// This must be called periodically (i.e. once every 3 seconds).
-    pub fn collect_garbage(&mut self) {
-        self.plugin_scanner.unload_unused_binaries();
-        self.collector.collect();
+        self.cached_elapsed_entries = Some(elapsed_entries);
+
+        (events_out, next_timer_instant)
     }
 
     #[cfg(feature = "clap-host")]
@@ -233,7 +259,7 @@ impl DSEngineMainThread {
         &mut self,
         settings: ActivateEngineSettings,
     ) -> Option<(ActivatedEngineInfo, DSEngineAudioThread)> {
-        if self.audio_graph.is_some() {
+        if self.activated_state.is_some() {
             log::warn!("Ignored request to activate RustyDAW engine: Engine is already activated");
             return None;
         }
@@ -249,8 +275,6 @@ impl DSEngineMainThread {
         let event_buffer_size = settings.event_buffer_size;
         let transport_declick_time = settings.transport_declick_time;
 
-        self.host_timer = HostTimer::new();
-
         let (audio_graph, shared_schedule, transport_handle) = AudioGraph::new(
             self.collector.handle(),
             usize::from(num_audio_in_channels),
@@ -262,92 +286,92 @@ impl DSEngineMainThread {
             event_buffer_size,
             self.thread_ids.clone(),
             transport_declick_time,
-            &mut self.host_timer,
+            &mut self.timer_wheel,
         );
 
-        self.audio_graph = Some(audio_graph);
+        let (audio_thread, mut process_thread) = DSEngineAudioThread::new(
+            shared_schedule,
+            sample_rate,
+            num_audio_in_channels as usize,
+            num_audio_out_channels as usize,
+            max_frames as usize,
+            &self.collector.handle(),
+        );
+
+        let run_process_thread = Arc::new(AtomicBool::new(true));
+        let run_process_thread_clone = Arc::clone(&run_process_thread);
+
+        let process_thread_handle =
+            thread_priority::spawn(ThreadPriority::Max, move |priority_res| {
+                if let Err(e) = priority_res {
+                    log::error!("Failed to set process thread priority to max: {:?}", e);
+                } else {
+                    log::info!("Successfully set process thread priority to max");
+                }
+
+                process_thread.run(run_process_thread_clone);
+            });
+
+        let tempo_map_shared = transport_handle.tempo_map_shared();
+        let tempo_map = (*tempo_map_shared.get().0).clone();
+
+        let info = ActivatedEngineInfo {
+            graph_in_id: audio_graph.graph_in_id().clone(),
+            graph_out_id: audio_graph.graph_out_id().clone(),
+            sample_rate,
+            min_frames,
+            max_frames,
+            transport_handle,
+            num_audio_in_channels,
+            num_audio_out_channels,
+            tempo_map,
+        };
+
+        self.activated_state = Some(ActivatedState {
+            audio_graph,
+            run_process_thread,
+            process_thread_handle: Some(process_thread_handle),
+            tempo_map_shared,
+        });
 
         self.compile_audio_graph();
 
-        if let Some(audio_graph) = &self.audio_graph {
-            log::info!("Successfully activated RustyDAW engine");
-
-            let (audio_thread, mut process_thread) = DSEngineAudioThread::new(
-                shared_schedule,
-                sample_rate,
-                num_audio_in_channels as usize,
-                num_audio_out_channels as usize,
-                max_frames as usize,
-                &self.collector.handle(),
-            );
-
-            let run_process_thread = Arc::new(AtomicBool::new(true));
-
-            let run_process_thread_clone = Arc::clone(&run_process_thread);
-
-            if let Some(old_run_process_thread) = self.run_process_thread.take() {
-                // Just to be sure.
-                old_run_process_thread.store(false, Ordering::Relaxed);
-            }
-            self.run_process_thread = Some(run_process_thread);
-
-            let process_thread_handle =
-                thread_priority::spawn(ThreadPriority::Max, move |priority_res| {
-                    if let Err(e) = priority_res {
-                        log::error!("Failed to set process thread priority to max: {:?}", e);
-                    } else {
-                        log::info!("Successfully set process thread priority to max");
-                    }
-
-                    process_thread.run(run_process_thread_clone);
-                });
-
-            self.process_thread_handle = Some(process_thread_handle);
-
-            self.tempo_map_shared = Some(transport_handle.tempo_map_shared());
-            let tempo_map = (*self.tempo_map_shared.as_ref().unwrap().get().0).clone();
-
-            let info = ActivatedEngineInfo {
-                graph_in_id: audio_graph.graph_in_id().clone(),
-                graph_out_id: audio_graph.graph_out_id().clone(),
-                sample_rate,
-                min_frames,
-                max_frames,
-                transport_handle,
-                num_audio_in_channels,
-                num_audio_out_channels,
-                tempo_map,
-            };
-
-            Some((info, audio_thread))
-        } else {
-            // If this happens then we did something very wrong.
+        if self.activated_state.is_none() {
             panic!("Unexpected error: Empty audio graph failed to compile a schedule.");
         }
+
+        log::info!("Successfully activated RustyDAW engine");
+
+        Some((info, audio_thread))
     }
 
     /// Modify the audio graph.
     ///
     /// This will return `None` if the engine is deactivated.
     pub fn modify_graph(&mut self, mut request: ModifyGraphRequest) -> Option<ModifyGraphRes> {
-        if let Some(audio_graph) = &mut self.audio_graph {
+        if let Some(activated_state) = &mut self.activated_state {
             let mut removed_edges: FnvHashSet<DSEdgeID> = FnvHashSet::default();
             let mut new_edges: Vec<Edge> = Vec::new();
 
             for ds_edge_id in request.disconnect_edges.iter() {
-                if audio_graph.disconnect_edge(*ds_edge_id) {
+                if activated_state.audio_graph.disconnect_edge(*ds_edge_id) {
                     removed_edges.insert(*ds_edge_id);
                 }
             }
 
-            let (mut removed_plugins, removed_edges) = audio_graph
-                .remove_plugin_instances(&request.remove_plugin_instances, &mut self.host_timer);
+            let (mut removed_plugins, removed_edges) = activated_state
+                .audio_graph
+                .remove_plugin_instances(&request.remove_plugin_instances, &mut self.timer_wheel);
 
             let new_plugins_res: Vec<NewPluginRes> = request
                 .add_plugin_instances
                 .drain(..)
                 .map(|save_state| {
-                    audio_graph.add_new_plugin_instance(save_state, &mut self.plugin_scanner, true)
+                    activated_state.audio_graph.add_new_plugin_instance(
+                        save_state,
+                        &mut self.plugin_scanner,
+                        true,
+                    )
                 })
                 .collect();
 
@@ -385,7 +409,7 @@ impl DSEngineMainThread {
                     PluginIDReq::Existing(id) => id,
                 };
 
-                match audio_graph.connect_edge(edge, src_plugin_id, dst_plugin_id) {
+                match activated_state.audio_graph.connect_edge(edge, src_plugin_id, dst_plugin_id) {
                     Ok(new_edge) => new_edges.push(new_edge),
                     Err(e) => {
                         if edge.log_error_on_fail {
@@ -423,28 +447,23 @@ impl DSEngineMainThread {
     ///
     /// This will return `false` if the engine is already deactivated.
     pub fn deactivate_engine(&mut self) -> bool {
-        if self.audio_graph.is_none() {
+        if self.activated_state.is_none() {
             log::warn!("Ignored request to deactivate engine: Engine is already deactivated");
             return false;
         }
 
         log::info!("Deactivating RustyDAW engine");
 
-        if let Some(mut audio_graph) = self.audio_graph.take() {
-            // Make sure that all plugins are removed gracefully.
-            audio_graph.reset(&mut self.host_timer);
-        }
+        let mut activated_state = self.activated_state.take().unwrap();
 
-        if let Some(run_process_thread) = self.run_process_thread.take() {
-            run_process_thread.store(false, Ordering::Relaxed);
-        }
-        if let Some(process_thread_handle) = self.process_thread_handle.take() {
-            if let Err(e) = process_thread_handle.join() {
-                log::error!("Failed to join process thread handle: {:?}", e);
-            }
-        }
+        // Attempt to remove all plugins gracefully.
+        activated_state.audio_graph.reset(&mut self.timer_wheel);
 
-        self.tempo_map_shared = None;
+        // Attempt to stop the process thread gracefully.
+        let _ = activated_state;
+
+        self.timer_wheel.reset();
+
         self.crash_msg = None;
 
         self.collect_garbage();
@@ -454,7 +473,7 @@ impl DSEngineMainThread {
 
     /// Returns `true` if the engine is currently activated.
     pub fn is_activated(&self) -> bool {
-        self.audio_graph.is_some()
+        self.activated_state.is_some()
     }
 
     /// Collect the latest save states for all plugins.
@@ -462,33 +481,40 @@ impl DSEngineMainThread {
     /// This will only return the save states of plugins which have
     /// changed since the last call to collect its save state.
     pub fn collect_latest_save_states(&mut self) -> Vec<(PluginInstanceID, DSPluginSaveState)> {
-        if self.audio_graph.is_none() {
+        if self.activated_state.is_none() {
             log::warn!("Ignored request for the latest save states: Engine is deactivated");
             return Vec::new();
         }
 
         log::trace!("Got request for latest plugin save states");
 
-        self.audio_graph.as_mut().unwrap().collect_save_states()
+        self.activated_state.as_mut().unwrap().audio_graph.collect_save_states()
+    }
+
+    fn collect_garbage(&mut self) {
+        self.plugin_scanner.unload_unused_binaries();
+        self.collector.collect();
     }
 
     fn compile_audio_graph(&mut self) {
-        if let Some(mut audio_graph) = self.audio_graph.take() {
-            match audio_graph.compile() {
+        if let Some(mut activated_state) = self.activated_state.take() {
+            match activated_state.audio_graph.compile() {
                 Ok(_) => {
-                    self.audio_graph = Some(audio_graph);
+                    self.activated_state = Some(activated_state);
                 }
                 Err(e) => {
                     log::error!("{}", e);
 
-                    if let Some(run_process_thread) = self.run_process_thread.take() {
-                        run_process_thread.store(false, Ordering::Relaxed);
-                    }
-                    self.process_thread_handle = None;
-
                     // Audio graph is in an invalid state. Drop it and have the user restore
                     // from the last working save state.
-                    let _ = audio_graph;
+
+                    // Attempt to remove all plugins gracefully.
+                    activated_state.audio_graph.reset(&mut self.timer_wheel);
+
+                    // Attempt to stop the process thread gracefully.
+                    let _ = activated_state;
+
+                    self.timer_wheel.reset();
 
                     self.crash_msg = Some(EngineCrashError::CompilerError(e));
                 }
@@ -499,7 +525,7 @@ impl DSEngineMainThread {
 
 impl Drop for DSEngineMainThread {
     fn drop(&mut self) {
-        if self.audio_graph.is_some() {
+        if self.activated_state.is_some() {
             self.deactivate_engine();
         } else {
             self.collect_garbage();
@@ -780,16 +806,6 @@ pub enum OnIdleEvent {
         /// because it failed to restart.
         status: Result<(), ActivatePluginError>,
     },
-
-    /// Sent when a plugin has registered a timer, and thus the method
-    /// `EngineMainThread::advance_timer()` must be called after the given
-    /// instant has elapsed.
-    ///
-    /// This event will only be sent when the engine went from no timers being
-    /// registered to at least one new timer being registered. The method
-    /// `EngineMainThread::advance_timer()` will return the next instant
-    /// needed to call that same method in order to keep the timer running.
-    RunTimer(Instant),
 
     /// Sent whenever the engine has been deactivated, whether gracefully or
     /// because of a crash.
