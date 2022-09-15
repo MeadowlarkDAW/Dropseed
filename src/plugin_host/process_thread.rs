@@ -107,6 +107,7 @@ impl PluginHostProcThread {
         if self.processing_state == ProcessingState::Started(ProcessStatus::ContinueIfNotQuiet)
             && !has_note_in_event
             && buffers.audio_inputs_silent(proc_info.frames)
+            && buffers.audio_in.len() > 0
         {
             self.plugin.stop_processing();
 
