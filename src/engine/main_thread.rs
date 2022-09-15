@@ -12,17 +12,14 @@ use std::thread::{self, JoinHandle};
 use std::time::Instant;
 use thread_priority::ThreadPriority;
 
-use dropseed_plugin_api::ext::audio_ports::PluginAudioPortsExt;
 use dropseed_plugin_api::ext::gui::{GuiResizeHints, GuiSize};
-use dropseed_plugin_api::ext::note_ports::PluginNotePortsExt;
-use dropseed_plugin_api::ext::params::ParamInfo;
 use dropseed_plugin_api::plugin_scanner::ScannedPluginKey;
 use dropseed_plugin_api::transport::TempoMap;
 use dropseed_plugin_api::{DSPluginSaveState, HostInfo, PluginFactory, PluginInstanceID};
 
 use crate::engine::audio_thread::DSEngineAudioThread;
 use crate::graph::{AudioGraph, DSEdgeID, Edge};
-use crate::plugin_host::error::ActivatePluginError;
+use crate::plugin_host::error::{ActivatePluginError, RescanParamListError};
 use crate::plugin_host::{ParamModifiedInfo, PluginHostMainThread};
 use crate::plugin_scanner::{PluginScanner, ScanExternalPluginsRes};
 use crate::processor_schedule::TransportHandle;
@@ -647,33 +644,27 @@ pub enum EngineDeactivatedStatus {
 
 #[derive(Debug)]
 pub struct PluginActivatedStatus {
-    /// A new list of all the parameters on this plugin, along with their
-    /// current values.
+    /// Returns `true` if the plugin has updated its list of audio ports.
     ///
-    /// `(parameter_info, current_parameter_value)`
-    pub new_parameters: Vec<(ParamInfo, f64)>,
+    /// If `true`, then use `PluginHostMainThread::audio_ports_ext()` to
+    /// retrieve the new list of audio ports.
+    pub has_new_audio_ports_ext: bool,
 
-    /// The new list of audio ports on this plugin.
+    /// Returns `true` if the plugin has updated its list of note ports.
     ///
-    /// If the audio port configuration has not changed since the last
-    /// time this plugin was activated, then this will be `None`.
-    pub new_audio_ports_ext: Option<PluginAudioPortsExt>,
+    /// If `true`, then use `PluginHostMainThread::note_ports_ext()` to
+    /// retrieve the new list of note ports.
+    pub has_new_note_ports_ext: bool,
 
-    /// The new list of note ports on this plugin.
+    /// Returns `true` if the plugin has changed its latency.
     ///
-    /// If the note port configuration has not changed since the last
-    /// time this plugin was activated, then this will be `None`.
-    pub new_note_ports_ext: Option<PluginNotePortsExt>,
+    /// If `true`, then use `PluginHostMainThread::latency()` to
+    /// retrieve the new latency.
+    pub has_new_latency: bool,
 
     /// If this is an internal plugin with a custom defined handle,
     /// then this will be the new custom handle.
     pub internal_handle: Option<Box<dyn std::any::Any + Send + 'static>>,
-
-    /// The latency this plugin adds in frames.
-    ///
-    /// If the latency has not changed since the last time this plugin
-    /// was activated, then this will be `None`.
-    pub new_latency: Option<i64>,
 
     /// Any edges that were removed as a result of the plugin removing
     /// some of its ports.
@@ -787,6 +778,12 @@ pub enum OnIdleEvent {
     PluginChangedGuiResizeHints {
         plugin_id: PluginInstanceID,
         resize_hints: Option<GuiResizeHints>,
+    },
+
+    /// The plugin has updated its list of parameters.
+    PluginUpdatedParameterList {
+        plugin_id: PluginInstanceID,
+        status: Result<(), RescanParamListError>,
     },
 
     /// Sent whenever a plugin becomes activated after being deactivated or

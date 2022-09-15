@@ -7,7 +7,7 @@ mod processor;
 pub(crate) mod event_io_buffers;
 pub(crate) mod external;
 
-pub use main_thread::{ParamModifiedInfo, PluginHostMainThread};
+pub use main_thread::{ParamModifiedInfo, ParamState, PluginHostMainThread};
 
 pub(crate) use channel::{PluginHostProcessorWrapper, SharedPluginHostProcessor};
 pub(crate) use main_thread::OnIdleResult;

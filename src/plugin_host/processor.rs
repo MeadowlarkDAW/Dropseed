@@ -284,8 +284,9 @@ impl PluginHostProcessor {
 
         // --- Process bypassing/unbypassing the plugin ------------------------------------------
 
-        if self.bypassed != self.channel.shared_state.bypassed() {
-            self.bypassed = self.channel.shared_state.bypassed();
+        let bypassed = self.channel.shared_state.bypassed();
+        if self.bypassed != bypassed {
+            self.bypassed = bypassed;
 
             if self.bypass_declick_frames_left == 0 {
                 self.bypass_declick_frames_left = self.bypass_declick_frames;

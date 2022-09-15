@@ -27,7 +27,9 @@ dropseed-plugin-api = { path = "./plugin-api" }
 meadowlark-core-types = "0.3"
 audio-graph = { git = "https://github.com/MeadowlarkDAW/audio-graph", rev = "39a347ca8b00b092139728129c089b472b93ea8a" }
 clack-host = { git = "https://github.com/prokopyl/clack", rev = "31d247c00ddc228bc0a395c50f0738b3c91f409c" }
-clack-extensions = { git = "https://github.com/prokopyl/clack", features = ["clack-host", "audio-ports", "log", "note-ports", "params", "state", "thread-check", "latency", "timer"], rev = "31d247c00ddc228bc0a395c50f0738b3c91f409c" }
+clack-extensions = { git = "https://github.com/prokopyl/clack", features = ["clack-host", "audio-ports", "gui", "log", "note-ports", "params", "state", "thread-check", "latency", "timer"], rev = "31d247c00ddc228bc0a395c50f0738b3c91f409c" }
+#clack-host = { path = "../clack/host" }
+#clack-extensions = { path = "../clack/extensions", features = ["clack-host", "audio-ports", "gui", "log", "note-ports", "params", "state", "thread-check", "latency", "timer"] }
 dirs = { version = "4.0", optional = true }
 basedrop = "0.1"
 smallvec = { version = "1.9.0", features = ["const_generics", "union"] }

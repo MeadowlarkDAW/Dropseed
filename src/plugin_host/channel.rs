@@ -134,7 +134,7 @@ impl ParamQueuesProcThread {
             let event = ParamValueEvent::new(
                 // TODO: Finer values for `time` instead of just setting it to the first frame?
                 EventHeader::new_core(0, EventFlags::empty()),
-                Cookie::empty(),
+                value.cookie,
                 // TODO: Note ID
                 -1,                // note_id
                 param_id.as_u32(), // param_id
@@ -156,7 +156,7 @@ impl ParamQueuesProcThread {
             let event = ParamModEvent::new(
                 // TODO: Finer values for `time` instead of just setting it to the first frame?
                 EventHeader::new_core(0, EventFlags::empty()),
-                Cookie::empty(),
+                value.cookie,
                 // TODO: Note ID
                 -1,                // note_id
                 param_id.as_u32(), // param_id
@@ -178,6 +178,7 @@ impl ParamQueuesProcThread {
 #[derive(Clone, Copy)]
 pub(crate) struct MainToProcParamValue {
     pub value: f64,
+    pub cookie: Cookie,
 }
 
 impl ReducFnvValue for MainToProcParamValue {}

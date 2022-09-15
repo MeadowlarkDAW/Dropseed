@@ -20,40 +20,43 @@ bitflags! {
         /// Should call the on_main() callback
         const CALLBACK = 1 << 3;
 
-        /// Should rescan audio and note ports
-        const RESCAN_PORTS = 1 << 4;
+        /// Should rescan audio ports
+        const RESCAN_AUDIO_PORTS = 1 << 4;
+
+        /// Should rescan note ports
+        const RESCAN_NOTE_PORTS = 1 << 5;
 
         /// Should rescan parameters
-        const RESCAN_PARAMS = 1 << 5;
+        const RESCAN_PARAMS = 1 << 6;
 
         /// Should flush parameter values
-        const FLUSH_PARAMS = 1 << 6;
+        const FLUSH_PARAMS = 1 << 7;
 
         /// Should resize the GUI
-        const GUI_RESIZE = 1 << 7;
+        const GUI_RESIZE = 1 << 8;
 
         /// Should update GUI resize hints
-        const GUI_HINTS_CHANGED = 1 << 8;
+        const GUI_HINTS_CHANGED = 1 << 9;
 
         /// Should show the GUI
-        const GUI_SHOW = 1 << 9;
+        const GUI_SHOW = 1 << 10;
 
         /// Should hide the GUI
-        const GUI_HIDE = 1 << 10;
+        const GUI_HIDE = 1 << 11;
 
         /// Should register the user closed the floating UI
-        const GUI_CLOSED = 1 << 11;
+        const GUI_CLOSED = 1 << 12;
 
         /// Should register the connection to the UI was lost
-        const GUI_DESTROYED = 1 << 12;
+        const GUI_DESTROYED = 1 << 13;
 
         /// The plugin has changed its state and it should be saved again.
         ///
         /// (Note that when a parameter value changes, it is implicit that
         /// the state is dirty and no there is no need to set this flag.)
-        const MARK_DIRTY = 1 << 13;
+        const MARK_DIRTY = 1 << 14;
 
-        const TIMER_REQUEST = 1 << 14;
+        const TIMER_REQUEST = 1 << 15;
     }
 }
 

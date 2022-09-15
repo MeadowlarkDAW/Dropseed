@@ -72,7 +72,7 @@ impl<'a> HostAudioPortsImplementation for ClapHostMainThread<'a> {
         if !flags.is_empty() {
             // We ignore the `flags` field since we just do a full restart
             // and rescan for every "rescan ports" request anyway.
-            self.shared.host_request.request(HostRequestFlags::RESCAN_PORTS);
+            self.shared.host_request.request(HostRequestFlags::RESCAN_AUDIO_PORTS);
         }
     }
 }
@@ -92,7 +92,7 @@ impl<'a> HostNotePortsImplementation for ClapHostMainThread<'a> {
         if !flags.is_empty() {
             // We ignore the `flags` field since we just do a full restart
             // and rescan for every "rescan ports" request anyway.
-            self.shared.host_request.request(HostRequestFlags::RESCAN_PORTS);
+            self.shared.host_request.request(HostRequestFlags::RESCAN_NOTE_PORTS);
         }
     }
 }

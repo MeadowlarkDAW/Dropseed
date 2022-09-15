@@ -15,7 +15,7 @@ use dropseed_plugin_api::{
 };
 
 use dropseed_plugin_api::buffer::EventBuffer;
-use fnv::FnvHashMap;
+use fnv::{FnvHashMap, FnvHashSet};
 use meadowlark_core_types::time::{SampleRate, Seconds};
 use raw_window_handle::RawWindowHandle;
 use smallvec::SmallVec;
@@ -29,7 +29,7 @@ use super::channel::{
     MainToProcParamValue, PlugHostChannelMainThread, PluginActiveState, ProcToMainParamValue,
     SharedPluginHostProcessor,
 };
-use super::error::{ActivatePluginError, SetParamValueError};
+use super::error::{ActivatePluginError, RescanParamListError, SetParamValueError};
 use super::event_io_buffers::{PluginEventOutputSanitizer, PluginIoEvent};
 use super::PluginHostProcessorWrapper;
 
@@ -45,6 +45,20 @@ struct DeactivatedEventBuffers {
     sanitizer: PluginEventOutputSanitizer,
 }
 
+/// The state of a parameter.
+#[derive(Debug, Clone)]
+pub struct ParamState {
+    /// Information about this parameter.
+    pub info: ParamInfo,
+    /// The current value of this parameter.
+    pub value: f64,
+    /// The current modulation amount on this parameter.
+    pub mod_amount: f64,
+    /// If this is `true`, then the user is currently directly modifying
+    /// this parameter.
+    pub is_gesturing: bool,
+}
+
 pub struct PluginHostMainThread {
     id: PluginInstanceID,
 
@@ -58,8 +72,8 @@ pub struct PluginHostMainThread {
 
     save_state: DSPluginSaveState,
 
-    params: FnvHashMap<ParamID, ParamInfo>,
-    gesturing_params: FnvHashMap<ParamID, bool>,
+    param_list: Vec<ParamID>,
+    param_states: FnvHashMap<ParamID, ParamState>,
     latency: i64,
     is_loaded: bool,
     gui_active: bool,
@@ -73,10 +87,15 @@ pub struct PluginHostMainThread {
     deactivated_event_buffers: Option<DeactivatedEventBuffers>,
     modified_params: Vec<ParamModifiedInfo>,
 
+    registered_timers: FnvHashSet<TimerID>,
+
     host_request_rx: HostRequestChannelReceiver,
     remove_requested: bool,
     save_state_dirty: bool,
     restarting: bool,
+    do_rescan_audio_ports_on_restart: bool,
+    do_rescan_note_ports_on_restart: bool,
+    has_activation_once: bool,
 }
 
 impl PluginHostMainThread {
@@ -121,16 +140,16 @@ impl PluginHostMainThread {
         let supports_floating_gui = plug_main_thread.supports_gui(true);
         let supports_embedded_gui = plug_main_thread.supports_gui(false);
 
-        Self {
-            id,
+        let mut new_self = Self {
+            id: id.clone(),
             plug_main_thread,
             port_ids: PluginHostPortIDs::new(),
             next_port_id: 0,
             free_port_ids: Vec::new(),
             channel: PlugHostChannelMainThread::new(bypassed, coll_handle),
             save_state,
-            params: FnvHashMap::default(),
-            gesturing_params: FnvHashMap::default(),
+            param_list: Vec::new(),
+            param_states: FnvHashMap::default(),
             latency: 0,
             is_loaded: plugin_loaded,
             gui_active: false,
@@ -141,11 +160,25 @@ impl PluginHostMainThread {
             num_audio_out_channels,
             deactivated_event_buffers: None,
             modified_params: Vec::new(),
+            registered_timers: FnvHashSet::default(),
             host_request_rx,
             remove_requested: false,
             save_state_dirty: false,
             restarting: false,
+            do_rescan_audio_ports_on_restart: false,
+            do_rescan_note_ports_on_restart: false,
+            has_activation_once: false,
+        };
+
+        if let Err(e) = new_self.refresh_parameter_list() {
+            log::error!(
+                "Failed to get parameter list after initializing plugin with ID {:?}: {}",
+                id,
+                e
+            );
         }
+
+        new_self
     }
 
     /// Returns `true` if this plugin has successfully been loaded from disk,
@@ -211,6 +244,23 @@ impl PluginHostMainThread {
         self.save_state.clone()
     }
 
+    /// The list of parameters on this plugin.
+    ///
+    /// Use `PluginHostMainThread::param_state()` to retrieve the state of
+    /// each parameter (parameter info, current value, modulation state).
+    pub fn param_list(&self) -> &[ParamID] {
+        &self.param_list
+    }
+
+    /// Retrieve the state of a particular parameter (parameter info,
+    /// current value, modulation state).
+    ///
+    /// This will return `None` if the parameter with the given ID does not
+    /// exist.
+    pub fn param_state(&self, param_id: ParamID) -> Option<&ParamState> {
+        self.param_states.get(&param_id)
+    }
+
     /// Set the value of the given parameter.
     ///
     /// If successful, this returns the actual (clamped) value that the
@@ -220,30 +270,39 @@ impl PluginHostMainThread {
         param_id: ParamID,
         value: f64,
     ) -> Result<f64, SetParamValueError> {
-        if let Some(param_info) = self.params.get(&param_id) {
-            if param_info.flags.contains(ParamInfoFlags::IS_READONLY) {
+        let mut flush_on_main_thread = None;
+        let res = if let Some(param_state) = self.param_states.get_mut(&param_id) {
+            if param_state.info.flags.contains(ParamInfoFlags::IS_READONLY) {
                 Err(SetParamValueError::ParamIsReadOnly(param_id))
             } else {
-                let value = value.clamp(param_info.min_value, param_info.max_value);
+                let value = value.clamp(param_state.info.min_value, param_state.info.max_value);
 
                 if let Some(param_queues) = &mut self.channel.param_queues {
-                    param_queues
-                        .to_proc_param_value_tx
-                        .set(param_id, MainToProcParamValue { value });
+                    param_queues.to_proc_param_value_tx.set(
+                        param_id,
+                        MainToProcParamValue { value, cookie: param_state.info._cookie },
+                    );
                     param_queues.to_proc_param_value_tx.producer_done();
                 } else {
-                    let mut modified_params =
-                        self.flush_params_on_main_thread(Some((param_id, value, false)));
-                    self.modified_params.append(&mut modified_params);
+                    flush_on_main_thread = Some((param_id, value, param_state.info._cookie));
                 }
 
+                param_state.value = value;
                 self.save_state_dirty = true;
 
                 Ok(value)
             }
         } else {
             Err(SetParamValueError::ParamDoesNotExist(param_id))
+        };
+
+        if let Some((param_id, value, cookie)) = flush_on_main_thread {
+            let mut modified_params =
+                self.flush_params_on_main_thread(Some((param_id, value, false, cookie)));
+            self.modified_params.append(&mut modified_params);
         }
+
+        res
     }
 
     /// Set the modulation amount on the given parameter.
@@ -255,28 +314,41 @@ impl PluginHostMainThread {
         param_id: ParamID,
         mod_amount: f64,
     ) -> Result<f64, SetParamValueError> {
-        if let Some(param_info) = self.params.get(&param_id) {
-            if param_info.flags.contains(ParamInfoFlags::IS_MODULATABLE) {
+        let mut flush_on_main_thread = None;
+        let res = if let Some(param_state) = self.param_states.get_mut(&param_id) {
+            if param_state.info.flags.contains(ParamInfoFlags::IS_MODULATABLE) {
                 Err(SetParamValueError::ParamIsNotModulatable(param_id))
             } else {
-                // TODO: Clamp value?
+                // TODO: Clamp mod amount?
 
                 if let Some(param_queues) = &mut self.channel.param_queues {
-                    param_queues
-                        .to_proc_param_mod_tx
-                        .set(param_id, MainToProcParamValue { value: mod_amount });
+                    param_queues.to_proc_param_mod_tx.set(
+                        param_id,
+                        MainToProcParamValue {
+                            value: mod_amount,
+                            cookie: param_state.info._cookie,
+                        },
+                    );
                     param_queues.to_proc_param_mod_tx.producer_done();
                 } else {
-                    let mut modified_params =
-                        self.flush_params_on_main_thread(Some((param_id, mod_amount, true)));
-                    self.modified_params.append(&mut modified_params);
+                    flush_on_main_thread = Some((param_id, mod_amount, param_state.info._cookie));
                 }
+
+                param_state.mod_amount = mod_amount;
 
                 Ok(mod_amount)
             }
         } else {
             Err(SetParamValueError::ParamDoesNotExist(param_id))
+        };
+
+        if let Some((param_id, mod_amount, cookie)) = flush_on_main_thread {
+            let mut modified_params =
+                self.flush_params_on_main_thread(Some((param_id, mod_amount, true, cookie)));
+            self.modified_params.append(&mut modified_params);
         }
+
+        res
     }
 
     /// Get the display text for the given parameter with the given
@@ -538,6 +610,11 @@ impl PluginHostMainThread {
         self.num_audio_out_channels
     }
 
+    /// The latency of this plugin in frames.
+    pub fn latency(&self) -> i64 {
+        self.latency
+    }
+
     /// The unique ID for this plugin instance.
     pub fn id(&self) -> &PluginInstanceID {
         &self.id
@@ -638,118 +715,118 @@ impl PluginHostMainThread {
         };
 
         // Retrieve the (new) audio ports and note ports configuration of this plugin.
-        let audio_ports = match self.plug_main_thread.audio_ports_ext() {
-            Ok(audio_ports) => audio_ports,
-            Err(e) => {
-                set_inactive_with_error(self);
-                return Err(ActivatePluginError::PluginFailedToGetAudioPortsExt(e));
+        let new_audio_ports = if self.do_rescan_audio_ports_on_restart || !self.has_activation_once
+        {
+            self.do_rescan_audio_ports_on_restart = false;
+            match self.plug_main_thread.audio_ports_ext() {
+                Ok(audio_ports) => Some(audio_ports),
+                Err(e) => {
+                    set_inactive_with_error(self);
+                    return Err(ActivatePluginError::PluginFailedToGetAudioPortsExt(e));
+                }
             }
+        } else {
+            None
         };
-        let note_ports = match self.plug_main_thread.note_ports_ext() {
-            Ok(note_ports) => note_ports,
-            Err(e) => {
-                set_inactive_with_error(self);
-                return Err(ActivatePluginError::PluginFailedToGetNotePortsExt(e));
+        let new_note_ports = if self.do_rescan_note_ports_on_restart || !self.has_activation_once {
+            self.do_rescan_note_ports_on_restart = false;
+            match self.plug_main_thread.note_ports_ext() {
+                Ok(note_ports) => Some(note_ports),
+                Err(e) => {
+                    set_inactive_with_error(self);
+                    return Err(ActivatePluginError::PluginFailedToGetNotePortsExt(e));
+                }
             }
+        } else {
+            None
         };
 
         self.deactivated_event_buffers = None;
 
-        // Retrieve the (new) parameters on this plugin.
-        let num_params = self.plug_main_thread.num_params() as usize;
-        let mut new_params: FnvHashMap<ParamID, ParamInfo> = FnvHashMap::default();
-        let mut param_values: Vec<(ParamInfo, f64)> = Vec::with_capacity(num_params);
-        for i in 0..num_params {
-            match self.plug_main_thread.param_info(i) {
-                Ok(info) => match self.plug_main_thread.param_value(info.stable_id) {
-                    Ok(value) => {
-                        let id = info.stable_id;
-
-                        new_params.insert(id, info.clone());
-                        param_values.push((info, value));
-                    }
-                    Err(_) => {
-                        set_inactive_with_error(self);
-                        return Err(ActivatePluginError::PluginFailedToGetParamValue(
-                            info.stable_id,
-                        ));
-                    }
-                },
-                Err(_) => {
-                    set_inactive_with_error(self);
-                    return Err(ActivatePluginError::PluginFailedToGetParamInfo(i));
-                }
-            }
-        }
-
         // Retrieve the (new) latency of this plugin.
         let latency = self.plug_main_thread.latency();
-
-        // Add/remove ports from the abstract graph according to the plugin's new
-        // audio ports and note ports extensions. This also updates the new latency
-        // for the node in the abstract graph.
-        //
-        // On success, returns:
-        // - a list of all edges that were removed as a result of the plugin
-        // removing some of its ports
-        // - `true` if the audio graph needs to be recompiled as a result of the
-        // plugin adding/removing ports.
-        let (removed_edges, mut needs_recompile) = match sync_ports::sync_ports_in_graph(
-            self,
-            graph_helper,
-            edge_id_to_ds_edge_id,
-            &audio_ports,
-            &note_ports,
-            latency,
-            coll_handle,
-        ) {
-            Ok((removed_edges, needs_recompile)) => (removed_edges, needs_recompile),
-            Err(e) => {
-                set_inactive_with_error(self);
-                return Err(e);
-            }
+        let has_new_latency = if self.latency != latency {
+            self.latency = latency;
+            // Updates the new latency for the node in the abstract graph.
+            sync_ports::sync_latency_in_graph(self, graph_helper, latency);
+            true
+        } else {
+            false
         };
+
+        let mut needs_recompile = has_new_latency;
+
+        let removed_edges =
+            if new_audio_ports.is_some() || new_note_ports.is_some() || !self.has_activation_once {
+                // Add/remove ports from the abstract graph according to the plugin's new
+                // audio ports and note ports extensions.
+                //
+                // On success, returns:
+                // - a list of all edges that were removed as a result of the plugin
+                // removing some of its ports
+                // - `true` if the audio graph needs to be recompiled as a result of the
+                // plugin adding/removing ports.
+                let (removed_edges, recompile) = match sync_ports::sync_ports_in_graph(
+                    self,
+                    graph_helper,
+                    edge_id_to_ds_edge_id,
+                    &new_audio_ports,
+                    &new_note_ports,
+                    coll_handle,
+                ) {
+                    Ok((removed_edges, needs_recompile)) => (removed_edges, needs_recompile),
+                    Err(e) => {
+                        set_inactive_with_error(self);
+                        return Err(e);
+                    }
+                };
+
+                needs_recompile |= recompile;
+                removed_edges
+            } else {
+                Vec::new()
+            };
 
         // Attempt to activate the plugin.
         match self.plug_main_thread.activate(sample_rate, min_frames, max_frames, coll_handle) {
             Ok(info) => {
-                let new_latency = if self.latency != latency {
-                    self.latency = latency;
-                    needs_recompile = true;
-                    Some(latency)
-                } else {
-                    None
-                };
-
-                self.params = new_params;
-
-                let audio_ports_changed =
+                let audio_ports_changed = if let Some(new_audio_ports) = &new_audio_ports {
                     if let Some(old_audio_ports) = &self.save_state.backup_audio_ports_ext {
-                        &audio_ports != old_audio_ports
+                        old_audio_ports != new_audio_ports
                     } else {
                         true
-                    };
-                let note_ports_changed =
-                    if let Some(old_note_ports) = &self.save_state.backup_note_ports_ext {
-                        &note_ports != old_note_ports
-                    } else {
-                        true
-                    };
-
-                let new_audio_ports_ext = if audio_ports_changed {
-                    self.num_audio_in_channels = audio_ports.total_in_channels();
-                    self.num_audio_out_channels = audio_ports.total_out_channels();
-
-                    self.save_state.backup_audio_ports_ext = Some(audio_ports.clone());
-                    Some(audio_ports)
+                    }
                 } else {
-                    None
+                    false
                 };
-                let new_note_ports_ext = if note_ports_changed {
-                    self.save_state.backup_note_ports_ext = Some(note_ports.clone());
-                    Some(note_ports)
+
+                let note_ports_changed = if let Some(new_note_ports) = &new_note_ports {
+                    if let Some(old_note_ports) = &self.save_state.backup_note_ports_ext {
+                        old_note_ports != new_note_ports
+                    } else {
+                        true
+                    }
                 } else {
-                    None
+                    false
+                };
+
+                let has_new_audio_ports_ext = if audio_ports_changed {
+                    let new_audio_ports = new_audio_ports.unwrap();
+
+                    self.num_audio_in_channels = new_audio_ports.total_in_channels();
+                    self.num_audio_out_channels = new_audio_ports.total_out_channels();
+
+                    self.save_state.backup_audio_ports_ext = Some(new_audio_ports);
+                    true
+                } else {
+                    false
+                };
+                let has_new_note_ports_ext = if note_ports_changed {
+                    let new_note_ports = new_note_ports.unwrap();
+                    self.save_state.backup_note_ports_ext = Some(new_note_ports);
+                    true
+                } else {
+                    false
                 };
 
                 // If the plugin restarting requires the graph to recompile first (because
@@ -768,7 +845,7 @@ impl PluginHostMainThread {
                 self.channel.new_processor(
                     info.processor,
                     self.id.unique_id(),
-                    num_params,
+                    self.param_list.len(),
                     thread_ids,
                     sched_version,
                     bypass_declick_frames,
@@ -779,13 +856,13 @@ impl PluginHostMainThread {
                 // this plugin.
                 self.save_state.active = true;
                 self.save_state_dirty = true;
+                self.has_activation_once = true;
 
                 Ok(PluginActivatedStatus {
-                    new_parameters: param_values,
-                    new_audio_ports_ext,
-                    new_note_ports_ext,
+                    has_new_audio_ports_ext,
+                    has_new_note_ports_ext,
                     internal_handle: info.internal_handle,
-                    new_latency,
+                    has_new_latency,
                     removed_edges,
                     caused_recompile: needs_recompile,
                 })
@@ -799,8 +876,7 @@ impl PluginHostMainThread {
 
     pub(crate) fn on_timer(&mut self, timer_id: TimerID, engine_timer: &mut EngineTimerWheel) {
         // Make sure that plugin hasn't requested to unregister the timer
-        // here before calling its `on_timer()` method.
-        let mut timer_still_registered = true;
+        // before calling its `on_timer()` method.
         if self.host_request_rx.has_timer_request() {
             let timer_requests = self.host_request_rx.fetch_timer_requests();
             for req in timer_requests.iter() {
@@ -810,33 +886,89 @@ impl PluginHostMainThread {
                         req.timer_id,
                         req.period_ms,
                     );
-                } else {
-                    if req.timer_id == timer_id {
-                        timer_still_registered = false;
-                    }
 
+                    self.registered_timers.insert(req.timer_id);
+                } else {
                     engine_timer.unregister_plugin_timer(self.id.unique_id(), req.timer_id);
+
+                    self.registered_timers.remove(&req.timer_id);
                 }
             }
         }
 
-        if timer_still_registered {
+        if self.registered_timers.contains(&timer_id) {
             self.plug_main_thread.on_timer(timer_id);
         }
     }
 
+    fn refresh_parameter_list(&mut self) -> Result<(), RescanParamListError> {
+        let error_clear = |self_: &mut Self| {
+            self_.channel.param_queues = None;
+            self_.param_list.clear();
+            self_.param_states.clear();
+        };
+
+        let old_param_states = self.param_states.clone();
+        self.param_list.clear();
+        self.param_states.clear();
+        self.deactivated_event_buffers = None;
+
+        let num_params = self.plug_main_thread.num_params() as usize;
+        self.param_list.reserve(num_params);
+        self.param_states.reserve(num_params);
+
+        for i in 0..num_params {
+            match self.plug_main_thread.param_info(i) {
+                Ok(info) => match self.plug_main_thread.param_value(info.stable_id) {
+                    Ok(value) => {
+                        let id = info.stable_id;
+                        let (is_gesturing, mod_amount) = old_param_states
+                            .get(&info.stable_id)
+                            .map(|i| (i.is_gesturing, i.mod_amount))
+                            .unwrap_or((false, 0.0));
+                        let param_state = ParamState { info, value, is_gesturing, mod_amount };
+
+                        if self.param_states.insert(id, param_state).is_some() {
+                            error_clear(self);
+                            return Err(RescanParamListError::DuplicateParamID(id));
+                        }
+
+                        self.param_list.push(id);
+                    }
+                    Err(e) => {
+                        error_clear(self);
+                        return Err(RescanParamListError::FailedToGetParamValue {
+                            id: info.stable_id,
+                            error_msg: format!("{}", e),
+                        });
+                    }
+                },
+                Err(e) => {
+                    error_clear(self);
+                    return Err(RescanParamListError::FailedToGetParamInfo {
+                        index: i,
+                        error_msg: format!("{}", e),
+                    });
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     fn flush_params_on_main_thread(
         &mut self,
-        in_param_event: Option<(ParamID, f64, bool)>,
+        in_param_event: Option<(ParamID, f64, bool, Cookie)>,
     ) -> Vec<ParamModifiedInfo> {
         let mut modified_params: Vec<ParamModifiedInfo> = Vec::new();
 
-        if !self.channel.shared_state.get_active_state().is_active() && !self.params.is_empty() {
+        if !self.channel.shared_state.get_active_state().is_active() && !self.param_list.is_empty()
+        {
             if self.deactivated_event_buffers.is_none() {
                 self.deactivated_event_buffers = Some(DeactivatedEventBuffers {
                     in_events: EventBuffer::with_capacity(4),
-                    out_events: EventBuffer::with_capacity(self.params.len() * 3),
-                    sanitizer: PluginEventOutputSanitizer::new(self.params.len()),
+                    out_events: EventBuffer::with_capacity(self.param_list.len() * 3),
+                    sanitizer: PluginEventOutputSanitizer::new(self.param_list.len()),
                 });
             }
 
@@ -844,11 +976,11 @@ impl PluginHostMainThread {
             deactivated_event_buffers.in_events.clear();
             deactivated_event_buffers.out_events.clear();
 
-            if let Some((param_id, value, is_mod)) = in_param_event {
+            if let Some((param_id, value, is_mod, cookie)) = in_param_event {
                 if is_mod {
                     let event = ParamModEvent::new(
                         EventHeader::new_core(0, EventFlags::empty()),
-                        Cookie::empty(),
+                        cookie,
                         -1, // note_id
                         param_id.as_u32(),
                         -1, // port_index
@@ -861,7 +993,7 @@ impl PluginHostMainThread {
                 } else {
                     let event = ParamValueEvent::new(
                         EventHeader::new_core(0, EventFlags::empty()),
-                        Cookie::empty(),
+                        cookie,
                         -1, // note_id
                         param_id.as_u32(),
                         -1, // port_index
@@ -887,33 +1019,34 @@ impl PluginHostMainThread {
 
             for event in events_iter {
                 match event {
-                    PluginIoEvent::AutomationEvent { cookie: _, event } => {
+                    PluginIoEvent::AutomationEvent { event } => {
                         if let Some(new_value) =
                             ProcToMainParamValue::from_param_event(event.event_type)
                         {
                             let param_id = ParamID::new(event.parameter_id);
+                            if let Some(param_state) = self.param_states.get_mut(&param_id) {
+                                if let Some(gesture) = new_value.gesture {
+                                    param_state.is_gesturing = gesture.is_begin;
 
-                            let is_gesturing = if let Some(gesture) = new_value.gesture {
-                                let _ = self.gesturing_params.insert(param_id, gesture.is_begin);
-
-                                if !gesture.is_begin {
-                                    // Only mark the state dirty once the user has finished adjusting
-                                    // the parameter.
+                                    if !gesture.is_begin {
+                                        // Only mark the state dirty once the user has finished adjusting
+                                        // the parameter.
+                                        self.save_state_dirty = true;
+                                    }
+                                } else {
                                     self.save_state_dirty = true;
+                                };
+
+                                if let Some(v) = new_value.value {
+                                    param_state.value = v;
                                 }
 
-                                gesture.is_begin
-                            } else {
-                                self.save_state_dirty = true;
-
-                                *self.gesturing_params.get(&param_id).unwrap_or(&false)
-                            };
-
-                            modified_params.push(ParamModifiedInfo {
-                                param_id,
-                                new_value: new_value.value,
-                                is_gesturing,
-                            })
+                                modified_params.push(ParamModifiedInfo {
+                                    param_id,
+                                    new_value: new_value.value,
+                                    is_gesturing: param_state.is_gesturing,
+                                })
+                            }
                         }
                     }
                     _ => {}
@@ -959,27 +1092,29 @@ impl PluginHostMainThread {
         // Poll for parameter updates from the plugin host's processor.
         if let Some(params_queue) = &mut self.channel.param_queues {
             params_queue.from_proc_param_value_rx.consume(|param_id, new_value| {
-                let is_gesturing = if let Some(gesture) = new_value.gesture {
-                    let _ = self.gesturing_params.insert(*param_id, gesture.is_begin);
+                if let Some(param_state) = &mut self.param_states.get_mut(param_id) {
+                    if let Some(gesture) = new_value.gesture {
+                        param_state.is_gesturing = gesture.is_begin;
 
-                    if !gesture.is_begin {
-                        // Only mark the state dirty once the user has finished adjusting
-                        // the parameter.
+                        if !gesture.is_begin {
+                            // Only mark the state dirty once the user has finished adjusting
+                            // the parameter.
+                            self.save_state_dirty = true;
+                        }
+                    } else {
                         self.save_state_dirty = true;
+                    };
+
+                    if let Some(v) = new_value.value {
+                        param_state.value = v;
                     }
 
-                    gesture.is_begin
-                } else {
-                    self.save_state_dirty = true;
-
-                    *self.gesturing_params.get(param_id).unwrap_or(&false)
-                };
-
-                modified_params.push(ParamModifiedInfo {
-                    param_id: *param_id,
-                    new_value: new_value.value,
-                    is_gesturing,
-                })
+                    modified_params.push(ParamModifiedInfo {
+                        param_id: *param_id,
+                        new_value: new_value.value,
+                        is_gesturing: param_state.is_gesturing,
+                    });
+                }
             });
         }
 
@@ -1003,9 +1138,20 @@ impl PluginHostMainThread {
             if request_flags.contains(HostRequestFlags::RESCAN_PARAMS) {
                 log::debug!("Plugin {:?} requested the host rescan its parameters", &self.id);
 
-                // The plugin has requested the host to rescan its list of parameters.
+                let res = self.refresh_parameter_list();
 
-                // TODO
+                if let Err(e) = &res {
+                    log::error!(
+                        "Failed to get parameter list on plugin with ID {:?} after request to rescan parameters: {}",
+                        &self.id,
+                        e
+                    );
+                }
+
+                events_out.push(OnIdleEvent::PluginUpdatedParameterList {
+                    plugin_id: self.id.clone(),
+                    status: res,
+                });
             }
 
             if request_flags.contains(HostRequestFlags::FLUSH_PARAMS) {
@@ -1021,18 +1167,11 @@ impl PluginHostMainThread {
                 }
             }
 
-            if request_flags.intersects(HostRequestFlags::RESTART | HostRequestFlags::RESCAN_PORTS)
-            {
-                if request_flags.contains(HostRequestFlags::RESTART) {
-                    log::debug!("Plugin {:?} requested the host to restart the plugin", &self.id);
-                }
-                if request_flags.contains(HostRequestFlags::RESCAN_PORTS) {
-                    log::debug!(
-                        "Plugin {:?} requested the host to rescan its audio and/or note ports",
-                        &self.id
-                    );
-                }
-
+            if request_flags.intersects(
+                HostRequestFlags::RESTART
+                    | HostRequestFlags::RESCAN_AUDIO_PORTS
+                    | HostRequestFlags::RESCAN_NOTE_PORTS,
+            ) {
                 // The plugin has requested the host to restart the plugin (or rescan its
                 // audio and/or note ports).
                 //
@@ -1040,10 +1179,33 @@ impl PluginHostMainThread {
                 // simplicity. I don't expect plugins to change the state of their ports
                 // often anyway.
 
+                if request_flags.contains(HostRequestFlags::RESTART) {
+                    log::debug!("Plugin {:?} requested the host to restart the plugin", &self.id);
+                }
+
+                let rescan_audio_ports =
+                    request_flags.contains(HostRequestFlags::RESCAN_AUDIO_PORTS);
+                let rescan_note_ports = request_flags.contains(HostRequestFlags::RESCAN_NOTE_PORTS);
+
+                if rescan_audio_ports {
+                    self.do_rescan_audio_ports_on_restart = true;
+                    log::debug!(
+                        "Plugin {:?} requested the host to rescan its audio ports",
+                        &self.id
+                    );
+                }
+                if rescan_note_ports {
+                    self.do_rescan_note_ports_on_restart = true;
+                    log::debug!(
+                        "Plugin {:?} requested the host to rescan its note ports",
+                        &self.id
+                    );
+                }
+
                 self.restarting = true;
-                processor_to_drop = self.schedule_deactivate(coll_handle);
 
                 if active_state == PluginActiveState::Active {
+                    processor_to_drop = self.schedule_deactivate(coll_handle);
                     active_state = PluginActiveState::WaitingToDrop;
                 }
             }
@@ -1108,6 +1270,21 @@ impl PluginHostMainThread {
                 });
             }
 
+            if request_flags.contains(HostRequestFlags::TIMER_REQUEST) {
+                let timer_requests = self.host_request_rx.fetch_timer_requests();
+                for req in timer_requests.iter() {
+                    if req.register {
+                        engine_timer.register_plugin_timer(
+                            self.id.unique_id(),
+                            req.timer_id,
+                            req.period_ms,
+                        );
+                    } else {
+                        engine_timer.unregister_plugin_timer(self.id.unique_id(), req.timer_id);
+                    }
+                }
+            }
+
             if request_flags.contains(HostRequestFlags::PROCESS)
                 && !self.remove_requested
                 && !self.restarting
@@ -1144,21 +1321,6 @@ impl PluginHostMainThread {
                     };
 
                     return (res, modified_params, processor_to_drop);
-                }
-            }
-
-            if request_flags.contains(HostRequestFlags::TIMER_REQUEST) {
-                let timer_requests = self.host_request_rx.fetch_timer_requests();
-                for req in timer_requests.iter() {
-                    if req.register {
-                        engine_timer.register_plugin_timer(
-                            self.id.unique_id(),
-                            req.timer_id,
-                            req.period_ms,
-                        );
-                    } else {
-                        engine_timer.unregister_plugin_timer(self.id.unique_id(), req.timer_id);
-                    }
                 }
             }
         }

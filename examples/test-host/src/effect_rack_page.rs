@@ -21,12 +21,13 @@ use raw_window_handle::HasRawWindowHandle;
 
 use crate::ActivatedState;
 
-pub struct ParamState {
+pub struct EffectRackParamState {
     id: ParamID,
 
     display_name: String,
 
     value: f64,
+    mod_amount: f64,
 
     min_value: f64,
     max_value: f64,
@@ -54,7 +55,7 @@ pub struct EffectRackPluginState {
     activated: bool,
     bypassed: bool,
 
-    params: FnvHashMap<ParamID, ParamState>,
+    params: FnvHashMap<ParamID, EffectRackParamState>,
 
     audio_ports_ext: Option<PluginAudioPortsExt>,
     note_ports_ext: Option<PluginNotePortsExt>,
@@ -91,9 +92,6 @@ impl EffectRackPluginState {
 
     pub fn on_activated(&mut self, mut status: PluginActivatedStatus) {
         self.activated = true;
-
-        self.audio_ports_ext = status.new_audio_ports_ext.take();
-        self.note_ports_ext = status.new_note_ports_ext.take();
 
         self.params.clear();
 
