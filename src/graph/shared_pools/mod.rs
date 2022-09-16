@@ -31,12 +31,17 @@ impl GraphSharedPools {
         note_buffer_size: usize,
         event_buffer_size: usize,
         transport: TransportTask,
+        schedule_version: u64,
         coll_handle: basedrop::Handle,
     ) -> (Self, SharedProcessorSchedule) {
         let shared_transport_task = SharedTransportTask::new(transport, &coll_handle);
 
-        let empty_schedule =
-            ProcessorSchedule::new_empty(audio_buffer_size, shared_transport_task.clone());
+        let empty_schedule = ProcessorSchedule::new_empty(
+            audio_buffer_size,
+            shared_transport_task.clone(),
+            Vec::new(),
+            schedule_version,
+        );
 
         let (shared_schedule, shared_schedule_clone) =
             SharedProcessorSchedule::new(empty_schedule, thread_ids, &coll_handle);

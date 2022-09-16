@@ -27,7 +27,7 @@ impl PluginEventOutputSanitizer {
     }
 
     #[inline]
-    pub fn sanitize<I>(&mut self, iterator: I, frames: u32) -> ParamOutputSanitizerIter<I>
+    pub fn sanitize<I>(&mut self, iterator: I, frames: Option<u32>) -> ParamOutputSanitizerIter<I>
     where
         I: Iterator<Item = PluginIoEvent>,
     {
@@ -38,7 +38,7 @@ impl PluginEventOutputSanitizer {
 pub struct ParamOutputSanitizerIter<'a, I> {
     sanitizer: &'a mut PluginEventOutputSanitizer,
     iterator: I,
-    frames: u32,
+    frames: Option<u32>,
 }
 
 impl<'a, I> Iterator for ParamOutputSanitizerIter<'a, I>
@@ -52,40 +52,44 @@ where
         for event in self.iterator.by_ref() {
             match &event {
                 PluginIoEvent::NoteEvent { event: NoteIoEvent { header, .. }, .. } => {
-                    if header.time >= self.frames {
-                        log::warn!("Plugin outputted an event where `clap_event_header.time >= clap_process.frames_count`. Event was discarded.");
-                        continue;
-                    } else {
-                        return Some(event);
+                    if let Some(frames) = self.frames {
+                        if header.time >= frames {
+                            log::warn!("Plugin outputted an event where `clap_event_header.time >= clap_process.frames_count`. Event was discarded.");
+                            continue;
+                        }
                     }
+
+                    return Some(event);
                 }
                 PluginIoEvent::AutomationEvent {
                     event: AutomationIoEvent { parameter_id, event_type, header, .. },
                     ..
                 } => {
-                    if header.time >= self.frames {
-                        log::warn!("Plugin outputted an event where `clap_event_header.time >= clap_process.frames_count`. Event was discarded.");
-                        continue;
-                    } else {
-                        let is_beginning = match event_type {
-                            AutomationIoEventType::BeginGesture => true,
-                            AutomationIoEventType::EndGesture => false,
-                            _ => return Some(event),
-                        };
-
-                        match self.sanitizer.is_adjusting_parameter.entry(ParamID(*parameter_id)) {
-                            Occupied(mut o) => {
-                                if *o.get() == is_beginning {
-                                    log::warn!("Plugin outputted the event `CLAP_EVENT_PARAM_GESTURE_BEGIN` multiple times for the same parameter. Event was discarded.");
-                                    continue;
-                                }
-                                o.insert(is_beginning);
-                            }
-                            Vacant(v) => {
-                                v.insert(is_beginning);
-                            }
-                        };
+                    if let Some(frames) = self.frames {
+                        if header.time >= frames {
+                            log::warn!("Plugin outputted an event where `clap_event_header.time >= clap_process.frames_count`. Event was discarded.");
+                            continue;
+                        }
                     }
+
+                    let is_beginning = match event_type {
+                        AutomationIoEventType::BeginGesture => true,
+                        AutomationIoEventType::EndGesture => false,
+                        _ => return Some(event),
+                    };
+
+                    match self.sanitizer.is_adjusting_parameter.entry(ParamID(*parameter_id)) {
+                        Occupied(mut o) => {
+                            if *o.get() == is_beginning {
+                                log::warn!("Plugin outputted the event `CLAP_EVENT_PARAM_GESTURE_BEGIN` multiple times for the same parameter. Event was discarded.");
+                                continue;
+                            }
+                            o.insert(is_beginning);
+                        }
+                        Vacant(v) => {
+                            v.insert(is_beginning);
+                        }
+                    };
 
                     return Some(event);
                 }

@@ -5,7 +5,7 @@ use super::buffer::EventBuffer;
 use super::process_info::{ProcBuffers, ProcInfo, ProcessStatus};
 
 /// The methods of an audio plugin instance which run in the "process" thread.
-pub trait PluginProcessThread: Send + 'static {
+pub trait PluginProcessor: Send + 'static {
     /// This will be called when the plugin should start processing after just activing/
     /// waking up from sleep.
     ///
@@ -51,7 +51,7 @@ pub trait PluginProcessThread: Send + 'static {
     ///
     /// By default this does nothing.
     ///
-    /// [active && !processing : process-thread]
+    /// [active ? process-thread : main-thread]
     #[allow(unused)]
     fn param_flush(&mut self, in_events: &EventBuffer, out_events: &mut EventBuffer) {}
 

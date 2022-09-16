@@ -1,3 +1,5 @@
+use clack_host::utils::Cookie;
+
 // Contents of AutomationBuffer
 #[derive(Copy, Clone)]
 pub struct AutomationIoEvent {
@@ -5,6 +7,7 @@ pub struct AutomationIoEvent {
     pub parameter_id: u32,
     pub event_type: AutomationIoEventType,
     pub plugin_instance_id: u64,
+    pub cookie: Option<Cookie>,
 }
 
 // Contains common data

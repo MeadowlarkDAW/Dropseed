@@ -34,6 +34,10 @@ impl SharedThreadIDs {
         }
     }
 
+    pub fn main_thread_id(&self) -> Option<ThreadId> {
+        *self.main_thread_id.get()
+    }
+
     pub fn process_thread_id(&self) -> Option<ThreadId> {
         *self.process_thread_id.get()
     }

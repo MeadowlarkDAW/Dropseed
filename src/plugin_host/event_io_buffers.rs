@@ -3,7 +3,6 @@ use clack_host::events::event_types::*;
 use clack_host::events::io::EventBuffer;
 use clack_host::events::spaces::CoreEventSpace;
 use clack_host::events::{Event, EventHeader as ClackEventHeader, UnknownEvent};
-use clack_host::utils::Cookie;
 use smallvec::SmallVec;
 
 use dropseed_plugin_api::automation::{AutomationIoEvent, AutomationIoEventType, IoEventHeader};
@@ -28,6 +27,8 @@ pub(crate) struct PluginEventIoBuffers {
     pub automation_in_buffer: Option<(SharedBuffer<AutomationIoEvent>, bool)>,
     /// Only for internal plugin (e.g. timeline or macros)
     pub automation_out_buffer: Option<SharedBuffer<AutomationIoEvent>>,
+
+    pub main_note_through_when_bypassed: bool,
 }
 
 impl PluginEventIoBuffers {
@@ -85,9 +86,7 @@ impl PluginEventIoBuffers {
         if let Some((in_buf, _)) = &self.automation_in_buffer {
             for event in in_buf.borrow().iter() {
                 if event.plugin_instance_id == plugin_instance_id {
-                    // TODO: handle cookies
-                    let event =
-                        PluginIoEvent::AutomationEvent { cookie: Cookie::empty(), event: *event };
+                    let event = PluginIoEvent::AutomationEvent { event: *event };
                     event.write_to_clap_buffer(raw_event_buffer);
                     wrote_event = true;
                 }
@@ -107,7 +106,7 @@ impl PluginEventIoBuffers {
         frames: u32,
     ) {
         let events_iter = raw_event_buffer.iter().filter_map(PluginIoEvent::read_from_clap);
-        let events_iter = sanitizer.sanitize(events_iter, frames);
+        let events_iter = sanitizer.sanitize(events_iter, Some(frames));
 
         for event in events_iter {
             match event {
@@ -116,7 +115,7 @@ impl PluginEventIoBuffers {
                         b.borrow_mut().push(event)
                     }
                 }
-                PluginIoEvent::AutomationEvent { cookie: _, event } => {
+                PluginIoEvent::AutomationEvent { event } => {
                     if let Some(queue) = external_parameter_queue.as_mut() {
                         if let Some(value) =
                             ProcToMainParamValue::from_param_event(event.event_type)
@@ -125,6 +124,26 @@ impl PluginEventIoBuffers {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    pub fn bypassed(&mut self) {
+        for note_out in self.note_out_buffers.iter() {
+            note_out.truncate();
+        }
+
+        if let Some(automation_out) = &self.automation_out_buffer {
+            automation_out.truncate();
+        }
+
+        // TODO: More note through ports when bypassed?
+        if self.main_note_through_when_bypassed {
+            let in_buf = self.note_in_buffers[0].borrow();
+            let mut out_buf = self.note_out_buffers[0].borrow_mut();
+
+            for event in in_buf.iter() {
+                out_buf.push(*event);
             }
         }
     }
@@ -150,7 +169,7 @@ pub enum NoteIoEventType {
 #[derive(Copy, Clone)]
 pub enum PluginIoEvent {
     NoteEvent { note_port_index: i16, event: NoteIoEvent },
-    AutomationEvent { cookie: Cookie, event: AutomationIoEvent },
+    AutomationEvent { event: AutomationIoEvent },
 }
 
 impl PluginIoEvent {
@@ -197,39 +216,39 @@ impl PluginIoEvent {
             }),
 
             CoreEventSpace::ParamValue(e) => Some(PluginIoEvent::AutomationEvent {
-                cookie: e.cookie(),
                 event: AutomationIoEvent {
                     plugin_instance_id: 0,
                     parameter_id: e.param_id(),
                     header: IoEventHeader { time: e.header().time() },
                     event_type: AutomationIoEventType::Value(e.value()),
+                    cookie: Some(e.cookie()),
                 },
             }),
             CoreEventSpace::ParamMod(e) => Some(PluginIoEvent::AutomationEvent {
-                cookie: e.cookie(),
                 event: AutomationIoEvent {
                     plugin_instance_id: 0,
                     parameter_id: e.param_id(),
                     header: IoEventHeader { time: e.header().time() },
                     event_type: AutomationIoEventType::Modulation(e.value()),
+                    cookie: Some(e.cookie()),
                 },
             }),
             CoreEventSpace::ParamGestureBegin(e) => Some(PluginIoEvent::AutomationEvent {
-                cookie: Cookie::empty(), // TODO: get cookie
                 event: AutomationIoEvent {
                     plugin_instance_id: 0,
                     parameter_id: e.param_id(),
                     header: IoEventHeader { time: e.header().time() },
                     event_type: AutomationIoEventType::BeginGesture,
+                    cookie: None,
                 },
             }),
             CoreEventSpace::ParamGestureEnd(e) => Some(PluginIoEvent::AutomationEvent {
-                cookie: Cookie::empty(), // TODO: get cookie
                 event: AutomationIoEvent {
                     plugin_instance_id: 0,
                     parameter_id: e.param_id(),
                     header: IoEventHeader { time: e.header().time() },
                     event_type: AutomationIoEventType::EndGesture,
+                    cookie: None,
                 },
             }),
 
@@ -244,7 +263,6 @@ impl PluginIoEvent {
     }
 
     pub fn write_to_clap_buffer(&self, buffer: &mut EventBuffer) {
-        // TODO: Clack event types are a mouthful
         match self {
             PluginIoEvent::NoteEvent {
                 note_port_index,
@@ -299,50 +317,64 @@ impl PluginIoEvent {
                 ),
             },
             PluginIoEvent::AutomationEvent {
-                cookie,
                 event:
                     AutomationIoEvent {
                         header: IoEventHeader { time },
                         parameter_id,
                         event_type,
                         plugin_instance_id: _,
+                        cookie,
                     },
-            } => match event_type {
-                AutomationIoEventType::Value(value) => buffer.push(
-                    ParamValueEvent::new(
-                        ClackEventHeader::new(*time),
-                        *cookie,
-                        -1,
-                        *parameter_id,
-                        -1,
-                        -1,
-                        -1,
-                        *value,
-                    )
-                    .as_unknown(),
-                ),
-                AutomationIoEventType::Modulation(modulation_amount) => buffer.push(
-                    ParamModEvent::new(
-                        ClackEventHeader::new(*time),
-                        *cookie,
-                        -1,
-                        *parameter_id,
-                        -1,
-                        -1,
-                        -1,
-                        *modulation_amount,
-                    )
-                    .as_unknown(),
-                ),
-                AutomationIoEventType::BeginGesture => buffer.push(
-                    ParamGestureBeginEvent::new(ClackEventHeader::new(*time), *parameter_id)
-                        .as_unknown(),
-                ),
-                AutomationIoEventType::EndGesture => buffer.push(
-                    ParamGestureEndEvent::new(ClackEventHeader::new(*time), *parameter_id)
-                        .as_unknown(),
-                ),
-            },
+            } => {
+                match event_type {
+                    AutomationIoEventType::Value(value) => {
+                        if let Some(cookie) = cookie {
+                            buffer.push(
+                                ParamValueEvent::new(
+                                    ClackEventHeader::new(*time),
+                                    *cookie,
+                                    -1,
+                                    *parameter_id,
+                                    -1,
+                                    -1,
+                                    -1,
+                                    *value,
+                                )
+                                .as_unknown(),
+                            )
+                        } else {
+                            log::error!("Could not write automation event to CLAP buffer: event had no cookie");
+                        }
+                    }
+                    AutomationIoEventType::Modulation(modulation_amount) => {
+                        if let Some(cookie) = cookie {
+                            buffer.push(
+                                ParamModEvent::new(
+                                    ClackEventHeader::new(*time),
+                                    *cookie,
+                                    -1,
+                                    *parameter_id,
+                                    -1,
+                                    -1,
+                                    -1,
+                                    *modulation_amount,
+                                )
+                                .as_unknown(),
+                            )
+                        } else {
+                            log::error!("Could not write automation event to CLAP buffer: event had no cookie");
+                        }
+                    }
+                    AutomationIoEventType::BeginGesture => buffer.push(
+                        ParamGestureBeginEvent::new(ClackEventHeader::new(*time), *parameter_id)
+                            .as_unknown(),
+                    ),
+                    AutomationIoEventType::EndGesture => buffer.push(
+                        ParamGestureEndEvent::new(ClackEventHeader::new(*time), *parameter_id)
+                            .as_unknown(),
+                    ),
+                }
+            }
         }
     }
 }

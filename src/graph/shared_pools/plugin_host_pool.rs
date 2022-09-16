@@ -5,7 +5,7 @@ use fnv::FnvHashMap;
 use crate::plugin_host::PluginHostMainThread;
 
 pub(crate) struct PluginHostPool {
-    pool: FnvHashMap<PluginInstanceID, PluginHostMainThread>,
+    pool: FnvHashMap<u64, PluginHostMainThread>,
     node_id_to_plugin_id: FnvHashMap<NodeID, PluginInstanceID>,
 }
 
@@ -19,26 +19,30 @@ impl PluginHostPool {
         id: PluginInstanceID,
         host: PluginHostMainThread,
     ) -> Option<PluginHostMainThread> {
-        let old_host = self.pool.insert(id.clone(), host);
+        let old_host = self.pool.insert(id.unique_id(), host);
         self.node_id_to_plugin_id.insert(id._node_id().into(), id);
         old_host
     }
 
     pub fn remove(&mut self, id: &PluginInstanceID) -> Option<PluginHostMainThread> {
         self.node_id_to_plugin_id.remove(&id._node_id().into());
-        self.pool.remove(id)
+        self.pool.remove(&id.unique_id())
     }
 
     pub fn get(&self, id: &PluginInstanceID) -> Option<&PluginHostMainThread> {
-        self.pool.get(id)
+        self.pool.get(&id.unique_id())
     }
 
     pub fn get_mut(&mut self, id: &PluginInstanceID) -> Option<&mut PluginHostMainThread> {
-        self.pool.get_mut(id)
+        self.pool.get_mut(&id.unique_id())
     }
 
     pub fn get_by_node_id(&self, id: &NodeID) -> Option<&PluginHostMainThread> {
-        self.node_id_to_plugin_id.get(id).map(|id| self.pool.get(id).unwrap())
+        self.node_id_to_plugin_id.get(id).map(|id| self.pool.get(&id.unique_id()).unwrap())
+    }
+
+    pub fn get_by_unique_id_mut(&mut self, id: u64) -> Option<&mut PluginHostMainThread> {
+        self.pool.get_mut(&id)
     }
 
     pub fn num_plugins(&self) -> usize {

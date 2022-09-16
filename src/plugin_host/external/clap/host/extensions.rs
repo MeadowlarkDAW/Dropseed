@@ -10,6 +10,7 @@ use clack_extensions::params::{
     HostParamsImplementation, HostParamsImplementationMainThread, ParamClearFlags, ParamRescanFlags,
 };
 use clack_extensions::thread_check::host::ThreadCheckImplementation;
+use clack_extensions::timer::{HostTimerImpl, TimerError, TimerId};
 use dropseed_plugin_api::HostRequestFlags;
 
 use super::{ClapHostMainThread, ClapHostShared};
@@ -71,7 +72,7 @@ impl<'a> HostAudioPortsImplementation for ClapHostMainThread<'a> {
         if !flags.is_empty() {
             // We ignore the `flags` field since we just do a full restart
             // and rescan for every "rescan ports" request anyway.
-            self.shared.host_request.request(HostRequestFlags::RESCAN_PORTS);
+            self.shared.host_request.request(HostRequestFlags::RESCAN_AUDIO_PORTS);
         }
     }
 }
@@ -91,7 +92,7 @@ impl<'a> HostNotePortsImplementation for ClapHostMainThread<'a> {
         if !flags.is_empty() {
             // We ignore the `flags` field since we just do a full restart
             // and rescan for every "rescan ports" request anyway.
-            self.shared.host_request.request(HostRequestFlags::RESCAN_PORTS);
+            self.shared.host_request.request(HostRequestFlags::RESCAN_NOTE_PORTS);
         }
     }
 }
@@ -124,6 +125,41 @@ impl<'a> HostParamsImplementationMainThread for ClapHostMainThread<'a> {
         }
 
         // TODO: we have no modulations or automations to clear yet
+    }
+}
+
+impl<'a> HostTimerImpl for ClapHostMainThread<'a> {
+    fn register_timer(&mut self, period_ms: u32) -> Result<TimerId, TimerError> {
+        if !self.shared.thread_ids.is_main_thread() {
+            log::warn!(
+                "Plugin called clap_host_timer_support->register_timer() not in the main thread"
+            );
+            return Err(TimerError::RegisterError);
+        }
+
+        if let Ok(timer_id) = self.shared.host_request.register_timer(period_ms) {
+            Ok(TimerId(timer_id.0))
+        } else {
+            Err(TimerError::RegisterError)
+        }
+    }
+
+    fn unregister_timer(
+        &mut self,
+        timer_id: clack_extensions::timer::TimerId,
+    ) -> Result<(), TimerError> {
+        if !self.shared.thread_ids.is_main_thread() {
+            log::warn!(
+                "Plugin called clap_host_timer_support->unregister_timer() not in the main thread"
+            );
+            return Err(TimerError::RegisterError);
+        }
+
+        self.shared
+            .host_request
+            .unregister_timer(dropseed_plugin_api::ext::timer::TimerID(timer_id.0));
+
+        Ok(())
     }
 }
 

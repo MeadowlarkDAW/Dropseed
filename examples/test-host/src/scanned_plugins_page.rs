@@ -1,6 +1,6 @@
 use dropseed::engine::DSEngineMainThread;
 use dropseed::plugin_scanner::ScannedPluginInfo;
-use eframe::egui;
+use egui_glow::egui_winit::egui;
 
 use super::{ActivatedState, DSTestHostGUI};
 

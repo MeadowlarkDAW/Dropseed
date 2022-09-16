@@ -23,7 +23,7 @@ use missing_plugin::MissingPluginMainThread;
     feature = "clap-host",
     any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd")
 ))]
-const DEFAULT_CLAP_SCAN_DIRECTORIES: [&str; 2] = ["/usr/lib/clap", "/usr/local/lib/clap"];
+const DEFAULT_CLAP_SCAN_DIRECTORIES: [&str; 1] = ["/usr/lib/clap"];
 
 #[cfg(all(feature = "clap-host", target_os = "macos"))]
 const DEFAULT_CLAP_SCAN_DIRECTORIES: [&str; 1] = ["/Library/Audio/Plug-Ins/CLAP"];
@@ -331,6 +331,7 @@ impl PluginScanner {
         // TODO: return an actual result
         let mut plugin_bundle = None;
         let mut status = Ok(());
+        let mut loaded = false;
 
         // Always try to use internal plugins when available.
         if save_state.key.format == PluginFormat::Internal || fallback_to_other_formats {
@@ -381,7 +382,8 @@ impl PluginScanner {
 
         let mut format = PluginInstanceType::Unloaded;
 
-        let (host_request_rx, channel_send) = HostRequestChannelReceiver::new_channel();
+        let (host_request_rx, channel_send) =
+            HostRequestChannelReceiver::new_channel(self.thread_ids.main_thread_id().unwrap());
 
         let plugin_factory = if let Some(plugin_bundle) = plugin_bundle {
             let loaded_factories =
@@ -470,6 +472,7 @@ impl PluginScanner {
             ) {
                 Ok(plug_main_thread) => {
                     status = Ok(());
+                    loaded = true;
 
                     plug_main_thread
                 }
@@ -481,13 +484,20 @@ impl PluginScanner {
 
                     Box::new(MissingPluginMainThread::new(
                         save_state.key.clone(),
-                        save_state.backup_audio_ports.clone(),
-                        save_state.backup_note_ports.clone(),
+                        save_state.backup_audio_ports_ext.clone(),
+                        save_state.backup_note_ports_ext.clone(),
                     ))
                 }
             };
 
-            PluginHostMainThread::new(id, save_state, plug_main_thread, host_request_rx)
+            PluginHostMainThread::new(
+                id,
+                save_state,
+                plug_main_thread,
+                host_request_rx,
+                loaded,
+                &self.coll_handle,
+            )
         } else {
             let rdn = Shared::new(&self.coll_handle, save_state.key.rdn.clone());
 
@@ -500,11 +510,18 @@ impl PluginScanner {
 
             let plug_main_thread = Box::new(MissingPluginMainThread::new(
                 save_state.key.clone(),
-                save_state.backup_audio_ports.clone(),
-                save_state.backup_note_ports.clone(),
+                save_state.backup_audio_ports_ext.clone(),
+                save_state.backup_note_ports_ext.clone(),
             ));
 
-            PluginHostMainThread::new(id, save_state, plug_main_thread, host_request_rx)
+            PluginHostMainThread::new(
+                id,
+                save_state,
+                plug_main_thread,
+                host_request_rx,
+                loaded,
+                &self.coll_handle,
+            )
         };
 
         CreatePluginResult { plugin_host, status }

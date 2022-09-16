@@ -1,15 +1,18 @@
 use basedrop::Shared;
-use clack_extensions::gui::GuiError;
+use clack_extensions::gui::{GuiResizeHints, GuiSize};
 use clack_host::events::io::EventBuffer;
 use meadowlark_core_types::time::SampleRate;
+use raw_window_handle::RawWindowHandle;
 use std::error::Error;
 
+use crate::ext::timer::TimerID;
+
 use super::transport::TempoMap;
-use super::{ext, ParamID, PluginProcessThread};
+use super::{ext, ParamID, PluginProcessor};
 
 /// The methods of an audio plugin instance which run in the "main" thread.
 pub trait PluginMainThread {
-    /// Activate the plugin, and return the `PluginProcessThread` counterpart.
+    /// Activate the plugin, and return the `PluginProcessor` counterpart.
     ///
     /// In this call the plugin may allocate memory and prepare everything needed for the process
     /// call. The process's sample rate will be constant and process's frame count will included in
@@ -50,7 +53,7 @@ pub trait PluginMainThread {
         Ok(())
     }
 
-    /// Deactivate the plugin. When this is called it also means that the `PluginProcessThread`
+    /// Deactivate the plugin. When this is called it also means that the `PluginProcessor`
     /// counterpart will already have been dropped.
     ///
     /// `[main-thread & active_state]`
@@ -86,6 +89,17 @@ pub trait PluginMainThread {
     #[allow(unused)]
     fn note_ports_ext(&mut self) -> Result<ext::note_ports::PluginNotePortsExt, String> {
         Ok(ext::note_ports::EMPTY_NOTE_PORTS_CONFIG.clone())
+    }
+
+    /// The latency in frames this plugin adds.
+    ///
+    /// The plugin is only allowed to change its latency when it is deactivated.
+    ///
+    /// By default this returns `0` (no latency).
+    ///
+    /// [main-thread & !active_state]
+    fn latency(&self) -> i64 {
+        0
     }
 
     // --- Parameters ---------------------------------------------------------------------------------
@@ -190,50 +204,137 @@ pub trait PluginMainThread {
     ///
     /// By default this does nothing.
     ///
-    /// [active && !processing : process-thread]
+    /// [active ? process-thread : main-thread]
     #[allow(unused)]
     fn param_flush(&mut self, in_events: &EventBuffer, out_events: &mut EventBuffer) {}
 
     // --- GUI ---------------------------------------------------------------------------------
 
-    /// Returns whether or not this plugin instance supports opening a floating GUI window.
-    fn has_gui(&self) -> bool {
-        false
-    }
-
-    fn is_gui_open(&self) -> bool {
-        false
-    }
-
-    /// Initializes and opens the plugin's GUI
-    // TODO: better error type
-    fn open_gui(&mut self, _suggested_title: Option<&str>) -> Result<(), GuiError> {
-        Err(GuiError::CreateError)
-    }
-
-    /// Called when the plugin notified its GUI has been closed.
+    /// If `floating` is `true`, then this returns whether or not this plugin instance supports
+    /// creating a custom GUI in a floating window that the plugin manages itself.
     ///
-    /// `destroyed` is set to true if the GUI has also been destroyed completely, e.g. due to a
-    /// lost connection.
+    /// If `floating` is `false`, then this returns whether or not this plugin instance supports
+    /// embedding a custom GUI into a window managed by the host.
+    ///
+    /// By default this returns `false` for both cases.
     #[allow(unused)]
-    fn on_gui_closed(&mut self, destroyed: bool) {}
-
-    /// Closes and destroys the currently active GUI
-    fn close_gui(&mut self) {}
-
-    /// The latency in frames this plugin adds.
-    ///
-    /// The plugin is only allowed to change its latency when it is deactivated.
-    ///
-    /// By default this returns `0` (no latency).
-    ///
-    /// [main-thread & !active_state]
-    fn latency(&self) -> i64 {
-        0
+    fn supports_gui(&self, floating: bool) -> bool {
+        false
     }
+
+    /// Create a new floating GUI in a window managed by the plugin itself.
+    ///
+    /// By default this returns an error.
+    #[allow(unused)]
+    fn create_new_floating_gui(
+        &mut self,
+        suggested_title: Option<&str>,
+    ) -> Result<(), Box<dyn Error>> {
+        Err("Plugin does not support a custom floating GUI".into())
+    }
+
+    /// Create a new embedded GUI in a window managed by the host.
+    ///
+    /// * `scale` - The absolute GUI scaling factor. This overrides any OS info.
+    ///     * This should not be used if the windowing API relies upon logical pixels
+    /// (such as Cocoa on MacOS).
+    ///     * If this plugin prefers to work out the scaling factor itself by querying
+    /// the OS directly, then ignore this value.
+    /// * `size`
+    ///     * If the plugin's GUI is resizable, and the size is known from previous a
+    /// previous session, then put the size from that previous session here.
+    ///     * If the plugin's GUI is not resizable, then this will be ignored.
+    /// * `parent_window` - The `RawWindowHandle` of the window that the GUI should be
+    /// embedded into.
+    ///
+    /// By default this returns an error.
+    #[allow(unused)]
+    fn create_new_embedded_gui(
+        &mut self,
+        scale: Option<f64>,
+        size: Option<ext::gui::GuiSize>,
+        parent_window: RawWindowHandle,
+    ) -> Result<ext::gui::EmbeddedGuiInfo, Box<dyn Error>> {
+        Err("Plugin does not support a custom embedded GUI".into())
+    }
+
+    /// Destroy the currently active GUI.
+    ///
+    /// By default this does nothing.
+    fn destroy_gui(&mut self) {}
+
+    /// Information provided by the plugin to improve window resizing when initiated
+    /// by the host or window manager. Only for plugins with resizable GUIs.
+    ///
+    /// By default this returns `None`.
+    fn gui_resize_hints(&self) -> Option<GuiResizeHints> {
+        None
+    }
+
+    /// If the plugin gui is resizable, then the plugin will calculate the closest
+    /// usable size which fits in the given size. Only for embedded GUIs.
+    ///
+    /// This method does not change the size of the current GUI.
+    ///
+    /// If the plugin does not support changing the size of its GUI, then this
+    /// will return `None`.
+    ///
+    /// By default this returns `None`.
+    #[allow(unused)]
+    fn adjust_gui_size(&mut self, size: GuiSize) -> Option<GuiSize> {
+        None
+    }
+
+    /// Set the size of the plugin's GUI. Only for embedded GUIs.
+    #[allow(unused)]
+    fn set_gui_size(&mut self, size: GuiSize) -> Result<(), Box<dyn Error>> {
+        Err("Plugin does not support a custom embedded GUI".into())
+    }
+
+    /// Set the absolute GUI scaling factor. This overrides any OS info.
+    ///
+    /// This should not be used if the windowing API relies upon logical pixels
+    /// (such as Cocoa on MacOS).
+    ///
+    /// If this plugin prefers to work out the scaling factor itself by querying
+    /// the OS directly, then ignore this value.
+    ///
+    /// Returns `true` if the plugin applied the scaling.
+    /// Returns `false` if the plugin could not apply the scaling, or if the
+    /// plugin ignored the request.
+    ///
+    /// By default this returns `false`.
+    #[allow(unused)]
+    fn set_gui_scale(&mut self, scale: f64) -> bool {
+        false
+    }
+
+    /// Show the currently active GUI.
+    ///
+    /// By default this returns an error.
+    fn show_gui(&mut self) -> Result<(), Box<dyn Error>> {
+        Err("Plugin does not support a custom GUI".into())
+    }
+
+    /// Hide the currently active GUI.
+    ///
+    /// Note that hiding the GUI is not the same as destroying the GUI.
+    /// Hiding only hides the window content, it does not free the GUI's
+    /// resources.  Yet it may be a good idea to stop painting timers
+    /// when a plugin GUI is hidden.
+    ///
+    /// By default this returns an error.
+    fn hide_gui(&mut self) -> Result<(), Box<dyn Error>> {
+        Err("Plugin does not support a custom GUI".into())
+    }
+
+    // --- Timer -------------------------------------------------------------------------------
+
+    #[allow(unused)]
+    fn on_timer(&mut self, timer_id: TimerID) {}
 }
 
 pub struct PluginActivatedInfo {
-    pub processor: Box<dyn PluginProcessThread>,
+    pub processor: Box<dyn PluginProcessor>,
     pub internal_handle: Option<Box<dyn std::any::Any + Send + 'static>>,
 }

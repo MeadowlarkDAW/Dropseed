@@ -8,10 +8,10 @@ use crate::processor_schedule::tasks::Task;
 
 use super::super::error::GraphCompilerError;
 use super::super::shared_pools::GraphSharedPools;
-use super::super::{ChannelID, PortType};
+use super::super::{PortChannelID, PortType};
 
-mod activated_plugin_task;
-mod deactivated_plugin_task;
+mod loaded_plugin_task;
+mod unloaded_plugin_task;
 
 pub(super) fn construct_plugin_task(
     scheduled_node: &ScheduledNode,
@@ -29,15 +29,15 @@ pub(super) fn construct_plugin_task(
 
     let plugin_id = plugin_host.id();
     let port_ids = plugin_host.port_ids();
-    let maybe_shared_processor = plugin_host.shared_processor();
+    let shared_processor = plugin_host.shared_processor();
     let maybe_audio_ports_ext = plugin_host.audio_ports_ext();
     let maybe_note_ports_ext = plugin_host.note_ports_ext();
 
-    // --- Construct a map that maps the ChannelID of each port to its assigned buffer ------
+    // --- Construct a map that maps the PortChannelID of each port to its assigned buffer ------
 
-    let mut assigned_audio_buffers: FnvHashMap<ChannelID, (SharedBuffer<f32>, bool)> =
+    let mut assigned_audio_buffers: FnvHashMap<PortChannelID, (SharedBuffer<f32>, bool)> =
         FnvHashMap::default();
-    let mut assigned_note_buffers: FnvHashMap<ChannelID, (SharedBuffer<NoteIoEvent>, bool)> =
+    let mut assigned_note_buffers: FnvHashMap<PortChannelID, (SharedBuffer<NoteIoEvent>, bool)> =
         FnvHashMap::default();
     let mut assigned_automation_in_buffer: Option<(SharedBuffer<AutomationIoEvent>, bool)> = None;
     let mut assigned_automation_out_buffer: Option<SharedBuffer<AutomationIoEvent>> = None;
@@ -122,27 +122,27 @@ pub(super) fn construct_plugin_task(
 
     // --- Construct the final task using the constructed map from above --------------------
 
-    if maybe_shared_processor.is_none() {
-        // Plugin is unloaded/deactivated
-        deactivated_plugin_task::construct_deactivated_plugin_task(
-            scheduled_node,
-            maybe_audio_ports_ext,
-            maybe_note_ports_ext,
-            assigned_audio_buffers,
-            assigned_note_buffers,
-            assigned_automation_out_buffer,
-        )
-    } else {
-        activated_plugin_task::construct_activated_plugin_task(
+    if plugin_host.is_loaded() {
+        loaded_plugin_task::construct_loaded_plugin_task(
             scheduled_node,
             shared_pool,
             plugin_id,
-            maybe_shared_processor.as_ref().unwrap(),
+            shared_processor,
             maybe_audio_ports_ext.as_ref().unwrap(),
             maybe_note_ports_ext.as_ref().unwrap(),
             assigned_audio_buffers,
             assigned_note_buffers,
             assigned_automation_in_buffer,
+            assigned_automation_out_buffer,
+        )
+    } else {
+        // Plugin is unloaded
+        unloaded_plugin_task::construct_unloaded_plugin_task(
+            scheduled_node,
+            maybe_audio_ports_ext,
+            maybe_note_ports_ext,
+            assigned_audio_buffers,
+            assigned_note_buffers,
             assigned_automation_out_buffer,
         )
     }
