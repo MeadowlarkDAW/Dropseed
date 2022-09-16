@@ -25,6 +25,7 @@ pub struct EffectRackParamState {
     id: ParamID,
 
     display_name: String,
+    display_value: String,
 
     value: f64,
     mod_amount: f64,
@@ -55,7 +56,8 @@ pub struct EffectRackPluginState {
     activated: bool,
     bypassed: bool,
 
-    params: FnvHashMap<ParamID, EffectRackParamState>,
+    param_states: Vec<EffectRackParamState>,
+    param_id_to_index: FnvHashMap<ParamID, usize>,
 
     audio_ports_ext: Option<PluginAudioPortsExt>,
     note_ports_ext: Option<PluginNotePortsExt>,
@@ -64,7 +66,11 @@ pub struct EffectRackPluginState {
 }
 
 impl EffectRackPluginState {
-    pub fn new(new_plugin_res: NewPluginRes, plugin_name: String) -> Self {
+    pub fn new(
+        new_plugin_res: NewPluginRes,
+        plugin_name: String,
+        ds_engine: &mut DSEngineMainThread,
+    ) -> Self {
         let mut new_self = Self {
             plugin_id: new_plugin_res.plugin_id,
             plugin_name,
@@ -79,9 +85,12 @@ impl EffectRackPluginState {
             bypassed: false,
             audio_ports_ext: None,
             note_ports_ext: None,
-            params: FnvHashMap::default(),
+            param_states: Vec::new(),
+            param_id_to_index: FnvHashMap::default(),
             internal_handle: None,
         };
+
+        new_self.on_param_list_updated(ds_engine);
 
         if let PluginStatus::Activated(status) = new_plugin_res.status {
             new_self.on_activated(status);
@@ -90,45 +99,78 @@ impl EffectRackPluginState {
         new_self
     }
 
+    pub fn on_param_list_updated(&mut self, ds_engine: &mut DSEngineMainThread) {
+        self.param_states.clear();
+        self.param_id_to_index.clear();
+        if let Some(plugin_host) = ds_engine.plugin_host(&self.plugin_id) {
+            for (i, param_id) in plugin_host.param_list().iter().enumerate() {
+                let param_state = plugin_host.param_state(*param_id).unwrap();
+
+                let mut display_value = String::new();
+                if let Err(e) = plugin_host.param_value_to_text(
+                    *param_id,
+                    param_state.value,
+                    &mut display_value,
+                ) {
+                    log::error!("{}", e);
+                    display_value = "error".into();
+                }
+
+                self.param_states.push(EffectRackParamState {
+                    id: *param_id,
+                    display_name: param_state.info.display_name.clone(),
+                    display_value,
+                    value: param_state.value,
+                    mod_amount: param_state.mod_amount,
+                    min_value: param_state.info.min_value,
+                    max_value: param_state.info.max_value,
+                    is_stepped: param_state.info.flags.contains(ParamInfoFlags::IS_STEPPED),
+                    is_read_only: param_state.info.flags.contains(ParamInfoFlags::IS_READONLY),
+                    is_hidden: param_state.info.flags.contains(ParamInfoFlags::IS_HIDDEN),
+                    is_gesturing: param_state.is_gesturing,
+                });
+                self.param_id_to_index.insert(*param_id, i);
+            }
+        }
+    }
+
     pub fn on_activated(&mut self, mut status: PluginActivatedStatus) {
         self.activated = true;
-
-        self.params.clear();
-
-        for (info, value) in status.new_parameters.drain(..) {
-            let _ = self.params.insert(
-                info.stable_id,
-                ParamState {
-                    id: info.stable_id,
-                    display_name: info.display_name.clone(),
-                    value,
-                    min_value: info.min_value,
-                    max_value: info.max_value,
-                    is_stepped: info.flags.contains(ParamInfoFlags::IS_STEPPED),
-                    is_read_only: info.flags.contains(ParamInfoFlags::IS_READONLY),
-                    is_hidden: info.flags.contains(ParamInfoFlags::IS_HIDDEN),
-                    is_gesturing: false,
-                },
-            );
-        }
-
         self.internal_handle = status.internal_handle.take();
     }
 
     pub fn on_deactivated(&mut self) {
         self.activated = false;
-        self.params.clear();
+        self.internal_handle = None;
     }
 
-    pub fn on_params_modified(&mut self, modified_params: &[ParamModifiedInfo]) {
-        for m_p in modified_params.iter() {
-            let param = self.params.get_mut(&m_p.param_id).unwrap();
+    pub fn on_params_modified(
+        &mut self,
+        modified_params: &[ParamModifiedInfo],
+        ds_engine: &mut DSEngineMainThread,
+    ) {
+        if let Some(plugin_host) = ds_engine.plugin_host(&self.plugin_id) {
+            for m_p in modified_params.iter() {
+                if let Some(i) = self.param_id_to_index.get(&m_p.param_id) {
+                    let param_state = &mut self.param_states[*i];
 
-            if let Some(new_value) = m_p.new_value {
-                param.value = new_value;
+                    if let Some(new_value) = m_p.new_value {
+                        param_state.value = new_value;
+
+                        param_state.display_value.clear();
+                        if let Err(e) = plugin_host.param_value_to_text(
+                            param_state.id,
+                            new_value,
+                            &mut param_state.display_value,
+                        ) {
+                            log::error!("{}", e);
+                            param_state.display_value = "error".into();
+                        }
+                    }
+
+                    param_state.is_gesturing = m_p.is_gesturing;
+                }
             }
-
-            param.is_gesturing = m_p.is_gesturing;
         }
     }
 
@@ -160,7 +202,10 @@ impl EffectRackPluginState {
     ) {
         if self.supports_embedded_gui && !self.gui_active {
             if let Some(plugin_host) = ds_engine.plugin_host_mut(&self.plugin_id) {
-                let new_window = match winit::window::Window::new(event_loop) {
+                let new_window = match winit::window::WindowBuilder::new()
+                    .with_title(&self.plugin_name)
+                    .build(event_loop)
+                {
                     Ok(w) => w,
                     Err(e) => {
                         log::error!("Failed to create window for embedded plugin GUI: {}", e);
@@ -178,6 +223,7 @@ impl EffectRackPluginState {
                         self.gui_visible = false;
 
                         new_window.set_resizable(info.resizable);
+
                         new_window.set_inner_size(winit::dpi::PhysicalSize::new(
                             info.size.width,
                             info.size.height,
@@ -202,6 +248,7 @@ impl EffectRackPluginState {
     pub fn resize_gui(
         &mut self,
         size: GuiSize,
+        scale_factor: Option<f64>,
         initated_by_plugin: bool,
         ds_engine: &mut DSEngineMainThread,
     ) {
@@ -213,15 +260,21 @@ impl EffectRackPluginState {
                 }
             } else if self.gui_resizable {
                 if let Some(plugin_host) = ds_engine.plugin_host_mut(&self.plugin_id) {
+                    if let Some(scale_factor) = scale_factor {
+                        plugin_host.set_gui_scale(scale_factor);
+                    }
+
                     if let Some(working_size) = plugin_host.adjust_gui_size(size) {
                         match plugin_host.set_gui_size(working_size) {
                             Ok(()) => {
-                                self.embedded_window.as_mut().unwrap().set_inner_size(
-                                    winit::dpi::PhysicalSize::new(
-                                        working_size.width,
-                                        working_size.height,
-                                    ),
-                                );
+                                if working_size != size {
+                                    self.embedded_window.as_mut().unwrap().set_inner_size(
+                                        winit::dpi::PhysicalSize::new(
+                                            working_size.width,
+                                            working_size.height,
+                                        ),
+                                    );
+                                }
                             }
                             Err(e) => {
                                 log::error!(
@@ -257,6 +310,10 @@ impl EffectRackPluginState {
 
     pub fn show_gui(&mut self, ds_engine: &mut DSEngineMainThread) {
         if self.gui_active && !self.gui_visible {
+            if let Some(window) = &mut self.embedded_window {
+                window.set_visible(true);
+            }
+
             if let Some(plugin_host) = ds_engine.plugin_host_mut(&self.plugin_id) {
                 match plugin_host.show_gui() {
                     Ok(()) => self.gui_visible = true,
@@ -270,6 +327,10 @@ impl EffectRackPluginState {
 
     pub fn hide_gui(&mut self, ds_engine: &mut DSEngineMainThread) {
         if self.gui_active && self.gui_visible {
+            if let Some(window) = &mut self.embedded_window {
+                window.set_visible(false);
+            }
+
             if let Some(plugin_host) = ds_engine.plugin_host_mut(&self.plugin_id) {
                 match plugin_host.hide_gui() {
                     Ok(()) => self.gui_visible = false,
@@ -408,7 +469,7 @@ impl EffectRackState {
         let mut result = ds_engine.modify_graph(request).unwrap();
         let new_plugin_res = result.new_plugins.remove(0);
 
-        let new_plugin_state = EffectRackPluginState::new(new_plugin_res, plugin_name);
+        let new_plugin_state = EffectRackPluginState::new(new_plugin_res, plugin_name, ds_engine);
 
         self.plugins.push(new_plugin_state);
     }
@@ -584,64 +645,82 @@ fn show_effect_rack_plugin(
 
                     // TODO: plugin ports
 
-                    for param in plugin.params.values_mut() {
-                        if param.is_hidden {
+                    for param_state in plugin.param_states.iter_mut() {
+                        if param_state.is_hidden {
                             continue;
                         }
 
-                        if param.is_read_only {
+                        if param_state.is_read_only {
                             ui.horizontal(|ui| {
-                                ui.label(&format!("{}: {:.8}", &param.display_name, param.value));
+                                ui.label(&format!(
+                                    "{}: {}",
+                                    &param_state.display_name, param_state.display_value
+                                ));
                             });
 
                             continue;
                         }
 
                         ui.horizontal(|ui| {
-                            if param.is_stepped {
-                                let mut value: i64 = param.value.round() as i64;
-                                let min_value: i64 = param.min_value.round() as i64;
-                                let max_value: i64 = param.max_value.round() as i64;
+                            ui.label(&param_state.display_name);
+
+                            let mut update_value_to: Option<f64> = None;
+                            if param_state.is_stepped {
+                                let mut value: i64 = param_state.value.round() as i64;
+                                let min_value: i64 = param_state.min_value.round() as i64;
+                                let max_value: i64 = param_state.max_value.round() as i64;
 
                                 if ui
                                     .add(
                                         egui::Slider::new(&mut value, min_value..=max_value)
-                                            .text(&param.display_name),
+                                            .show_value(false),
                                     )
                                     .changed()
                                 {
-                                    match ds_engine
-                                        .plugin_host_mut(&plugin.plugin_id)
-                                        .as_mut()
-                                        .unwrap()
-                                        .set_param_value(param.id, value as f64)
-                                    {
-                                        Ok(v) => param.value = v,
-                                        Err(e) => log::error!("{}", e),
-                                    }
+                                    update_value_to = Some(value as f64);
                                 }
                             } else if ui
                                 .add(
                                     egui::Slider::new(
-                                        &mut param.value,
-                                        param.min_value..=param.max_value,
+                                        &mut param_state.value,
+                                        param_state.min_value..=param_state.max_value,
                                     )
-                                    .text(&param.display_name),
+                                    .show_value(false),
                                 )
                                 .changed()
                             {
+                                update_value_to = Some(param_state.value);
+                            }
+
+                            if let Some(new_value) = update_value_to {
                                 match ds_engine
                                     .plugin_host_mut(&plugin.plugin_id)
                                     .as_mut()
                                     .unwrap()
-                                    .set_param_value(param.id, param.value)
+                                    .set_param_value(param_state.id, new_value as f64)
                                 {
-                                    Ok(v) => param.value = v,
+                                    Ok(v) => {
+                                        param_state.value = v;
+
+                                        let plugin_host =
+                                            ds_engine.plugin_host(&plugin.plugin_id).unwrap();
+                                        param_state.display_value.clear();
+                                        if let Err(e) = plugin_host.param_value_to_text(
+                                            param_state.id,
+                                            v,
+                                            &mut param_state.display_value,
+                                        ) {
+                                            log::error!("{}", e);
+                                            param_state.display_value = "error".into();
+                                        }
+                                    }
                                     Err(e) => log::error!("{}", e),
                                 }
                             }
 
-                            if param.is_gesturing {
+                            ui.label(&param_state.display_value);
+
+                            if param_state.is_gesturing {
                                 ui.colored_label(egui::Color32::GREEN, "Gesturing");
                             }
                         });

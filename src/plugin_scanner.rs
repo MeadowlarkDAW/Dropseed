@@ -23,7 +23,7 @@ use missing_plugin::MissingPluginMainThread;
     feature = "clap-host",
     any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd")
 ))]
-const DEFAULT_CLAP_SCAN_DIRECTORIES: [&str; 2] = ["/usr/lib/clap", "/usr/local/lib/clap"];
+const DEFAULT_CLAP_SCAN_DIRECTORIES: [&str; 1] = ["/usr/lib/clap"];
 
 #[cfg(all(feature = "clap-host", target_os = "macos"))]
 const DEFAULT_CLAP_SCAN_DIRECTORIES: [&str; 1] = ["/Library/Audio/Plug-Ins/CLAP"];

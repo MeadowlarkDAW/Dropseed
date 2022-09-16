@@ -16,7 +16,7 @@ use dropseed_plugin_api::{
 
 use dropseed_plugin_api::buffer::EventBuffer;
 use fnv::{FnvHashMap, FnvHashSet};
-use meadowlark_core_types::time::{SampleRate, Seconds};
+use meadowlark_core_types::time::SampleRate;
 use raw_window_handle::RawWindowHandle;
 use smallvec::SmallVec;
 use std::error::Error;
@@ -31,13 +31,10 @@ use super::channel::{
 };
 use super::error::{ActivatePluginError, RescanParamListError, SetParamValueError};
 use super::event_io_buffers::{PluginEventOutputSanitizer, PluginIoEvent};
+use super::processor::BYPASS_DECLICK_SECS;
 use super::PluginHostProcessorWrapper;
 
 mod sync_ports;
-
-// The amount of time to smooth/declick the audio outputs when
-// bypassing/unbypassing the plugin.
-static BYPASS_DECLICK_SECS: Seconds = Seconds(3.0 / 1000.0);
 
 struct DeactivatedEventBuffers {
     in_events: EventBuffer,
@@ -1279,8 +1276,12 @@ impl PluginHostMainThread {
                             req.timer_id,
                             req.period_ms,
                         );
+
+                        self.registered_timers.insert(req.timer_id);
                     } else {
                         engine_timer.unregister_plugin_timer(self.id.unique_id(), req.timer_id);
+
+                        self.registered_timers.remove(&req.timer_id);
                     }
                 }
             }

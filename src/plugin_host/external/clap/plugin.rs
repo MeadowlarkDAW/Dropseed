@@ -19,7 +19,7 @@ use meadowlark_core_types::time::SampleRate;
 use raw_window_handle::RawWindowHandle;
 use smallvec::SmallVec;
 use std::error::Error;
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::io::Cursor;
 use std::mem::MaybeUninit;
 
@@ -360,12 +360,22 @@ impl PluginMainThread for ClapPluginMainThread {
                 .get_info(&self.instance, param_index as u32, &mut data)
                 .ok_or_else(|| format!("Param at index {} does not exist", param_index))?;
 
+            let display_name = if !info.name().is_empty() {
+                CStr::from_bytes_with_nul(info.name())?.to_str()?.to_string()
+            } else {
+                "unnamed".into()
+            };
+            let module = if !info.module().is_empty() {
+                CStr::from_bytes_with_nul(info.module())?.to_str()?.to_string()
+            } else {
+                String::new()
+            };
+
             Ok(ParamInfo {
                 stable_id: ParamID(info.id()),
                 flags: ParamInfoFlags::from_bits_truncate(info.flags()),
-                // TODO: better handle UTF8 validation
-                display_name: core::str::from_utf8(info.name())?.to_string(),
-                module: core::str::from_utf8(info.module())?.to_string(),
+                display_name,
+                module,
                 min_value: info.min_value(),
                 max_value: info.max_value(),
                 default_value: info.default_value(),

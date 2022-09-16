@@ -1,11 +1,16 @@
 use clack_host::events::Event;
 use dropseed_plugin_api::buffer::EventBuffer;
 use dropseed_plugin_api::{PluginProcessor, ProcBuffers, ProcInfo, ProcessStatus};
+use meadowlark_core_types::time::Seconds;
 
 use crate::utils::thread_id::SharedThreadIDs;
 
 use super::channel::{PlugHostChannelProcThread, PluginActiveState};
 use super::event_io_buffers::{PluginEventIoBuffers, PluginEventOutputSanitizer};
+
+// The amount of time to smooth/declick the audio outputs when
+// bypassing/unbypassing the plugin.
+pub(super) static BYPASS_DECLICK_SECS: Seconds = Seconds(1.0 / 1000.0);
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 enum ProcessingState {

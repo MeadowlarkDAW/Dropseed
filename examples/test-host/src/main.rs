@@ -6,11 +6,13 @@ use dropseed::engine::{
     ActivateEngineSettings, ActivatedEngineInfo, DSEngineAudioThread, DSEngineMainThread,
     EngineDeactivatedStatus, EngineSettings, OnIdleEvent,
 };
+use dropseed::plugin_api::ext::gui::GuiSize;
 use dropseed::plugin_api::HostInfo;
 use dropseed::plugin_scanner::ScannedPluginInfo;
 use egui_glow::egui_winit::egui;
 use egui_glow::egui_winit::winit;
 use fern::colors::ColoredLevelConfig;
+use glutin::dpi::PhysicalSize;
 use glutin::window::WindowId;
 use log::LevelFilter;
 use meadowlark_core_types::time::SampleRate;
@@ -272,7 +274,7 @@ impl DSTestHostGUI {
                         .effect_rack_state
                         .plugin_mut(&plugin_id)
                     {
-                        plugin.on_params_modified(&modified_params);
+                        plugin.on_params_modified(&modified_params, &mut self.ds_engine);
                     }
                 }
 
@@ -288,7 +290,7 @@ impl DSTestHostGUI {
                         .effect_rack_state
                         .plugin_mut(&plugin_id)
                     {
-                        plugin.resize_gui(size, true, &mut self.ds_engine);
+                        plugin.resize_gui(size, None, true, &mut self.ds_engine);
                     }
                 }
 
@@ -364,6 +366,23 @@ impl DSTestHostGUI {
                     }
                 }
 
+                // The plugin has updated its list of parameters.
+                OnIdleEvent::PluginUpdatedParameterList { plugin_id, status } => {
+                    if let Err(e) = status {
+                        log::error!("{}", e);
+                    }
+
+                    if let Some(plugin) = self
+                        .activated_state
+                        .as_mut()
+                        .unwrap()
+                        .effect_rack_state
+                        .plugin_mut(&plugin_id)
+                    {
+                        plugin.on_param_list_updated(&mut self.ds_engine);
+                    }
+                }
+
                 // Sent whenever a plugin becomes activated after being deactivated or
                 // when the plugin restarts.
                 //
@@ -425,6 +444,28 @@ impl DSTestHostGUI {
         }
 
         next_timer_instant
+    }
+
+    fn on_plugin_window_resized(
+        &mut self,
+        window_id: WindowId,
+        new_size: &PhysicalSize<u32>,
+        new_scale_factor: Option<f64>,
+    ) {
+        if self.activated_state.is_none() {
+            return;
+        }
+
+        if let Some(plugin) = self
+            .activated_state
+            .as_mut()
+            .unwrap()
+            .effect_rack_state
+            .plugin_mut_from_embedded_window_id(window_id)
+        {
+            let new_size = GuiSize { width: new_size.width, height: new_size.height };
+            plugin.resize_gui(new_size, new_scale_factor, false, &mut self.ds_engine);
+        }
     }
 
     fn on_plugin_window_closed(&mut self, window_id: WindowId) {
@@ -576,6 +617,24 @@ fn run_ui_event_loop(
                 } else {
                     if matches!(event, WindowEvent::CloseRequested | WindowEvent::Destroyed) {
                         app.on_plugin_window_closed(window_id);
+                    }
+
+                    // TODO: Detect when window is minimized/un-minimized and tell the plugin
+                    // to hide/show its GUI accordingly once winit gains that ability.
+                    // https://github.com/rust-windowing/winit/issues/2334
+
+                    if let glutin::event::WindowEvent::Resized(physical_size) = &event {
+                        app.on_plugin_window_resized(window_id, physical_size, None);
+                    } else if let glutin::event::WindowEvent::ScaleFactorChanged {
+                        new_inner_size,
+                        scale_factor,
+                    } = &event
+                    {
+                        app.on_plugin_window_resized(
+                            window_id,
+                            new_inner_size,
+                            Some(*scale_factor),
+                        );
                     }
                 }
             }
