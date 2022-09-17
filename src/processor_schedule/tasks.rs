@@ -1,16 +1,15 @@
 use dropseed_plugin_api::ProcInfo;
 use std::fmt::{Debug, Error, Formatter, Write};
 
-mod deactivated_plug_task;
 mod delay_comp_task;
 mod graph_in_out_task;
 mod plugin_task;
 mod sum_task;
 mod transport_task;
+mod unloaded_plugin_task;
 
 pub use transport_task::TransportHandle;
 
-pub(crate) use deactivated_plug_task::DeactivatedPluginTask;
 pub(crate) use delay_comp_task::{
     AudioDelayCompNode, AudioDelayCompTask, AutomationDelayCompNode, AutomationDelayCompTask,
     NoteDelayCompNode, NoteDelayCompTask, SharedAudioDelayCompNode, SharedAutomationDelayCompNode,
@@ -20,6 +19,7 @@ pub(crate) use graph_in_out_task::{GraphInTask, GraphOutTask};
 pub(crate) use plugin_task::PluginTask;
 pub(crate) use sum_task::{AudioSumTask, AutomationSumTask, NoteSumTask};
 pub(crate) use transport_task::TransportTask;
+pub(crate) use unloaded_plugin_task::UnloadedPluginTask;
 
 pub(crate) enum Task {
     Plugin(PluginTask),
@@ -29,7 +29,7 @@ pub(crate) enum Task {
     AudioDelayComp(AudioDelayCompTask),
     NoteDelayComp(NoteDelayCompTask),
     AutomationDelayComp(AutomationDelayCompTask),
-    DeactivatedPlugin(DeactivatedPluginTask),
+    UnloadedPlugin(UnloadedPluginTask),
 }
 
 impl Debug for Task {
@@ -176,8 +176,8 @@ impl Debug for Task {
 
                 f.finish()
             }
-            Task::DeactivatedPlugin(t) => {
-                let mut f = f.debug_struct("DeactivatedPlugin");
+            Task::UnloadedPlugin(t) => {
+                let mut f = f.debug_struct("UnloadedPlugin");
 
                 let mut s = String::new();
                 for (b_in, b_out) in t.audio_through.iter() {
@@ -224,7 +224,7 @@ impl Task {
             Task::AudioDelayComp(task) => task.process(proc_info),
             Task::NoteDelayComp(task) => task.process(proc_info),
             Task::AutomationDelayComp(task) => task.process(proc_info),
-            Task::DeactivatedPlugin(task) => task.process(proc_info),
+            Task::UnloadedPlugin(task) => task.process(proc_info),
         }
     }
 }

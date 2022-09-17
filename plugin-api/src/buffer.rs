@@ -117,16 +117,13 @@ impl<T: Clone + Copy + Send + Sync + 'static + Default> SharedBuffer<T> {
             ),
         }
     }
-
-    pub fn clear(&self) {
-        self.borrow_mut().fill(T::default())
-    }
-
-    pub fn clear_until(&self, frames: usize) {
+    pub fn clear(&self, frames: usize) {
         let mut buf_ref = self.borrow_mut();
         let frames = frames.min(buf_ref.len());
 
         buf_ref[0..frames].fill(T::default());
+
+        self.set_constant(true);
     }
 }
 
@@ -165,8 +162,19 @@ impl Debug for RawAudioChannelBuffers {
     }
 }
 
+pub enum AudioBufferType<'a> {
+    F32(AtomicRef<'a, Vec<f32>>),
+    F64(AtomicRef<'a, Vec<f64>>),
+}
+
+pub enum AudioBufferTypeMut<'a> {
+    F32(AtomicRefMut<'a, Vec<f32>>),
+    F64(AtomicRefMut<'a, Vec<f64>>),
+}
+
 pub struct AudioPortBuffer {
     pub _raw_channels: RawAudioChannelBuffers,
+    channels: usize,
     latency: u32,
 }
 
@@ -178,11 +186,17 @@ impl Debug for AudioPortBuffer {
 
 impl AudioPortBuffer {
     pub fn _new(buffers: SmallVec<[SharedBuffer<f32>; 2]>, latency: u32) -> Self {
-        Self { _raw_channels: RawAudioChannelBuffers::F32(buffers), latency }
+        let channels = buffers.len();
+
+        Self { _raw_channels: RawAudioChannelBuffers::F32(buffers), latency, channels }
     }
 
     pub fn latency(&self) -> u32 {
         self.latency
+    }
+
+    pub fn channels(&self) -> usize {
+        self.channels
     }
 
     /// Checks if all channel buffers could be possibly silent, without reading the whole buffers.
@@ -225,11 +239,55 @@ impl AudioPortBuffer {
         true
     }
 
+    pub fn channel_f32(&self, index: usize) -> Option<AtomicRef<Vec<f32>>> {
+        match &self._raw_channels {
+            RawAudioChannelBuffers::F32(b) => b.get(index).map(|b| b.borrow()),
+            _ => None,
+        }
+    }
+
+    pub fn mono_f32(&self) -> Option<AtomicRef<Vec<f32>>> {
+        match &self._raw_channels {
+            RawAudioChannelBuffers::F32(b) => Some(b[0].borrow()),
+            _ => None,
+        }
+    }
+
+    pub fn stereo_f32(&self) -> Option<(AtomicRef<Vec<f32>>, AtomicRef<Vec<f32>>)> {
+        match &self._raw_channels {
+            RawAudioChannelBuffers::F32(b) => {
+                if b.len() > 1 {
+                    Some((b[0].borrow(), b[1].borrow()))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    pub fn iter_f32(&self) -> Option<impl Iterator<Item = AtomicRef<'_, Vec<f32>>>> {
+        if let RawAudioChannelBuffers::F32(b) = &self._raw_channels {
+            Some(b.iter().map(|b| b.borrow()))
+        } else {
+            None
+        }
+    }
+
+    pub fn _iter_raw_f32(&self) -> Option<impl Iterator<Item = &'_ SharedBuffer<f32>>> {
+        if let RawAudioChannelBuffers::F32(b) = &self._raw_channels {
+            Some(b.iter())
+        } else {
+            None
+        }
+    }
+
     // TODO: Helper methods to retrieve more than 2 channels at once
 }
 
 pub struct AudioPortBufferMut {
     pub _raw_channels: RawAudioChannelBuffers,
+    channels: usize,
     latency: u32,
 }
 
@@ -241,14 +299,60 @@ impl Debug for AudioPortBufferMut {
 
 impl AudioPortBufferMut {
     pub fn _new(buffers: SmallVec<[SharedBuffer<f32>; 2]>, latency: u32) -> Self {
-        Self { _raw_channels: RawAudioChannelBuffers::F32(buffers), latency }
+        let channels = buffers.len();
+
+        Self { _raw_channels: RawAudioChannelBuffers::F32(buffers), latency, channels }
     }
 
     pub fn latency(&self) -> u32 {
         self.latency
     }
 
-    #[inline]
+    pub fn channels(&self) -> usize {
+        self.channels
+    }
+
+    pub fn channel_f32(&self, index: usize) -> Option<AtomicRef<Vec<f32>>> {
+        match &self._raw_channels {
+            RawAudioChannelBuffers::F32(b) => b.get(index).map(|b| b.borrow()),
+            _ => None,
+        }
+    }
+
+    pub fn channel_f32_mut(&mut self, index: usize) -> Option<AtomicRefMut<Vec<f32>>> {
+        match &mut self._raw_channels {
+            RawAudioChannelBuffers::F32(b) => b.get(index).map(|b| b.borrow_mut()),
+            _ => None,
+        }
+    }
+
+    pub fn mono_f32(&self) -> Option<AtomicRef<Vec<f32>>> {
+        match &self._raw_channels {
+            RawAudioChannelBuffers::F32(b) => Some(b[0].borrow()),
+            _ => None,
+        }
+    }
+
+    pub fn mono_f32_mut(&mut self) -> Option<AtomicRefMut<Vec<f32>>> {
+        match &mut self._raw_channels {
+            RawAudioChannelBuffers::F32(b) => Some(b[0].borrow_mut()),
+            _ => None,
+        }
+    }
+
+    pub fn stereo_f32(&self) -> Option<(AtomicRef<Vec<f32>>, AtomicRef<Vec<f32>>)> {
+        match &self._raw_channels {
+            RawAudioChannelBuffers::F32(b) => {
+                if b.len() > 1 {
+                    Some((b[0].borrow(), b[1].borrow()))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     pub fn stereo_f32_mut(&mut self) -> Option<(AtomicRefMut<Vec<f32>>, AtomicRefMut<Vec<f32>>)> {
         match &mut self._raw_channels {
             RawAudioChannelBuffers::F32(b) => {
@@ -295,14 +399,46 @@ impl AudioPortBufferMut {
         match &self._raw_channels {
             RawAudioChannelBuffers::F32(buffers) => {
                 for buf in buffers {
-                    buf.clear_until(frames);
+                    buf.clear(frames);
                 }
             }
             RawAudioChannelBuffers::F64(buffers) => {
                 for buf in buffers {
-                    buf.clear_until(frames);
+                    buf.clear(frames);
                 }
             }
+        }
+    }
+
+    pub fn iter_f32(&self) -> Option<impl Iterator<Item = AtomicRef<'_, Vec<f32>>>> {
+        if let RawAudioChannelBuffers::F32(b) = &self._raw_channels {
+            Some(b.iter().map(|b| b.borrow()))
+        } else {
+            None
+        }
+    }
+
+    pub fn iter_f32_mut(&mut self) -> Option<impl Iterator<Item = AtomicRefMut<'_, Vec<f32>>>> {
+        if let RawAudioChannelBuffers::F32(b) = &mut self._raw_channels {
+            Some(b.iter_mut().map(|b| b.borrow_mut()))
+        } else {
+            None
+        }
+    }
+
+    pub fn _iter_raw_f32(&self) -> Option<impl Iterator<Item = &'_ SharedBuffer<f32>>> {
+        if let RawAudioChannelBuffers::F32(b) = &self._raw_channels {
+            Some(b.iter())
+        } else {
+            None
+        }
+    }
+
+    pub fn _iter_raw_f32_mut(&mut self) -> Option<impl Iterator<Item = &'_ mut SharedBuffer<f32>>> {
+        if let RawAudioChannelBuffers::F32(b) = &mut self._raw_channels {
+            Some(b.iter_mut())
+        } else {
+            None
         }
     }
 

@@ -7,6 +7,7 @@ use clack_extensions::log::Log;
 use clack_extensions::params::{HostParams, PluginParams};
 use clack_extensions::state::PluginState;
 use clack_extensions::thread_check::ThreadCheck;
+use clack_extensions::timer::{HostTimer, PluginTimer};
 use clack_host::events::io::{EventBuffer, InputEvents, OutputEvents};
 use clack_host::extensions::HostExtensions;
 use clack_host::host::{Host, HostAudioProcessor, HostMainThread, HostShared};
@@ -27,6 +28,7 @@ impl<'a> Host<'a> for ClapHost {
             .register::<ThreadCheck>()
             .register::<HostAudioPorts>()
             .register::<HostParams>()
+            .register::<HostTimer>()
             .register::<HostGui>()
             .register::<HostLatency>();
     }
@@ -35,12 +37,12 @@ impl<'a> Host<'a> for ClapHost {
 pub struct ClapHostMainThread<'a> {
     pub shared: &'a ClapHostShared<'a>,
     pub instance: Option<PluginMainThreadHandle<'a>>,
-    pub gui_visible: bool,
+    //pub gui_visible: bool,
 }
 
 impl<'a> ClapHostMainThread<'a> {
     pub fn new(shared: &'a ClapHostShared<'a>) -> Self {
-        Self { shared, instance: None, gui_visible: false }
+        Self { shared, instance: None }
     }
 
     pub fn param_flush(&mut self, in_events: &EventBuffer, out_events: &mut EventBuffer) {
@@ -94,6 +96,7 @@ pub struct ClapHostShared<'a> {
     pub state_ext: Option<&'a PluginState>,
     pub gui_ext: Option<&'a PluginGui>,
     pub latency_ext: Option<&'a PluginLatency>,
+    pub timer_ext: Option<&'a PluginTimer>,
 
     host_request: HostRequestChannelSender,
     plugin_log_name: Shared<String>,
@@ -117,6 +120,7 @@ impl<'a> ClapHostShared<'a> {
             state_ext: None,
             gui_ext: None,
             latency_ext: None,
+            timer_ext: None,
             plugin_log_name,
             thread_ids,
         }
@@ -127,6 +131,7 @@ impl<'a> HostShared<'a> for ClapHostShared<'a> {
     fn instantiated(&mut self, instance: PluginSharedHandle<'a>) {
         self.params_ext = instance.get_extension();
         self.state_ext = instance.get_extension();
+        self.timer_ext = instance.get_extension();
         self.gui_ext = instance.get_extension();
         self.latency_ext = instance.get_extension();
     }

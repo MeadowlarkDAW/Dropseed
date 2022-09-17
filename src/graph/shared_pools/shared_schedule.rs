@@ -23,7 +23,7 @@ unsafe impl Send for ProcessorSchedule {}
 unsafe impl Sync for ProcessorSchedule {}
 
 pub(crate) struct SharedProcessorSchedule {
-    schedule: Shared<SharedCell<AtomicRefCell<ProcessorSchedule>>>,
+    pub(super) schedule: Shared<SharedCell<AtomicRefCell<ProcessorSchedule>>>,
     thread_ids: SharedThreadIDs,
     coll_handle: basedrop::Handle,
 }
@@ -79,5 +79,9 @@ impl SharedProcessorSchedule {
         }
 
         schedule.process_interleaved(audio_in, audio_out);
+    }
+
+    pub fn deactivate(&mut self) {
+        self.schedule.get().borrow_mut().deactivate();
     }
 }

@@ -5,14 +5,47 @@ use dropseed_plugin_api::ParamID;
 pub use clack_extensions::gui::GuiError;
 
 #[derive(Debug)]
+pub enum RescanParamListError {
+    FailedToGetParamInfo { index: usize, error_msg: String },
+    FailedToGetParamValue { id: ParamID, error_msg: String },
+    DuplicateParamID(ParamID),
+}
+
+impl Error for RescanParamListError {}
+
+impl std::fmt::Display for RescanParamListError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RescanParamListError::FailedToGetParamInfo { index, error_msg } => {
+                write!(
+                    f,
+                    "plugin returned error while getting parameter info at index {}: {}",
+                    index, error_msg
+                )
+            }
+            RescanParamListError::FailedToGetParamValue { id, error_msg } => {
+                write!(
+                    f,
+                    "plugin returned error while getting parameter value with ID {:?}: {}",
+                    id, error_msg
+                )
+            }
+            RescanParamListError::DuplicateParamID(id) => {
+                write!(f, "plugin has more than one parameter with ID {:?}", id)
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
 pub enum ActivatePluginError {
     NotLoaded,
     AlreadyActive,
     RestartScheduled,
     PluginFailedToGetAudioPortsExt(String),
     PluginFailedToGetNotePortsExt(String),
-    PluginFailedToGetParamInfo(usize),
-    PluginFailedToGetParamValue(ParamID),
+    AudioPortsExtDuplicateID { is_input: bool, id: u32 },
+    NotePortsExtDuplicateID { is_input: bool, id: u32 },
     PluginSpecific(String),
 }
 
@@ -32,15 +65,19 @@ impl std::fmt::Display for ActivatePluginError {
             ActivatePluginError::PluginFailedToGetNotePortsExt(e) => {
                 write!(f, "plugin returned error while getting note ports extension: {:?}", e)
             }
-            ActivatePluginError::PluginFailedToGetParamInfo(index) => {
-                write!(f, "plugin returned error while getting parameter info at index: {}", index)
+            ActivatePluginError::AudioPortsExtDuplicateID { is_input, id } => {
+                if *is_input {
+                    write!(f, "plugin has more than one input audio port with ID {}", id)
+                } else {
+                    write!(f, "plugin has more than one output audio port with ID {}", id)
+                }
             }
-            ActivatePluginError::PluginFailedToGetParamValue(param_id) => {
-                write!(
-                    f,
-                    "plugin returned error while getting parameter value with ID: {:?}",
-                    param_id
-                )
+            ActivatePluginError::NotePortsExtDuplicateID { is_input, id } => {
+                if *is_input {
+                    write!(f, "plugin has more than one input note port with ID {}", id)
+                } else {
+                    write!(f, "plugin has more than one output note port with ID {}", id)
+                }
             }
             ActivatePluginError::PluginSpecific(e) => {
                 write!(f, "plugin returned error while activating: {:?}", e)
@@ -58,7 +95,7 @@ impl From<String> for ActivatePluginError {
 #[derive(Debug, Clone)]
 pub enum SetParamValueError {
     ParamDoesNotExist(ParamID),
-    PluginNotActive,
+    PluginNotLoaded,
     ParamIsReadOnly(ParamID),
     ParamIsNotModulatable(ParamID),
 }
@@ -71,8 +108,8 @@ impl std::fmt::Display for SetParamValueError {
             SetParamValueError::ParamDoesNotExist(id) => {
                 write!(f, "failed to set value of plugin parameter: parameter with id {:?} does not exist", id)
             }
-            SetParamValueError::PluginNotActive => {
-                write!(f, "failed to set value of plugin parameter: plugin is not activated")
+            SetParamValueError::PluginNotLoaded => {
+                write!(f, "failed to set value of plugin parameter: plugin is not loaded")
             }
             SetParamValueError::ParamIsReadOnly(id) => {
                 write!(

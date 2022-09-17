@@ -42,14 +42,27 @@ pub struct ProcInfo {
     pub frames: usize,
 
     pub transport: TransportInfo,
+
+    /// The version of the compiled schedule. Can be used for debugging purposes.
+    pub schedule_version: u64,
 }
 
 pub struct ProcBuffers {
     pub audio_in: SmallVec<[AudioPortBuffer; 2]>,
     pub audio_out: SmallVec<[AudioPortBufferMut; 2]>,
+
+    main_audio_through_when_bypassed: bool,
 }
 
 impl ProcBuffers {
+    pub fn _new(
+        audio_in: SmallVec<[AudioPortBuffer; 2]>,
+        audio_out: SmallVec<[AudioPortBufferMut; 2]>,
+        main_audio_through_when_bypassed: bool,
+    ) -> Self {
+        Self { audio_in, audio_out, main_audio_through_when_bypassed }
+    }
+
     /// Checks if all audio input buffers are silent for a given number of frames, i.e. if all
     /// sample values are equal to `0`.
     pub fn audio_inputs_silent(&self, frames: usize) -> bool {
@@ -69,9 +82,50 @@ impl ProcBuffers {
         self.audio_in.iter().all(|b| b.has_silent_hint())
     }
 
+    /// Clear all output buffers.
+    ///
+    /// All output buffers which have not already been filled manually must be cleared.
     pub fn clear_all_outputs(&mut self, proc_info: &ProcInfo) {
         for buf in self.audio_out.iter_mut() {
             buf.clear_all(proc_info.frames);
+        }
+    }
+
+    pub fn _main_audio_through_when_bypassed(&self) -> bool {
+        self.main_audio_through_when_bypassed
+    }
+
+    /// Copy all inputs to their corresponding outputs, and clear all other outputs.
+    pub fn bypassed(&mut self, proc_info: &ProcInfo) {
+        self.clear_all_outputs(proc_info);
+
+        // TODO: More audio through ports when bypassed?
+        if self.main_audio_through_when_bypassed {
+            let main_in_port = &self.audio_in[0];
+            let main_out_port = &mut self.audio_out[0];
+
+            if !main_in_port.has_silent_hint() {
+                let in_port_iter = if let Some(i) = main_in_port._iter_raw_f32() {
+                    i
+                } else {
+                    return;
+                };
+                let out_port_iter = if let Some(i) = main_out_port._iter_raw_f32_mut() {
+                    i
+                } else {
+                    return;
+                };
+
+                for (in_channel, out_channel) in in_port_iter.zip(out_port_iter) {
+                    let in_channel_data = in_channel.borrow();
+                    let mut out_channel_data = out_channel.borrow_mut();
+
+                    out_channel_data[0..proc_info.frames]
+                        .copy_from_slice(&in_channel_data[0..proc_info.frames]);
+
+                    out_channel.set_constant(in_channel.is_constant());
+                }
+            }
         }
     }
 }
