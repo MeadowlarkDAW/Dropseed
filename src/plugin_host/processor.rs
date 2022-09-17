@@ -162,17 +162,6 @@ impl PluginHostProcessor {
             self.processing_state = ProcessingState::Stopped;
 
             do_process = false;
-
-            /*
-            buffers.clear_all_outputs(proc_info);
-
-            if has_param_in_event {
-                self.plugin_processor.param_flush(&self.in_events, &mut self.out_events);
-            }
-
-            self.in_events.clear();
-            return false;
-            */
         }
 
         // --- Check if the plugin should be woken up --------------------------------------------
@@ -182,15 +171,6 @@ impl PluginHostProcessor {
                 // The plugin is sleeping, there is no request to wake it up, and there
                 // are no events to process.
                 do_process = false;
-
-                /*
-                if has_param_in_event {
-                    self.plugin_processor.param_flush(&self.in_events, &mut self.out_events);
-                }
-
-                self.in_events.clear();
-                return false;
-                */
             } else if let Err(e) = self.plugin_processor.start_processing() {
                 log::error!("Plugin has failed to start processing: {}", e);
 
@@ -198,16 +178,6 @@ impl PluginHostProcessor {
                 self.processing_state = ProcessingState::Errored;
 
                 do_process = false;
-
-                /*
-                buffers.clear_all_outputs(proc_info);
-
-                if has_param_in_event {
-                    self.plugin_processor.param_flush(&self.in_events, &mut self.out_events);
-                }
-
-                return false;
-                */
             } else {
                 self.channel.shared_state.set_active_state(PluginActiveState::Active);
             }
@@ -310,7 +280,12 @@ impl PluginHostProcessor {
             // The plugin is currently in the process of smoothing/declicking the audio
             // output buffers as a result of bypassing/unbypassing the plugin.
             self.bypass_declick(proc_info, buffers);
-        } else if self.bypassed && do_process {
+        } else if self.bypassed {
+            // If we didn't process, then the output buffers are already cleared.
+            if do_process {
+                buffers.clear_all_outputs(proc_info);
+            }
+
             // The plugin is currently bypassed and has finished smoothing/declicking.
             self.bypass(proc_info, buffers);
         }
@@ -425,8 +400,6 @@ impl PluginHostProcessor {
 
     /// The plugin is currently bypassed and has finished smoothing/declicking.
     fn bypass(&mut self, proc_info: &ProcInfo, buffers: &mut ProcBuffers) {
-        buffers.clear_all_outputs(proc_info);
-
         if buffers._main_audio_through_when_bypassed() {
             let main_in_port = &buffers.audio_in[0];
             let main_out_port = &mut buffers.audio_out[0];
