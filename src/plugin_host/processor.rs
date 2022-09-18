@@ -155,7 +155,8 @@ impl PluginHostProcessor {
 
         if self.processing_state == ProcessingState::Started(ProcessStatus::ContinueIfNotQuiet)
             && !has_note_in_event
-            && (if buffers.audio_in.len() > 0 {
+        {
+            let do_stop = if buffers.audio_in.len() > 0 {
                 // if there are audio inputs then stop only if they're silent
                 buffers.audio_inputs_silent(proc_info.frames)
             } else {
@@ -163,13 +164,15 @@ impl PluginHostProcessor {
                 // because otherwise it means that this plugin is a sound generator
                 // that doesn't take any inputs
                 event_buffers.note_in_buffers.len() > 0
-            })
-        {
-            self.plugin_processor.stop_processing();
+            };
 
-            self.processing_state = ProcessingState::Stopped;
+            if do_stop {
+                self.plugin_processor.stop_processing();
 
-            do_process = false;
+                self.processing_state = ProcessingState::Stopped;
+
+                do_process = false;
+            }
         }
 
         // --- Check if the plugin should be woken up --------------------------------------------
