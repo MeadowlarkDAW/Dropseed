@@ -120,6 +120,7 @@ impl PluginHostProcessor {
         let state = self.channel.shared_state.get_active_state();
 
         let mut do_drop = false;
+        let mut current_schedule_valid = true;
         if state == PluginActiveState::WaitingToDrop {
             // We got a request to deactivate this plugin, so stop processing
             // and mark this processor to be dropped.
@@ -135,6 +136,7 @@ impl PluginHostProcessor {
             // when a plugin restarting causes the graph to recompile, and that
             // new schedule has not yet arrived.
             do_process = false;
+            current_schedule_valid = false;
         } else if self.channel.shared_state.process_requested() {
             // The plugin has requested that we (re)start processing.
 
@@ -151,46 +153,35 @@ impl PluginHostProcessor {
             do_process = false;
         }
 
-        // --- Check if the plugin should be put to sleep ----------------------------------------
-
-        if self.processing_state == ProcessingState::Started(ProcessStatus::ContinueIfNotQuiet)
-            && !has_note_in_event
-        {
-            let do_stop = if buffers.audio_in.len() > 0 {
-                // if there are audio inputs then stop only if they're silent
-                buffers.audio_inputs_silent(proc_info.frames)
-            } else {
-                // if there are no audio inputs then stop only if there are midi inputs
-                // because otherwise it means that this plugin is a sound generator
-                // that doesn't take any inputs
-                event_buffers.note_in_buffers.len() > 0
-            };
-
-            if do_stop {
-                self.plugin_processor.stop_processing();
-
-                self.processing_state = ProcessingState::Stopped;
-
-                do_process = false;
-            }
-        }
-
         // --- Check if the plugin should be woken up --------------------------------------------
 
-        if let ProcessingState::Stopped | ProcessingState::WaitingForStart = self.processing_state {
-            if self.processing_state == ProcessingState::Stopped && !has_note_in_event {
-                // The plugin is sleeping, there is no request to wake it up, and there
-                // are no events to process.
-                do_process = false;
-            } else if let Err(e) = self.plugin_processor.start_processing() {
-                log::error!("Plugin has failed to start processing: {}", e);
+        // Don't wake up the plugin until the new schedule arrives.
+        if current_schedule_valid {
+            if let ProcessingState::Stopped | ProcessingState::WaitingForStart =
+                self.processing_state
+            {
+                if self.processing_state == ProcessingState::Stopped && !has_note_in_event {
+                    if buffers.audio_in.is_empty() {
+                        do_process = false;
+                    }
+                    // Check if all audio inputs are silent.
+                    //
+                    // First do a quick check using the constant flags.
+                    else if buffers.audio_outputs_have_silent_hint() {
+                        do_process = false;
+                    } else if buffers.audio_outputs_silent(proc_info.frames) {
+                        do_process = false;
+                    }
+                } else if let Err(e) = self.plugin_processor.start_processing() {
+                    log::error!("Plugin has failed to start processing: {}", e);
 
-                // The plugin failed to start processing.
-                self.processing_state = ProcessingState::Errored;
+                    // The plugin failed to start processing.
+                    self.processing_state = ProcessingState::Errored;
 
-                do_process = false;
-            } else {
-                self.channel.shared_state.set_active_state(PluginActiveState::Active);
+                    do_process = false;
+                } else {
+                    self.channel.shared_state.set_active_state(PluginActiveState::Active);
+                }
             }
         }
 
@@ -222,7 +213,20 @@ impl PluginHostProcessor {
             // --- Update the processing state -------------------------------------------------------
 
             self.processing_state = match new_status {
-                // ProcessStatus::Tail => TODO: handle tail by reading from the tail extension
+                ProcessStatus::Continue => ProcessingState::Started(ProcessStatus::Continue),
+                ProcessStatus::ContinueIfNotQuiet => {
+                    // Check if the plugin should be put to sleep.
+                    if buffers.audio_outputs_have_silent_hint() {
+                        self.plugin_processor.stop_processing();
+                        ProcessingState::Stopped
+                    } else {
+                        ProcessingState::Started(ProcessStatus::ContinueIfNotQuiet)
+                    }
+                }
+                ProcessStatus::Tail => {
+                    // TODO: handle tail by reading from the tail extension
+                    ProcessingState::Started(ProcessStatus::Tail)
+                }
                 ProcessStatus::Sleep => {
                     self.plugin_processor.stop_processing();
 
@@ -233,7 +237,6 @@ impl PluginHostProcessor {
                     buffers.clear_all_outputs(proc_info);
                     ProcessingState::Errored
                 }
-                good_status => ProcessingState::Started(good_status),
             };
         } else {
             buffers.clear_all_outputs(proc_info);

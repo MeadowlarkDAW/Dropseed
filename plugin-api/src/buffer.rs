@@ -366,6 +366,17 @@ impl AudioPortBufferMut {
         }
     }
 
+    /// Checks if all channel buffers could be possibly silent, without reading the whole buffers.
+    ///
+    /// This only relies on the `is_constant` flag and the first sample of each buffer, and thus
+    /// may not be accurate.
+    pub fn has_silent_hint(&self) -> bool {
+        match &self._raw_channels {
+            RawAudioChannelBuffers::F32(channels) => channels.iter().all(|c| c.has_silent_hint()),
+            RawAudioChannelBuffers::F64(channels) => channels.iter().all(|c| c.has_silent_hint()),
+        }
+    }
+
     pub fn is_silent(&self, frames: usize) -> bool {
         match &self._raw_channels {
             RawAudioChannelBuffers::F32(buffers) => {
