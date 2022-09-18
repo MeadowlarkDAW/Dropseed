@@ -155,7 +155,15 @@ impl PluginHostProcessor {
 
         if self.processing_state == ProcessingState::Started(ProcessStatus::ContinueIfNotQuiet)
             && !has_note_in_event
-            && buffers.audio_inputs_silent(proc_info.frames)
+            && (if buffers.audio_in.len() > 0 {
+                // if there are audio inputs then stop only if they're silent
+                buffers.audio_inputs_silent(proc_info.frames)
+            } else {
+                // if there are no audio inputs then stop only if there are midi inputs
+                // because otherwise it means that this plugin is a sound generator
+                // that doesn't take any inputs
+                event_buffers.note_in_buffers.len() > 0
+            })
         {
             self.plugin_processor.stop_processing();
 
