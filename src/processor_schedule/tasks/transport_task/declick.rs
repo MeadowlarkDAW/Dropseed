@@ -1,7 +1,7 @@
 use atomic_refcell::AtomicRefCell;
 use basedrop::Shared;
 use dropseed_plugin_api::transport::{DeclickBuffers, DeclickInfo, LoopBackInfo, SeekInfo};
-use meadowlark_core_types::time::{Frames, SampleRate, Seconds};
+use meadowlark_core_types::time::{FrameTime, SampleRate, SecondsF64};
 
 pub(super) enum JumpInfo<'a> {
     None,
@@ -40,11 +40,11 @@ pub(super) struct TransportDeclick {
     jump_state: JumpDeclickState,
 
     jump_in_playhead: i64,
-    jump_out_playhead: Frames,
+    jump_out_playhead: FrameTime,
     jump_in_playhead_next: i64,
-    jump_out_playhead_next: Frames,
+    jump_out_playhead_next: FrameTime,
 
-    start_declick_start: Frames,
+    start_declick_start: FrameTime,
     jump_in_declick_start: i64,
 
     declick_frames: usize,
@@ -56,7 +56,7 @@ pub(super) struct TransportDeclick {
 impl TransportDeclick {
     pub fn new(
         max_frames: usize,
-        declick_time: Seconds,
+        declick_time: SecondsF64,
         sample_rate: SampleRate,
         coll_handle: &basedrop::Handle,
     ) -> Self {
@@ -84,11 +84,11 @@ impl TransportDeclick {
             jump_state: JumpDeclickState::NotDeclicking,
 
             jump_in_playhead: 0,
-            jump_out_playhead: Frames::default(),
+            jump_out_playhead: FrameTime::default(),
             jump_in_playhead_next: 0,
-            jump_out_playhead_next: Frames::default(),
+            jump_out_playhead_next: FrameTime::default(),
 
-            start_declick_start: Frames::default(),
+            start_declick_start: FrameTime::default(),
             jump_in_declick_start: 0,
 
             declick_frames,
@@ -100,7 +100,7 @@ impl TransportDeclick {
 
     pub fn process(
         &mut self,
-        playhead_frame: Frames,
+        playhead_frame: FrameTime,
         frames: usize,
         is_playing: bool,
         jump_info: JumpInfo<'_>,

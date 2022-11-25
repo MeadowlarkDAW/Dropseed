@@ -1,6 +1,6 @@
 use basedrop::{Collector, Shared, SharedCell};
 use fnv::FnvHashSet;
-use meadowlark_core_types::time::{SampleRate, Seconds};
+use meadowlark_core_types::time::{SampleRate, SecondsF64};
 use smallvec::SmallVec;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -565,7 +565,7 @@ pub struct ActivateEngineSettings {
     /// Set this to `None` to have no transport declicking.
     ///
     /// By default this is set to `None`.
-    pub transport_declick_time: Option<Seconds>,
+    pub transport_declick_time: Option<SecondsF64>,
 }
 
 impl Default for ActivateEngineSettings {

@@ -8,7 +8,7 @@ use clack_host::utils::{BeatTime, SecondsTime};
 use dropseed_plugin_api::transport::{
     LoopBackInfo, LoopState, LoopStateProcInfo, RangeChecker, SeekInfo, TempoMap, TransportInfo,
 };
-use meadowlark_core_types::time::{Frames, MusicalTime, SampleRate, Seconds};
+use meadowlark_core_types::time::{FrameTime, MusicalTime, SampleRate, SecondsF64};
 
 mod declick;
 use declick::{JumpInfo, TransportDeclick};
@@ -30,7 +30,7 @@ pub struct TransportHandle {
     tempo_map_shared: Shared<SharedCell<(Shared<TempoMap>, u64)>>,
 
     playhead_frame_shared: Arc<AtomicU64>,
-    playhead_frame: Frames,
+    playhead_frame: FrameTime,
     playhead_musical: MusicalTime,
 
     seek_to: MusicalTime,
@@ -61,7 +61,7 @@ impl TransportHandle {
     }
 
     pub fn playhead_position(&mut self) -> MusicalTime {
-        let new_pos_frame = Frames(self.playhead_frame_shared.load(Ordering::Relaxed));
+        let new_pos_frame = FrameTime(self.playhead_frame_shared.load(Ordering::Relaxed));
         if self.playhead_frame != new_pos_frame {
             self.playhead_frame = new_pos_frame;
 
@@ -91,7 +91,7 @@ pub struct TransportTask {
     tempo_map_shared: Shared<SharedCell<(Shared<TempoMap>, u64)>>,
     tempo_map: Shared<TempoMap>,
 
-    playhead_frame: Frames,
+    playhead_frame: FrameTime,
     is_playing: bool,
 
     loop_state: LoopStateProcInfo,
@@ -100,7 +100,7 @@ pub struct TransportTask {
     seek_info: Option<SeekInfo>,
 
     range_checker: RangeChecker,
-    next_playhead_frame: Frames,
+    next_playhead_frame: FrameTime,
 
     seek_to_version: u64,
     loop_state_version: u64,
@@ -128,7 +128,7 @@ impl TransportTask {
         save_state: Option<TransportSaveState>,
         sample_rate: SampleRate,
         max_frames: usize,
-        declick_time: Option<Seconds>,
+        declick_time: Option<SecondsF64>,
         coll_handle: basedrop::Handle,
     ) -> (Self, TransportHandle) {
         let save_state = save_state.unwrap_or_default();
@@ -220,7 +220,7 @@ impl TransportTask {
     pub fn process(&mut self, frames: usize) -> TransportInfo {
         let Parameters { seek_to, is_playing, loop_state } = *self.parameters.get();
 
-        let proc_frames = Frames(frames as u64);
+        let proc_frames = FrameTime(frames as u64);
 
         self.playhead_frame = self.next_playhead_frame;
 

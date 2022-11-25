@@ -1,8 +1,8 @@
 use atomic_refcell::{AtomicRef, AtomicRefCell};
 use basedrop::Shared;
-use meadowlark_core_types::time::{Frames, Seconds};
+use meadowlark_core_types::time::{FrameTime, SecondsF64};
 
-pub static DEFAULT_DECLICK_TIME: Seconds = Seconds(3.0 / 1000.0);
+pub static DEFAULT_DECLICK_TIME: SecondsF64 = SecondsF64(3.0 / 1000.0);
 
 pub struct DeclickBuffers {
     pub start_stop_buf: Vec<f32>,
@@ -19,9 +19,9 @@ pub struct DeclickInfo {
     pub jump_active: bool,
 
     pub jump_in_playhead: i64,
-    pub jump_out_playhead: Frames,
+    pub jump_out_playhead: FrameTime,
 
-    pub start_declick_start: Frames,
+    pub start_declick_start: FrameTime,
     pub jump_in_declick_start: i64,
 }
 
@@ -31,8 +31,8 @@ impl DeclickInfo {
         start_stop_active: bool,
         jump_active: bool,
         jump_in_playhead: i64,
-        jump_out_playhead: Frames,
-        start_declick_start: Frames,
+        jump_out_playhead: FrameTime,
+        start_declick_start: FrameTime,
         jump_in_declick_start: i64,
     ) -> Self {
         Self {

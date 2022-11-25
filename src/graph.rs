@@ -3,8 +3,7 @@ use std::hash::Hash;
 use audio_graph::{error::AddEdgeError, AudioGraphHelper, EdgeID, PortID, TypeIdx};
 use basedrop::Shared;
 use fnv::{FnvHashMap, FnvHashSet};
-use meadowlark_core_types::time::SampleRate;
-use meadowlark_core_types::time::Seconds;
+use meadowlark_core_types::time::{SampleRate, SecondsF64};
 use smallvec::SmallVec;
 
 mod compiler;
@@ -135,7 +134,7 @@ impl AudioGraph {
         note_buffer_size: usize,
         event_buffer_size: usize,
         thread_ids: SharedThreadIDs,
-        transport_declick_time: Option<Seconds>,
+        transport_declick_time: Option<SecondsF64>,
         engine_timer: &mut EngineTimerWheel,
     ) -> (Self, SharedProcessorSchedule, TransportHandle) {
         //assert!(graph_in_channels > 0);
