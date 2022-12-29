@@ -1,7 +1,10 @@
+pub mod atomic_float;
 pub mod automation;
 pub mod buffer;
+pub mod decibel;
 pub mod ext;
 pub mod host_request_channel;
+pub mod param_helper;
 pub mod plugin_scanner;
 pub mod transport;
 
