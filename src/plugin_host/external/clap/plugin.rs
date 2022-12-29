@@ -15,7 +15,6 @@ use dropseed_plugin_api::{
     buffer::EventBuffer, ext, PluginActivatedInfo, PluginMainThread, PluginProcessor, ProcBuffers,
     ProcInfo, ProcessStatus,
 };
-use meadowlark_core_types::time::SampleRate;
 use raw_window_handle::RawWindowHandle;
 use smallvec::SmallVec;
 use std::error::Error;
@@ -228,15 +227,13 @@ impl ClapPluginMainThread {
 impl PluginMainThread for ClapPluginMainThread {
     fn activate(
         &mut self,
-        sample_rate: SampleRate,
+        sample_rate: f64,
         min_frames: u32,
         max_frames: u32,
         _coll_handle: &basedrop::Handle,
     ) -> Result<PluginActivatedInfo, String> {
-        let configuration = PluginAudioConfiguration {
-            sample_rate: sample_rate.0,
-            frames_count_range: min_frames..=max_frames,
-        };
+        let configuration =
+            PluginAudioConfiguration { sample_rate, frames_count_range: min_frames..=max_frames };
 
         log::trace!("clap plugin instance activate {}", self.id());
         let audio_processor = match self.instance.activate(

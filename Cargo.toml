@@ -24,7 +24,7 @@ cpal-asio = ["cpal/asio"]
 
 [dependencies]
 dropseed-plugin-api = { path = "./plugin-api" }
-meadowlark-core-types = { git = "https://github.com/MeadowlarkDAW/meadowlark-core-types.git", branch = "main" }
+#meadowlark-core-types = { git = "https://github.com/MeadowlarkDAW/meadowlark-core-types.git", branch = "main" }
 audio-graph = { git = "https://github.com/MeadowlarkDAW/audio-graph", rev = "39a347ca8b00b092139728129c089b472b93ea8a" }
 clack-host = { git = "https://github.com/prokopyl/clack", rev = "31d247c00ddc228bc0a395c50f0738b3c91f409c" }
 clack-extensions = { git = "https://github.com/prokopyl/clack", features = ["clack-host", "audio-ports", "gui", "log", "note-ports", "params", "state", "thread-check", "latency", "timer"], rev = "31d247c00ddc228bc0a395c50f0738b3c91f409c" }

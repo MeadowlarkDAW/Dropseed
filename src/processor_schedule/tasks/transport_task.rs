@@ -4,46 +4,37 @@ use std::sync::Arc;
 use basedrop::{Shared, SharedCell};
 use clack_host::events::event_types::{TransportEvent, TransportEventFlags};
 use clack_host::events::{EventFlags, EventHeader};
-use clack_host::utils::{BeatTime, SecondsTime};
 use dropseed_plugin_api::transport::{
-    LoopBackInfo, LoopState, LoopStateProcInfo, RangeChecker, SeekInfo, TempoMap, TransportInfo,
+    LoopBackInfo, LoopState, RangeChecker, SeekInfo, TransportInfo,
 };
-use meadowlark_core_types::time::{FrameTime, MusicalTime, SampleRate, SecondsF64};
 
 mod declick;
+
 use declick::{JumpInfo, TransportDeclick};
 
-pub struct TransportSaveState {
-    pub seek_to: MusicalTime,
-    pub loop_state: LoopState,
-}
-
-impl Default for TransportSaveState {
-    fn default() -> Self {
-        Self { seek_to: MusicalTime::new(0, 0), loop_state: LoopState::Inactive }
-    }
-}
+use crate::engine::{TempoMap, TransportInfoAtFrame};
+use crate::plugin_api::{BeatTime, SecondsTime};
 
 pub struct TransportHandle {
     parameters: Shared<SharedCell<Parameters>>,
 
-    tempo_map_shared: Shared<SharedCell<(Shared<TempoMap>, u64)>>,
+    tempo_map_shared: Shared<SharedCell<(Box<dyn TempoMap>, u64)>>,
 
     playhead_frame_shared: Arc<AtomicU64>,
-    playhead_frame: FrameTime,
-    playhead_musical: MusicalTime,
+    current_playhead_frame: u64,
+    playhead_beat: BeatTime,
 
-    seek_to: MusicalTime,
+    last_seeked_frame: u64,
 
     coll_handle: basedrop::Handle,
 }
 
 impl TransportHandle {
-    pub fn seek_to(&mut self, seek_to: MusicalTime) {
-        self.seek_to = seek_to;
+    pub fn seek_to_frame(&mut self, seek_to_frame: u64) {
+        self.last_seeked_frame = seek_to_frame;
 
         let mut params = Parameters::clone(&self.parameters.get());
-        params.seek_to = (seek_to, params.seek_to.1 + 1);
+        params.seek_to_frame = (seek_to_frame, params.seek_to_frame.1 + 1);
         self.parameters.set(Shared::new(&self.coll_handle, params));
     }
 
@@ -60,27 +51,35 @@ impl TransportHandle {
         self.parameters.set(Shared::new(&self.coll_handle, params));
     }
 
-    pub fn playhead_position(&mut self) -> MusicalTime {
-        let new_pos_frame = FrameTime(self.playhead_frame_shared.load(Ordering::Relaxed));
-        if self.playhead_frame != new_pos_frame {
-            self.playhead_frame = new_pos_frame;
+    pub fn current_playhead_position(&mut self) -> (BeatTime, u64) {
+        let new_pos_frame = self.playhead_frame_shared.load(Ordering::Relaxed);
+        if self.current_playhead_frame != new_pos_frame {
+            self.current_playhead_frame = new_pos_frame;
 
             let tempo_map = self.tempo_map_shared.get();
 
-            self.playhead_musical = tempo_map.0.frame_to_musical(new_pos_frame);
+            self.playhead_beat = tempo_map.0.frame_to_beat(new_pos_frame);
         }
 
-        self.playhead_musical
+        (self.playhead_beat, new_pos_frame)
     }
 
-    pub(crate) fn tempo_map_shared(&self) -> Shared<SharedCell<(Shared<TempoMap>, u64)>> {
-        Shared::clone(&self.tempo_map_shared)
+    pub fn last_seeked_frame(&self) -> u64 {
+        self.last_seeked_frame
+    }
+
+    pub fn update_tempo_map(&mut self, tempo_map: Box<dyn TempoMap>) {
+        let version = self.tempo_map_shared.get().1;
+        SharedCell::set(
+            &*self.tempo_map_shared,
+            Shared::new(&self.coll_handle, (tempo_map, version + 1)),
+        );
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 struct Parameters {
-    seek_to: (MusicalTime, u64),
+    seek_to_frame: (u64, u64),
     is_playing: bool,
     loop_state: (LoopState, u64),
 }
@@ -88,19 +87,18 @@ struct Parameters {
 pub struct TransportTask {
     parameters: Shared<SharedCell<Parameters>>,
 
-    tempo_map_shared: Shared<SharedCell<(Shared<TempoMap>, u64)>>,
-    tempo_map: Shared<TempoMap>,
+    tempo_map_shared: Shared<SharedCell<(Box<dyn TempoMap>, u64)>>,
 
-    playhead_frame: FrameTime,
+    playhead_frame: u64,
     is_playing: bool,
 
-    loop_state: LoopStateProcInfo,
+    loop_state: LoopState,
 
     loop_back_info: Option<LoopBackInfo>,
     seek_info: Option<SeekInfo>,
 
     range_checker: RangeChecker,
-    next_playhead_frame: FrameTime,
+    next_playhead_frame: u64,
 
     seek_to_version: u64,
     loop_state_version: u64,
@@ -111,12 +109,7 @@ pub struct TransportTask {
     loop_start_seconds: SecondsTime,
     loop_end_seconds: SecondsTime,
 
-    tempo: f64,
-    tempo_inc: f64,
-    tsig_num: u16,
-    tsig_denom: u16,
-    bar_start: BeatTime,
-    bar_number: i32,
+    transport_info_at_frame: TransportInfoAtFrame,
 
     playhead_frame_shared: Arc<AtomicU64>,
 
@@ -125,62 +118,55 @@ pub struct TransportTask {
 
 impl TransportTask {
     pub fn new(
-        save_state: Option<TransportSaveState>,
-        sample_rate: SampleRate,
+        seek_to_frame: u64,
+        loop_state: LoopState,
+        sample_rate: f64,
+        tempo_map: Box<dyn TempoMap>,
         max_frames: usize,
-        declick_time: Option<SecondsF64>,
+        declick_seconds: Option<f64>,
         coll_handle: basedrop::Handle,
     ) -> (Self, TransportHandle) {
-        let save_state = save_state.unwrap_or_default();
-
         let parameters = Shared::new(
             &coll_handle,
             SharedCell::new(Shared::new(
                 &coll_handle,
                 Parameters {
-                    seek_to: (save_state.seek_to, 0),
+                    seek_to_frame: (seek_to_frame, 0),
                     is_playing: false,
-                    loop_state: (save_state.loop_state, 0),
+                    loop_state: (loop_state, 0),
                 },
             )),
         );
 
-        let tempo_map = TempoMap::new(120.0, 4, 4, sample_rate);
+        let playhead_frame = seek_to_frame;
+        let playhead_frame_shared = Arc::new(AtomicU64::new(playhead_frame));
 
-        let playhead_frame = tempo_map.musical_to_nearest_frame_round(save_state.seek_to);
-        let playhead_frame_shared = Arc::new(AtomicU64::new(playhead_frame.0));
-        let loop_state = save_state.loop_state.as_proc_info(&tempo_map);
+        let playhead_beat = tempo_map.frame_to_beat(playhead_frame);
 
         let (loop_start_beats, loop_end_beats, loop_start_seconds, loop_end_seconds) =
-            if let LoopState::Active { loop_start, loop_end } = &save_state.loop_state {
+            if let LoopState::Active { loop_start_frame, loop_end_frame } = &loop_state {
                 (
-                    BeatTime::from_float(loop_start.as_beats_f64()),
-                    BeatTime::from_float(loop_end.as_beats_f64()),
-                    SecondsTime::from_float(tempo_map.musical_to_seconds(*loop_start).0),
-                    SecondsTime::from_float(tempo_map.musical_to_seconds(*loop_end).0),
+                    tempo_map.frame_to_beat(*loop_start_frame),
+                    tempo_map.frame_to_beat(*loop_end_frame),
+                    tempo_map.frame_to_seconds(*loop_start_frame),
+                    tempo_map.frame_to_seconds(*loop_end_frame),
                 )
             } else {
                 (Default::default(), Default::default(), Default::default(), Default::default())
             };
 
-        let tempo_map = Shared::new(&coll_handle, tempo_map);
-        let tempo_map_shared = Shared::new(
-            &coll_handle,
-            SharedCell::new(Shared::new(&coll_handle, (Shared::clone(&tempo_map), 0))),
-        );
+        let transport_info_at_frame = tempo_map.transport_info_at_frame(playhead_frame);
 
-        let (tempo, tempo_inc) = tempo_map.bpm_at_frame(playhead_frame);
-        let (tsig_num, tsig_denom) = tempo_map.tsig_at_frame(playhead_frame);
-        let (bar_number, bar_start) = tempo_map.current_bar_at_frame(playhead_frame);
+        let tempo_map_shared =
+            Shared::new(&coll_handle, SharedCell::new(Shared::new(&coll_handle, (tempo_map, 0))));
 
-        let declick =
-            declick_time.map(|d| TransportDeclick::new(max_frames, d, sample_rate, &coll_handle));
+        let declick = declick_seconds
+            .map(|d| TransportDeclick::new(max_frames, d, sample_rate, &coll_handle));
 
         (
             TransportTask {
                 parameters: Shared::clone(&parameters),
                 tempo_map_shared: Shared::clone(&tempo_map_shared),
-                tempo_map: Shared::clone(&tempo_map),
                 playhead_frame,
                 is_playing: false,
                 loop_state,
@@ -195,12 +181,7 @@ impl TransportTask {
                 loop_end_beats,
                 loop_start_seconds,
                 loop_end_seconds,
-                tempo,
-                tempo_inc,
-                tsig_num,
-                tsig_denom,
-                bar_start,
-                bar_number,
+                transport_info_at_frame,
                 playhead_frame_shared: Arc::clone(&playhead_frame_shared),
                 declick,
             },
@@ -209,18 +190,18 @@ impl TransportTask {
                 tempo_map_shared,
                 coll_handle,
                 playhead_frame_shared,
-                playhead_frame,
-                playhead_musical: save_state.seek_to,
-                seek_to: save_state.seek_to,
+                current_playhead_frame: playhead_frame,
+                playhead_beat,
+                last_seeked_frame: playhead_frame,
             },
         )
     }
 
     /// Update the state of this transport.
     pub fn process(&mut self, frames: usize) -> TransportInfo {
-        let Parameters { seek_to, is_playing, loop_state } = *self.parameters.get();
+        let Parameters { seek_to_frame, is_playing, loop_state } = *self.parameters.get();
 
-        let proc_frames = FrameTime(frames as u64);
+        let proc_frames = frames as u64;
 
         self.playhead_frame = self.next_playhead_frame;
 
@@ -232,62 +213,42 @@ impl TransportTask {
 
         // Check if the tempo map has changed.
         let mut tempo_map_changed = false;
-        let (new_tempo_map, new_version) = &*self.tempo_map_shared.get();
+        let (tempo_map, new_version) = &*self.tempo_map_shared.get();
         if self.tempo_map_version != *new_version {
             self.tempo_map_version = *new_version;
 
-            // Get musical time of the playhead using the old tempo map.
-            let playhead_musical = self.tempo_map.frame_to_musical(self.playhead_frame);
-
-            self.tempo_map = Shared::clone(new_tempo_map);
             tempo_map_changed = true;
-
-            // Update proc info.
-            self.next_playhead_frame =
-                self.tempo_map.musical_to_nearest_frame_round(playhead_musical);
             loop_state_changed = true;
         }
 
         // Seek if gotten a new version of the seek_to value.
         self.seek_info = None;
-        if self.seek_to_version != seek_to.1 {
-            self.seek_to_version = seek_to.1;
+        if self.seek_to_version != seek_to_frame.1 {
+            self.seek_to_version = seek_to_frame.1;
 
             self.seek_info = Some(SeekInfo { seeked_from_playhead: self.playhead_frame });
 
-            self.next_playhead_frame = self.tempo_map.musical_to_nearest_frame_round(seek_to.0);
+            self.next_playhead_frame = seek_to_frame.0
         };
 
         if loop_state_changed {
-            let (
-                loop_state,
-                loop_start_beats,
-                loop_end_beats,
-                loop_start_seconds,
-                loop_end_seconds,
-            ) = match &loop_state.0 {
-                LoopState::Inactive => (
-                    LoopStateProcInfo::Inactive,
-                    Default::default(),
-                    Default::default(),
-                    Default::default(),
-                    Default::default(),
-                ),
-                LoopState::Active { loop_start, loop_end } => (
-                    LoopStateProcInfo::Active {
-                        loop_start_frame: self
-                            .tempo_map
-                            .musical_to_nearest_frame_round(*loop_start),
-                        loop_end_frame: self.tempo_map.musical_to_nearest_frame_round(*loop_end),
-                    },
-                    BeatTime::from_float(loop_start.as_beats_f64()),
-                    BeatTime::from_float(loop_end.as_beats_f64()),
-                    SecondsTime::from_float(self.tempo_map.musical_to_seconds(*loop_start).0),
-                    SecondsTime::from_float(self.tempo_map.musical_to_seconds(*loop_end).0),
-                ),
-            };
+            let (loop_start_beats, loop_end_beats, loop_start_seconds, loop_end_seconds) =
+                match &loop_state.0 {
+                    LoopState::Inactive => (
+                        Default::default(),
+                        Default::default(),
+                        Default::default(),
+                        Default::default(),
+                    ),
+                    LoopState::Active { loop_start_frame, loop_end_frame } => (
+                        tempo_map.frame_to_beat(*loop_start_frame),
+                        tempo_map.frame_to_beat(*loop_end_frame),
+                        tempo_map.frame_to_seconds(*loop_start_frame),
+                        tempo_map.frame_to_seconds(*loop_end_frame),
+                    ),
+                };
 
-            self.loop_state = loop_state;
+            self.loop_state = loop_state.0;
             self.loop_start_beats = loop_start_beats;
             self.loop_end_beats = loop_end_beats;
             self.loop_start_seconds = loop_start_seconds;
@@ -304,8 +265,7 @@ impl TransportTask {
         self.playhead_frame = self.next_playhead_frame;
         if self.is_playing {
             // Advance the playhead.
-            if let LoopStateProcInfo::Active { loop_start_frame, loop_end_frame } = self.loop_state
-            {
+            if let LoopState::Active { loop_start_frame, loop_end_frame } = self.loop_state {
                 if self.playhead_frame < loop_end_frame
                     && self.playhead_frame + proc_frames >= loop_end_frame
                 {
@@ -334,28 +294,16 @@ impl TransportTask {
                 self.range_checker = RangeChecker::Playing { end_frame: self.next_playhead_frame };
             }
 
-            let (tempo, tempo_inc) = self.tempo_map.bpm_at_frame(self.playhead_frame);
-            let (tsig_num, tsig_denom) = self.tempo_map.tsig_at_frame(self.playhead_frame);
-            let (bar_number, bar_start) = self.tempo_map.current_bar_at_frame(self.playhead_frame);
-
-            self.tempo = tempo;
-            self.tempo_inc = tempo_inc;
-            self.tsig_num = tsig_num;
-            self.tsig_denom = tsig_denom;
-            self.bar_start = bar_start;
-            self.bar_number = bar_number;
+            self.transport_info_at_frame = tempo_map.transport_info_at_frame(self.playhead_frame);
         } else {
             self.range_checker = RangeChecker::Paused;
         }
 
-        self.playhead_frame_shared.store(self.next_playhead_frame.0, Ordering::Relaxed);
+        self.playhead_frame_shared.store(self.next_playhead_frame, Ordering::Relaxed);
 
         let event: Option<TransportEvent> = if do_return_event {
-            let song_pos_beats = BeatTime::from_float(
-                self.tempo_map.frame_to_musical(self.playhead_frame).as_beats_f64(),
-            );
-            let song_pos_seconds =
-                SecondsTime::from_float(self.tempo_map.frame_to_seconds(self.playhead_frame).0);
+            let song_pos_beats = tempo_map.frame_to_beat(self.playhead_frame);
+            let song_pos_seconds = tempo_map.frame_to_seconds(self.playhead_frame);
 
             let mut transport_flags = TransportEventFlags::HAS_TEMPO
                 | TransportEventFlags::HAS_BEATS_TIMELINE
@@ -364,11 +312,11 @@ impl TransportTask {
 
             let tempo_inc = if self.is_playing {
                 transport_flags |= TransportEventFlags::IS_PLAYING;
-                self.tempo_inc
+                self.transport_info_at_frame.tempo_inc
             } else {
                 0.0
             };
-            if let LoopStateProcInfo::Active { .. } = self.loop_state {
+            if let LoopState::Active { .. } = self.loop_state {
                 transport_flags |= TransportEventFlags::IS_LOOP_ACTIVE
             }
 
@@ -380,7 +328,7 @@ impl TransportTask {
                 song_pos_beats,
                 song_pos_seconds,
 
-                tempo: self.tempo,
+                tempo: self.transport_info_at_frame.tempo,
                 tempo_inc,
 
                 loop_start_beats: self.loop_start_beats,
@@ -388,11 +336,11 @@ impl TransportTask {
                 loop_start_seconds: self.loop_start_seconds,
                 loop_end_seconds: self.loop_end_seconds,
 
-                bar_start: self.bar_start,
-                bar_number: self.bar_number,
+                bar_start: self.transport_info_at_frame.current_bar_start,
+                bar_number: self.transport_info_at_frame.current_bar_number,
 
-                time_signature_numerator: self.tsig_num as i16,
-                time_signature_denominator: self.tsig_denom as i16,
+                time_signature_numerator: self.transport_info_at_frame.tsig_num as i16,
+                time_signature_denominator: self.transport_info_at_frame.tsig_denom as i16,
             })
         } else {
             None

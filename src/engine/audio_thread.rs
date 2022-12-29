@@ -1,5 +1,4 @@
 use basedrop::Owned;
-use meadowlark_core_types::time::SampleRate;
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::fmt::Debug;
 use std::sync::{
@@ -38,7 +37,7 @@ pub struct DSEngineAudioThread {
     graph_audio_in_channels: usize,
     graph_audio_out_channels: usize,
 
-    sample_rate: SampleRate,
+    sample_rate: f64,
     sample_rate_recip: f64,
 }
 
@@ -58,13 +57,15 @@ impl Debug for DSEngineAudioThread {
 impl DSEngineAudioThread {
     pub(crate) fn new(
         schedule: SharedProcessorSchedule,
-        sample_rate: SampleRate,
+        sample_rate: f64,
         graph_audio_in_channels: usize,
         graph_audio_out_channels: usize,
         max_frames: usize,
         coll_handle: &basedrop::Handle,
     ) -> (Self, DSEngineProcessThread) {
-        let sample_rate_recip = 1.0 / sample_rate.as_f64();
+        assert_ne!(sample_rate, 0.0);
+
+        let sample_rate_recip = 1.0 / sample_rate;
 
         let (audio_to_process_tx, audio_to_process_rx) = if graph_audio_in_channels == 0 {
             let num_frames_wanted = Arc::new(AtomicUsize::new(0));

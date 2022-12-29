@@ -2,7 +2,6 @@ use dropseed_plugin_api::ext::audio_ports::PluginAudioPortsExt;
 use dropseed_plugin_api::ext::note_ports::PluginNotePortsExt;
 use dropseed_plugin_api::plugin_scanner::ScannedPluginKey;
 use dropseed_plugin_api::{PluginActivatedInfo, PluginMainThread};
-use meadowlark_core_types::time::SampleRate;
 
 pub(super) struct MissingPluginMainThread {
     key: ScannedPluginKey,
@@ -23,7 +22,7 @@ impl MissingPluginMainThread {
 impl PluginMainThread for MissingPluginMainThread {
     fn activate(
         &mut self,
-        _sample_rate: SampleRate,
+        _sample_rate: f64,
         _min_frames: u32,
         _max_frames: u32,
         _coll_handle: &basedrop::Handle,

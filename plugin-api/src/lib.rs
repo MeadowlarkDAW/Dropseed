@@ -27,4 +27,4 @@ pub use processor::PluginProcessor;
 pub use save_state::DSPluginSaveState;
 
 pub use clack_host::events::event_types as event;
-pub use clack_host::utils::FixedPoint;
+pub use clack_host::utils::{BeatTime, FixedPoint, SecondsTime};

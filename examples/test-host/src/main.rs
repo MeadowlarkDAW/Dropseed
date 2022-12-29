@@ -4,9 +4,10 @@ use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::Stream;
 use dropseed::engine::{
     ActivateEngineSettings, ActivatedEngineInfo, DSEngineAudioThread, DSEngineMainThread,
-    EngineDeactivatedStatus, EngineSettings, OnIdleEvent,
+    DefaultTempoMap, EngineDeactivatedStatus, EngineSettings, OnIdleEvent,
 };
 use dropseed::plugin_api::ext::gui::GuiSize;
+use dropseed::plugin_api::transport::LoopState;
 use dropseed::plugin_api::HostInfo;
 use dropseed::plugin_scanner::ScannedPluginInfo;
 use egui_glow::egui_winit::egui;
@@ -121,7 +122,7 @@ fn main() {
 
     log::info!("{:?}", &internal_plugins_scan_res);
 
-    let (activated_state, ds_engine_audio_thread) = activate_engine(&mut ds_engine, sample_rate);
+    let (activated_state, ds_engine_audio_thread) = activate_engine(&mut ds_engine, sample_rate.0);
 
     to_audio_thread_tx
         .push(UIToAudioThreadMsg::NewEngineAudioThread(ds_engine_audio_thread))
@@ -227,7 +228,7 @@ impl DSTestHostGUI {
 
                         if ui.button("activate").clicked() {
                             let (activated_state, ds_engine_audio_thread) =
-                                activate_engine(&mut self.ds_engine, self.sample_rate);
+                                activate_engine(&mut self.ds_engine, self.sample_rate.0);
 
                             self.to_audio_thread_tx
                                 .push(UIToAudioThreadMsg::NewEngineAudioThread(
@@ -503,17 +504,22 @@ enum Tab {
 
 fn activate_engine(
     ds_engine: &mut DSEngineMainThread,
-    sample_rate: SampleRate,
+    sample_rate: f64,
 ) -> (ActivatedState, DSEngineAudioThread) {
     let (engine_info, ds_engine_audio_thread) = ds_engine
-        .activate_engine(ActivateEngineSettings {
-            sample_rate,
-            min_frames: MIN_FRAMES,
-            max_frames: MAX_FRAMES,
-            num_audio_in_channels: GRAPH_IN_CHANNELS,
-            num_audio_out_channels: GRAPH_OUT_CHANNELS,
-            ..Default::default()
-        })
+        .activate_engine(
+            0,
+            LoopState::Inactive,
+            Box::new(DefaultTempoMap::default()),
+            ActivateEngineSettings {
+                sample_rate,
+                min_frames: MIN_FRAMES,
+                max_frames: MAX_FRAMES,
+                num_audio_in_channels: GRAPH_IN_CHANNELS,
+                num_audio_out_channels: GRAPH_OUT_CHANNELS,
+                ..Default::default()
+            },
+        )
         .unwrap();
 
     let mut activated_state = ActivatedState {

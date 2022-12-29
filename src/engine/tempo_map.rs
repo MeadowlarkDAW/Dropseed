@@ -1,4 +1,147 @@
-use clack_host::utils::BeatTime;
+use crate::plugin_api::{BeatTime, SecondsTime};
+
+pub trait TempoMap: Send + Sync + 'static {
+    fn frame_to_beat(&self, frame: u64) -> BeatTime;
+    fn frame_to_seconds(&self, frame: u64) -> SecondsTime;
+
+    fn transport_info_at_frame(&self, frame: u64) -> TransportInfoAtFrame;
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TransportInfoAtFrame {
+    pub tempo: f64,
+    pub tempo_inc: f64,
+
+    pub tsig_num: u16,
+    pub tsig_denom: u16,
+
+    pub current_bar_number: i32,
+    pub current_bar_start: BeatTime,
+}
+
+#[derive(Debug, Clone)]
+pub struct DefaultTempoMap {
+    pub tsig_num: u16,
+    pub tsig_denom: u16,
+
+    bpm: f64,
+    beats_per_second: f64,
+
+    sample_rate: u64,
+    sample_rate_recip: f64,
+}
+
+impl DefaultTempoMap {
+    pub fn new(bpm: f64, tsig_num: u16, tsig_denom: u16, sample_rate: u32) -> Self {
+        assert_ne!(sample_rate, 0);
+        assert_ne!(bpm, 0.0);
+        assert_ne!(tsig_num, 0);
+        assert_ne!(tsig_denom, 0);
+
+        Self {
+            bpm,
+            beats_per_second: bpm / 60.0,
+            tsig_num,
+            tsig_denom,
+            sample_rate: u64::from(sample_rate),
+            sample_rate_recip: 1.0 / f64::from(sample_rate),
+        }
+    }
+
+    pub fn bpm(&self) -> f64 {
+        self.bpm
+    }
+
+    pub fn beats_per_second(&self) -> f64 {
+        self.beats_per_second
+    }
+
+    pub fn sample_rate(&self) -> u64 {
+        self.sample_rate
+    }
+
+    pub fn sample_rate_recip(&self) -> f64 {
+        self.sample_rate_recip
+    }
+
+    pub fn set_bpm(&mut self, bpm: f64) {
+        assert_ne!(bpm, 0.0);
+
+        self.bpm = bpm;
+        self.beats_per_second = bpm / 60.0;
+    }
+
+    pub fn set_sample_rate(&mut self, sample_rate: u32) {
+        assert_ne!(sample_rate, 0);
+
+        self.sample_rate = u64::from(sample_rate);
+        self.sample_rate_recip = 1.0 / f64::from(sample_rate);
+    }
+
+    pub fn set_tsig(&mut self, tsig_num: u16, tsig_denom: u16) {
+        assert_ne!(tsig_num, 0);
+        assert_ne!(tsig_denom, 0);
+
+        self.tsig_num = tsig_num;
+        self.tsig_denom = tsig_denom;
+    }
+}
+
+impl TempoMap for DefaultTempoMap {
+    fn frame_to_beat(&self, frame: u64) -> BeatTime {
+        let whole_seconds = frame / self.sample_rate;
+        let fract_frames = frame % self.sample_rate;
+
+        let whole_beats = whole_seconds as f64 * self.beats_per_second;
+
+        let fract_seconds = fract_frames as f64 * self.sample_rate_recip;
+        let fract_beats = fract_seconds * self.beats_per_second;
+
+        BeatTime::from_float(whole_beats + fract_beats)
+    }
+
+    fn frame_to_seconds(&self, frame: u64) -> SecondsTime {
+        let whole_seconds = frame / self.sample_rate;
+        let fract_frames = frame % self.sample_rate;
+
+        let fract_seconds = fract_frames as f64 * self.sample_rate_recip;
+
+        SecondsTime::from_float(whole_seconds as f64 + fract_seconds)
+    }
+
+    fn transport_info_at_frame(&self, frame: u64) -> TransportInfoAtFrame {
+        let current_beat = self.frame_to_beat(frame).to_int() as u64;
+
+        let current_bar_number = current_beat / u64::from(self.tsig_num);
+
+        let current_bar_start =
+            BeatTime::from_int((current_bar_number * u64::from(self.tsig_num)) as i64);
+
+        TransportInfoAtFrame {
+            tempo: self.bpm,
+            tempo_inc: 0.0,
+            tsig_num: self.tsig_num,
+            tsig_denom: self.tsig_denom,
+            current_bar_number: current_bar_number as i32,
+            current_bar_start,
+        }
+    }
+}
+
+impl Default for DefaultTempoMap {
+    fn default() -> Self {
+        Self {
+            bpm: 110.0,
+            beats_per_second: 110.0 / 60.0,
+            tsig_num: 4,
+            tsig_denom: 4,
+            sample_rate: 44_100,
+            sample_rate_recip: 1.0 / 44_100.0,
+        }
+    }
+}
+
+/*
 use meadowlark_core_types::time::{FrameTime, MusicalTime, SampleRate, SecondsF64};
 
 // TODO: Make tempo map work like series of automation lines/curves between points in time.
@@ -222,3 +365,4 @@ impl Default for TempoMap {
         TempoMap::new(110.0, 4, 4, SampleRate::default())
     }
 }
+*/
