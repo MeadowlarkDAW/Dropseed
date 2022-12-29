@@ -696,10 +696,10 @@ impl PluginProcessor for ClapPluginProcessor {
         let mut out_events = OutputEvents::from_buffer(out_events);
 
         let res = {
-            //#[cfg(debug_assertions)]
             // In debug mode, borrow all of the atomic ref cells to properly use the
             // safety checks, since external plugins just use the raw pointer to each
             // buffer.
+            #[cfg(debug_assertions)]
             let (mut input_refs_f32, mut input_refs_f64, mut output_refs_f32, mut output_refs_f64) = {
                 let mut input_refs_f32: SmallVec<[AtomicRef<'_, Vec<f32>>; 32]> = SmallVec::new();
                 let mut input_refs_f64: SmallVec<[AtomicRef<'_, Vec<f64>>; 32]> = SmallVec::new();
@@ -756,7 +756,9 @@ impl PluginProcessor for ClapPluginProcessor {
                     None,
                 );
 
-            //#[cfg(debug_assertions)]
+            // TODO: Sync audio output constant flags.
+
+            #[cfg(debug_assertions)]
             {
                 input_refs_f32.clear();
                 input_refs_f64.clear();

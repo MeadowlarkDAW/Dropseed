@@ -104,9 +104,17 @@ impl ProcBuffers {
     /// Clear all output buffers.
     ///
     /// All output buffers which have not already been filled manually must be cleared.
+    ///
+    /// Note this does not set the constant hint.
     pub fn clear_all_outputs(&mut self, proc_info: &ProcInfo) {
         for buf in self.audio_out.iter_mut() {
             buf.clear_all(proc_info.frames);
+        }
+    }
+
+    pub fn set_constant_hint_on_all_outputs(&mut self, is_constant: bool) {
+        for buf in self.audio_out.iter_mut() {
+            buf.set_constant_hint(is_constant);
         }
     }
 

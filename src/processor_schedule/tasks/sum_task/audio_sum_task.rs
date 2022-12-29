@@ -11,7 +11,6 @@ pub(crate) struct AudioSumTask {
 impl AudioSumTask {
     pub fn process(&mut self, proc_info: &ProcInfo) {
         let mut out_ref = self.audio_out.borrow_mut();
-
         let out = &mut out_ref[0..proc_info.frames];
 
         let in_0_ref = self.audio_in[0].borrow();

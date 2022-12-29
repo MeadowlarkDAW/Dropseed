@@ -123,7 +123,7 @@ impl<T: Clone + Copy + Send + Sync + 'static + Default> SharedBuffer<T> {
 
         buf_ref[0..frames].fill(T::default());
 
-        self.set_constant(true);
+        //self.set_constant(true);
     }
 }
 
@@ -406,6 +406,41 @@ impl AudioPortBufferMut {
         true
     }
 
+    /// Set the constant hint for a specific channel.
+    pub fn set_constant_hint_for_channel(&mut self, channel: usize, is_constant: bool) {
+        match &self._raw_channels {
+            RawAudioChannelBuffers::F32(buffers) => {
+                if let Some(buf) = buffers.get(channel) {
+                    buf.set_constant(is_constant);
+                }
+            }
+            RawAudioChannelBuffers::F64(buffers) => {
+                if let Some(buf) = buffers.get(channel) {
+                    buf.set_constant(is_constant);
+                }
+            }
+        }
+    }
+
+    /// Set the constant hint for all channels.
+    pub fn set_constant_hint(&mut self, is_constant: bool) {
+        match &self._raw_channels {
+            RawAudioChannelBuffers::F32(buffers) => {
+                for buf in buffers {
+                    buf.set_constant(is_constant)
+                }
+            }
+            RawAudioChannelBuffers::F64(buffers) => {
+                for buf in buffers {
+                    buf.set_constant(is_constant)
+                }
+            }
+        }
+    }
+
+    /// Clear the number of frames in all channels.
+    ///
+    /// Note this does not set the constant hint.
     pub fn clear_all(&mut self, frames: usize) {
         match &self._raw_channels {
             RawAudioChannelBuffers::F32(buffers) => {

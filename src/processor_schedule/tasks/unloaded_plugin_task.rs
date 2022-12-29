@@ -24,10 +24,10 @@ impl UnloadedPluginTask {
             let in_buf_ref = in_buf.borrow();
             let mut out_buf_ref = out_buf.borrow_mut();
 
-            let in_buf = &in_buf_ref[0..proc_info.frames];
-            let out_buf = &mut out_buf_ref[0..proc_info.frames];
+            let in_buf_part = &in_buf_ref[0..proc_info.frames];
+            let out_buf_part = &mut out_buf_ref[0..proc_info.frames];
 
-            out_buf.copy_from_slice(in_buf);
+            out_buf_part.copy_from_slice(in_buf_part);
         }
 
         // Pass notes through the main ports.
@@ -42,6 +42,7 @@ impl UnloadedPluginTask {
         // Make sure all output buffers are cleared.
         for out_buf in self.clear_audio_out.iter() {
             out_buf.clear(proc_info.frames);
+            out_buf.set_constant(true);
         }
         for out_buf in self.clear_note_out.iter() {
             out_buf.truncate();

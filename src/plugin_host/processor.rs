@@ -10,7 +10,7 @@ use super::event_io_buffers::{PluginEventIoBuffers, PluginEventOutputSanitizer};
 
 // The amount of time to smooth/declick the audio outputs when
 // bypassing/unbypassing the plugin.
-pub(super) static BYPASS_DECLICK_SECS: SecondsF64 = SecondsF64(1.0 / 1000.0);
+pub(super) static BYPASS_DECLICK_SECS: SecondsF64 = SecondsF64(3.0 / 1000.0);
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 enum ProcessingState {
@@ -167,9 +167,9 @@ impl PluginHostProcessor {
                     // Check if all audio inputs are silent.
                     //
                     // First do a quick check using the constant flags.
-                    else if buffers.audio_outputs_have_silent_hint() {
+                    else if buffers.audio_inputs_have_silent_hint() {
                         do_process = false;
-                    } else if buffers.audio_outputs_silent(proc_info.frames) {
+                    } else if buffers.audio_inputs_silent(proc_info.frames) {
                         do_process = false;
                     }
                 } else if let Err(e) = self.plugin_processor.start_processing() {
@@ -190,6 +190,9 @@ impl PluginHostProcessor {
         self.out_events.clear();
 
         if do_process {
+            // Constant flags are opt-in for plugins.
+            buffers.set_constant_hint_on_all_outputs(false);
+
             let new_status =
                 if let Some(automation_out_buffer) = &mut event_buffers.automation_out_buffer {
                     let automation_out_buffer = &mut *automation_out_buffer.borrow_mut();
@@ -235,11 +238,13 @@ impl PluginHostProcessor {
                 ProcessStatus::Error => {
                     // Discard all output buffers.
                     buffers.clear_all_outputs(proc_info);
+                    buffers.set_constant_hint_on_all_outputs(true);
                     ProcessingState::Errored
                 }
             };
         } else {
             buffers.clear_all_outputs(proc_info);
+            buffers.set_constant_hint_on_all_outputs(true);
 
             if state.is_active() {
                 if has_param_in_event || param_flush_requested {
@@ -298,6 +303,7 @@ impl PluginHostProcessor {
             // If we didn't process, then the output buffers are already cleared.
             if do_process {
                 buffers.clear_all_outputs(proc_info);
+                buffers.set_constant_hint_on_all_outputs(true);
             }
 
             // The plugin is currently bypassed and has finished smoothing/declicking.

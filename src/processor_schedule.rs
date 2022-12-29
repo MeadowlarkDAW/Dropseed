@@ -77,8 +77,26 @@ impl std::fmt::Debug for ProcessorSchedule {
 
         let _ = write!(f, "ProcessorSchedule | version: {} {{\n", &self.version);
 
+        if !self.graph_in_task.audio_in.is_empty() {
+            let mut s2 = String::new();
+            for b in self.graph_in_task.audio_in.iter() {
+                let _ = write!(s2, "{:?}, ", b.id());
+            }
+
+            let _ = write!(s, "    graph_audio_in: {},\n", s2);
+        }
+
         for t in self.tasks.iter() {
             let _ = write!(s, "    {:?},\n", t);
+        }
+
+        if !self.graph_out_task.audio_out.is_empty() {
+            let mut s2 = String::new();
+            for b in self.graph_out_task.audio_out.iter() {
+                let _ = write!(s2, "{:?}, ", b.id());
+            }
+
+            let _ = write!(s, "    graph_audio_out: {}\n", s2);
         }
 
         write!(f, "{}", s)
