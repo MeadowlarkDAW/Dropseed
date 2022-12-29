@@ -12,13 +12,13 @@ mod declick;
 
 use declick::{JumpInfo, TransportDeclick};
 
-use crate::engine::{TempoMap, TransportInfoAtFrame};
+use crate::engine::{DSTempoMap, TransportInfoAtFrame};
 use crate::plugin_api::{BeatTime, SecondsTime};
 
 pub struct TransportHandle {
     parameters: Shared<SharedCell<Parameters>>,
 
-    tempo_map_shared: Shared<SharedCell<(Box<dyn TempoMap>, u64)>>,
+    tempo_map_shared: Shared<SharedCell<(Box<dyn DSTempoMap>, u64)>>,
 
     playhead_frame_shared: Arc<AtomicU64>,
     current_playhead_frame: u64,
@@ -68,7 +68,7 @@ impl TransportHandle {
         self.last_seeked_frame
     }
 
-    pub fn update_tempo_map(&mut self, tempo_map: Box<dyn TempoMap>) {
+    pub fn update_tempo_map(&mut self, tempo_map: Box<dyn DSTempoMap>) {
         let version = self.tempo_map_shared.get().1;
         SharedCell::set(
             &*self.tempo_map_shared,
@@ -87,7 +87,7 @@ struct Parameters {
 pub struct TransportTask {
     parameters: Shared<SharedCell<Parameters>>,
 
-    tempo_map_shared: Shared<SharedCell<(Box<dyn TempoMap>, u64)>>,
+    tempo_map_shared: Shared<SharedCell<(Box<dyn DSTempoMap>, u64)>>,
 
     playhead_frame: u64,
     is_playing: bool,
@@ -121,7 +121,7 @@ impl TransportTask {
         seek_to_frame: u64,
         loop_state: LoopState,
         sample_rate: f64,
-        tempo_map: Box<dyn TempoMap>,
+        tempo_map: Box<dyn DSTempoMap>,
         max_frames: usize,
         declick_seconds: Option<f64>,
         coll_handle: basedrop::Handle,

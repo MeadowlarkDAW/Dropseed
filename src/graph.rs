@@ -16,7 +16,7 @@ use dropseed_plugin_api::{DSPluginSaveState, PluginInstanceID, PluginInstanceTyp
 
 use crate::engine::modify_request::{ConnectEdgeReq, EdgeReqPortID};
 use crate::engine::timer_wheel::EngineTimerWheel;
-use crate::engine::{NewPluginRes, OnIdleEvent, PluginStatus, TempoMap};
+use crate::engine::{DSTempoMap, NewPluginRes, OnIdleEvent, PluginStatus};
 use crate::plugin_host::PluginHostProcessorWrapper;
 use crate::plugin_host::{OnIdleResult, PluginHostMainThread};
 use crate::plugin_scanner::PluginScanner;
@@ -135,7 +135,7 @@ impl AudioGraph {
         thread_ids: SharedThreadIDs,
         seek_to_frame: u64,
         loop_state: LoopState,
-        tempo_map: Box<dyn TempoMap>,
+        tempo_map: Box<dyn DSTempoMap>,
         transport_declick_seconds: Option<f64>,
         engine_timer: &mut EngineTimerWheel,
     ) -> (Self, SharedProcessorSchedule, TransportHandle) {

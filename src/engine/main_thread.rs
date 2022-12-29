@@ -17,7 +17,7 @@ use dropseed_plugin_api::plugin_scanner::ScannedPluginKey;
 use dropseed_plugin_api::{DSPluginSaveState, HostInfo, PluginFactory, PluginInstanceID};
 
 use crate::engine::audio_thread::DSEngineAudioThread;
-use crate::engine::TempoMap;
+use crate::engine::DSTempoMap;
 use crate::graph::{AudioGraph, DSEdgeID, Edge};
 use crate::plugin_host::error::{ActivatePluginError, RescanParamListError};
 use crate::plugin_host::{ParamModifiedInfo, PluginHostMainThread};
@@ -238,7 +238,7 @@ impl DSEngineMainThread {
         &mut self,
         seek_to_frame: u64,
         loop_state: LoopState,
-        tempo_map: Box<dyn TempoMap>,
+        tempo_map: Box<dyn DSTempoMap>,
         settings: ActivateEngineSettings,
     ) -> Option<(ActivatedEngineInfo, DSEngineAudioThread)> {
         if self.activated_state.is_some() {

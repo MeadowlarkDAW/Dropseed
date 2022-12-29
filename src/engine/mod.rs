@@ -10,5 +10,5 @@ pub mod modify_request;
 
 pub use audio_thread::DSEngineAudioThread;
 pub use main_thread::*;
-pub use tempo_map::{DefaultTempoMap, TempoMap, TransportInfoAtFrame};
+pub use tempo_map::{DSTempoMap, DefaultTempoMap, TransportInfoAtFrame};
 pub use timer_wheel::{DEFAULT_GARBAGE_COLLECT_INTERVAL_MS, DEFAULT_IDLE_INTERVAL_MS};

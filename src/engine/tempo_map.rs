@@ -1,6 +1,6 @@
 use crate::plugin_api::{BeatTime, SecondsTime};
 
-pub trait TempoMap: Send + Sync + 'static {
+pub trait DSTempoMap: Send + Sync + 'static {
     fn frame_to_beat(&self, frame: u64) -> BeatTime;
     fn frame_to_seconds(&self, frame: u64) -> SecondsTime;
 
@@ -87,7 +87,7 @@ impl DefaultTempoMap {
     }
 }
 
-impl TempoMap for DefaultTempoMap {
+impl DSTempoMap for DefaultTempoMap {
     fn frame_to_beat(&self, frame: u64) -> BeatTime {
         let whole_seconds = frame / self.sample_rate;
         let fract_frames = frame % self.sample_rate;
