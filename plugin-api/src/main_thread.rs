@@ -1,13 +1,10 @@
-use basedrop::Shared;
 use clack_extensions::gui::{GuiResizeHints, GuiSize};
 use clack_host::events::io::EventBuffer;
-use meadowlark_core_types::time::SampleRate;
 use raw_window_handle::RawWindowHandle;
 use std::error::Error;
 
 use crate::ext::timer::TimerID;
 
-use super::transport::TempoMap;
 use super::{ext, ParamID, PluginProcessor};
 
 /// The methods of an audio plugin instance which run in the "main" thread.
@@ -25,7 +22,7 @@ pub trait PluginMainThread {
     /// `[main-thread & !active_state]`
     fn activate(
         &mut self,
-        sample_rate: SampleRate,
+        sample_rate: u32,
         min_frames: u32,
         max_frames: u32,
         coll_handle: &basedrop::Handle,
@@ -170,14 +167,6 @@ pub trait PluginMainThread {
     fn param_text_to_value(&self, param_id: ParamID, text_input: &str) -> Option<f64> {
         None
     }
-
-    /// Called when the tempo map is updated.
-    ///
-    /// By default this does nothing.
-    ///
-    /// [main-thread]
-    #[allow(unused)]
-    fn update_tempo_map(&mut self, new_tempo_map: &Shared<TempoMap>) {}
 
     /// Whether or not this plugin has an automation out port (seperate from audio and note
     /// out ports).

@@ -1,7 +1,6 @@
 use clack_host::events::Event;
 use dropseed_plugin_api::buffer::EventBuffer;
 use dropseed_plugin_api::{PluginProcessor, ProcBuffers, ProcInfo, ProcessStatus};
-use meadowlark_core_types::time::SecondsF64;
 
 use crate::utils::thread_id::SharedThreadIDs;
 
@@ -10,7 +9,7 @@ use super::event_io_buffers::{PluginEventIoBuffers, PluginEventOutputSanitizer};
 
 // The amount of time to smooth/declick the audio outputs when
 // bypassing/unbypassing the plugin.
-pub(super) static BYPASS_DECLICK_SECS: SecondsF64 = SecondsF64(3.0 / 1000.0);
+pub(super) static BYPASS_DECLICK_SECS: f64 = 3.0 / 1000.0;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 enum ProcessingState {
@@ -169,8 +168,10 @@ impl PluginHostProcessor {
                     // First do a quick check using the constant flags.
                     else if buffers.audio_inputs_have_silent_hint() {
                         do_process = false;
-                    } else if buffers.audio_inputs_silent(proc_info.frames) {
-                        do_process = false;
+                    } else {
+                        if buffers.audio_inputs_silent(proc_info.frames) {
+                            do_process = false;
+                        }
                     }
                 } else if let Err(e) = self.plugin_processor.start_processing() {
                     log::error!("Plugin has failed to start processing: {}", e);

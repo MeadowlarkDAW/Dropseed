@@ -1,7 +1,10 @@
+pub mod atomic_float;
 pub mod automation;
 pub mod buffer;
+pub mod decibel;
 pub mod ext;
 pub mod host_request_channel;
+pub mod param_helper;
 pub mod plugin_scanner;
 pub mod transport;
 
@@ -27,4 +30,4 @@ pub use processor::PluginProcessor;
 pub use save_state::DSPluginSaveState;
 
 pub use clack_host::events::event_types as event;
-pub use clack_host::utils::FixedPoint;
+pub use clack_host::utils::{BeatTime, FixedPoint, SecondsTime};

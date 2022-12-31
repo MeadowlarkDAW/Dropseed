@@ -2,8 +2,8 @@ use std::hash::Hash;
 
 use audio_graph::{error::AddEdgeError, AudioGraphHelper, EdgeID, PortID, TypeIdx};
 use basedrop::Shared;
+use dropseed_plugin_api::transport::LoopState;
 use fnv::{FnvHashMap, FnvHashSet};
-use meadowlark_core_types::time::{SampleRate, SecondsF64};
 use smallvec::SmallVec;
 
 mod compiler;
@@ -12,12 +12,11 @@ pub mod error;
 
 pub(crate) mod shared_pools;
 
-use dropseed_plugin_api::transport::TempoMap;
 use dropseed_plugin_api::{DSPluginSaveState, PluginInstanceID, PluginInstanceType};
 
 use crate::engine::modify_request::{ConnectEdgeReq, EdgeReqPortID};
 use crate::engine::timer_wheel::EngineTimerWheel;
-use crate::engine::{NewPluginRes, OnIdleEvent, PluginStatus};
+use crate::engine::{DSTempoMap, NewPluginRes, OnIdleEvent, PluginStatus};
 use crate::plugin_host::PluginHostProcessorWrapper;
 use crate::plugin_host::{OnIdleResult, PluginHostMainThread};
 use crate::plugin_scanner::PluginScanner;
@@ -110,7 +109,7 @@ pub(crate) struct AudioGraph {
     edge_id_to_ds_edge_id: FnvHashMap<EdgeID, DSEdgeID>,
     next_ds_edge_id: u64,
 
-    sample_rate: SampleRate,
+    sample_rate: u32,
     min_frames: u32,
     max_frames: u32,
 
@@ -128,13 +127,16 @@ impl AudioGraph {
         coll_handle: basedrop::Handle,
         graph_in_channels: usize,
         graph_out_channels: usize,
-        sample_rate: SampleRate,
+        sample_rate: u32,
         min_frames: u32,
         max_frames: u32,
         note_buffer_size: usize,
         event_buffer_size: usize,
         thread_ids: SharedThreadIDs,
-        transport_declick_time: Option<SecondsF64>,
+        seek_to_frame: u64,
+        loop_state: LoopState,
+        tempo_map: Box<dyn DSTempoMap>,
+        transport_declick_seconds: Option<f64>,
         engine_timer: &mut EngineTimerWheel,
     ) -> (Self, SharedProcessorSchedule, TransportHandle) {
         //assert!(graph_in_channels > 0);
@@ -143,10 +145,12 @@ impl AudioGraph {
         let graph_helper = AudioGraphHelper::new(PortType::NUM_TYPES);
 
         let (transport_task, transport_handle) = TransportTask::new(
-            None,
+            seek_to_frame,
+            loop_state,
             sample_rate,
+            tempo_map,
             max_frames as usize,
-            transport_declick_time,
+            transport_declick_seconds,
             coll_handle.clone(),
         );
 
@@ -828,12 +832,6 @@ impl AudioGraph {
         }
 
         recompile_graph
-    }
-
-    pub fn update_tempo_map(&mut self, new_tempo_map: Shared<TempoMap>) {
-        for plugin_host in self.shared_pools.plugin_hosts.iter_mut() {
-            plugin_host.update_tempo_map(&new_tempo_map);
-        }
     }
 
     pub fn get_plugin_host(&self, id: &PluginInstanceID) -> Option<&PluginHostMainThread> {

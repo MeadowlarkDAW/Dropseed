@@ -4,9 +4,10 @@ use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::Stream;
 use dropseed::engine::{
     ActivateEngineSettings, ActivatedEngineInfo, DSEngineAudioThread, DSEngineMainThread,
-    EngineDeactivatedStatus, EngineSettings, OnIdleEvent,
+    DefaultTempoMap, EngineDeactivatedStatus, EngineSettings, OnIdleEvent,
 };
 use dropseed::plugin_api::ext::gui::GuiSize;
+use dropseed::plugin_api::transport::LoopState;
 use dropseed::plugin_api::HostInfo;
 use dropseed::plugin_scanner::ScannedPluginInfo;
 use egui_glow::egui_winit::egui;
@@ -15,7 +16,6 @@ use fern::colors::ColoredLevelConfig;
 use glutin::dpi::PhysicalSize;
 use glutin::window::WindowId;
 use log::LevelFilter;
-use meadowlark_core_types::time::SampleRate;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -71,7 +71,7 @@ fn main() {
     let config = device.default_output_config().expect("no default output config available");
 
     let num_out_channels = usize::from(config.channels());
-    let sample_rate: SampleRate = config.sample_rate().0.into();
+    let sample_rate = config.sample_rate().0;
 
     let mut audio_thread: Option<DSEngineAudioThread> = None;
 
@@ -173,7 +173,7 @@ struct DSTestHostGUI {
     to_audio_thread_tx: ringbuf::Producer<UIToAudioThreadMsg>,
     _cpal_stream: Option<Stream>,
 
-    sample_rate: SampleRate,
+    sample_rate: u32,
 }
 
 impl DSTestHostGUI {
@@ -181,7 +181,7 @@ impl DSTestHostGUI {
         ds_engine: DSEngineMainThread,
         activated_state: ActivatedState,
         cpal_stream: Stream,
-        sample_rate: SampleRate,
+        sample_rate: u32,
         to_audio_thread_tx: ringbuf::Producer<UIToAudioThreadMsg>,
     ) -> Self {
         Self {
@@ -206,7 +206,7 @@ impl DSTestHostGUI {
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                     if self.activated_state.is_some() {
-                        ui.label(format!("sample rate: {}", self.sample_rate.as_u16()));
+                        ui.label(format!("sample rate: {}", self.sample_rate));
                         ui.colored_label(egui::Color32::GREEN, "active");
                         ui.label("engine status:");
 
@@ -503,17 +503,22 @@ enum Tab {
 
 fn activate_engine(
     ds_engine: &mut DSEngineMainThread,
-    sample_rate: SampleRate,
+    sample_rate: u32,
 ) -> (ActivatedState, DSEngineAudioThread) {
     let (engine_info, ds_engine_audio_thread) = ds_engine
-        .activate_engine(ActivateEngineSettings {
-            sample_rate,
-            min_frames: MIN_FRAMES,
-            max_frames: MAX_FRAMES,
-            num_audio_in_channels: GRAPH_IN_CHANNELS,
-            num_audio_out_channels: GRAPH_OUT_CHANNELS,
-            ..Default::default()
-        })
+        .activate_engine(
+            0,
+            LoopState::Inactive,
+            Box::new(DefaultTempoMap::default()),
+            ActivateEngineSettings {
+                sample_rate,
+                min_frames: MIN_FRAMES,
+                max_frames: MAX_FRAMES,
+                num_audio_in_channels: GRAPH_IN_CHANNELS,
+                num_audio_out_channels: GRAPH_OUT_CHANNELS,
+                ..Default::default()
+            },
+        )
         .unwrap();
 
     let mut activated_state = ActivatedState {

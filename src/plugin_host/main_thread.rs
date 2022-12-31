@@ -8,7 +8,6 @@ use dropseed_plugin_api::ext::gui::{EmbeddedGuiInfo, GuiResizeHints, GuiSize};
 use dropseed_plugin_api::ext::note_ports::PluginNotePortsExt;
 use dropseed_plugin_api::ext::params::{ParamID, ParamInfo, ParamInfoFlags};
 use dropseed_plugin_api::ext::timer::TimerID;
-use dropseed_plugin_api::transport::TempoMap;
 use dropseed_plugin_api::{
     DSPluginSaveState, HostRequestChannelReceiver, HostRequestFlags, PluginInstanceID,
     PluginMainThread,
@@ -16,7 +15,6 @@ use dropseed_plugin_api::{
 
 use dropseed_plugin_api::buffer::EventBuffer;
 use fnv::{FnvHashMap, FnvHashSet};
-use meadowlark_core_types::time::SampleRate;
 use raw_window_handle::RawWindowHandle;
 use smallvec::SmallVec;
 use std::error::Error;
@@ -674,11 +672,6 @@ impl PluginHostMainThread {
         self.schedule_deactivate(coll_handle)
     }
 
-    /// Inform the plugin that the project's tempo map has been updated.
-    pub(crate) fn update_tempo_map(&mut self, new_tempo_map: &Shared<TempoMap>) {
-        self.plug_main_thread.update_tempo_map(new_tempo_map);
-    }
-
     /// Returns the plugin host's processor (wrapped in a thread-safe shared
     /// container).
     pub(crate) fn shared_processor(&self) -> &SharedPluginHostProcessor {
@@ -694,7 +687,7 @@ impl PluginHostMainThread {
     // TODO: let the user manually activate an inactive plugin
     pub(crate) fn activate(
         &mut self,
-        sample_rate: SampleRate,
+        sample_rate: u32,
         min_frames: u32,
         max_frames: u32,
         graph_helper: &mut AudioGraphHelper,
@@ -835,7 +828,7 @@ impl PluginHostMainThread {
                 // The number of frames to smooth/declick the audio outputs when
                 // bypassing/unbypassing the plugin.
                 let bypass_declick_frames =
-                    BYPASS_DECLICK_SECS.to_nearest_frame_round(sample_rate).0 as usize;
+                    (BYPASS_DECLICK_SECS * f64::from(sample_rate)).round() as usize;
 
                 // Send the new processor to the process thread.
                 self.channel.shared_state.set_active_state(PluginActiveState::Active);
@@ -1061,7 +1054,7 @@ impl PluginHostMainThread {
     /// that were modified inside the plugin's custom GUI.
     pub(crate) fn on_idle(
         &mut self,
-        sample_rate: SampleRate,
+        sample_rate: u32,
         min_frames: u32,
         max_frames: u32,
         coll_handle: &basedrop::Handle,

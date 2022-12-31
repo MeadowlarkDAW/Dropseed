@@ -1,7 +1,6 @@
 use atomic_refcell::AtomicRefCell;
 use basedrop::Shared;
 use dropseed_plugin_api::transport::{DeclickBuffers, DeclickInfo, LoopBackInfo, SeekInfo};
-use meadowlark_core_types::time::{FrameTime, SampleRate, SecondsF64};
 
 pub(super) enum JumpInfo<'a> {
     None,
@@ -39,13 +38,13 @@ pub(super) struct TransportDeclick {
     jump_active: bool,
     jump_state: JumpDeclickState,
 
-    jump_in_playhead: i64,
-    jump_out_playhead: FrameTime,
-    jump_in_playhead_next: i64,
-    jump_out_playhead_next: FrameTime,
+    jump_in_playhead_frame: i64,
+    jump_out_playhead_frame: u64,
+    jump_in_playhead_next_frame: i64,
+    jump_out_playhead_next_frame: u64,
 
-    start_declick_start: FrameTime,
-    jump_in_declick_start: i64,
+    start_declick_start_frame: u64,
+    jump_in_declick_start_frame: i64,
 
     declick_frames: usize,
     declick_inc: f32,
@@ -56,13 +55,13 @@ pub(super) struct TransportDeclick {
 impl TransportDeclick {
     pub fn new(
         max_frames: usize,
-        declick_time: SecondsF64,
-        sample_rate: SampleRate,
+        declick_seconds: f64,
+        sample_rate: u32,
         coll_handle: &basedrop::Handle,
     ) -> Self {
-        assert!(declick_time.0 > 0.0);
+        assert!(declick_seconds > 0.0);
 
-        let declick_frames = declick_time.to_nearest_frame_round(sample_rate).0 as usize;
+        let declick_frames = (declick_seconds * f64::from(sample_rate)).round() as usize;
         let declick_inc = 1.0 / declick_frames as f32;
 
         let buffers = Shared::new(
@@ -83,13 +82,13 @@ impl TransportDeclick {
             jump_active: false,
             jump_state: JumpDeclickState::NotDeclicking,
 
-            jump_in_playhead: 0,
-            jump_out_playhead: FrameTime::default(),
-            jump_in_playhead_next: 0,
-            jump_out_playhead_next: FrameTime::default(),
+            jump_in_playhead_frame: 0,
+            jump_out_playhead_frame: 0,
+            jump_in_playhead_next_frame: 0,
+            jump_out_playhead_next_frame: 0,
 
-            start_declick_start: FrameTime::default(),
-            jump_in_declick_start: 0,
+            start_declick_start_frame: 0,
+            jump_in_declick_start_frame: 0,
 
             declick_frames,
             declick_inc,
@@ -100,7 +99,7 @@ impl TransportDeclick {
 
     pub fn process(
         &mut self,
-        playhead_frame: FrameTime,
+        playhead_frame: u64,
         frames: usize,
         is_playing: bool,
         jump_info: JumpInfo<'_>,
@@ -126,7 +125,7 @@ impl TransportDeclick {
                         Some((0.0, self.declick_frames))
                     };
 
-                self.start_declick_start = playhead_frame;
+                self.start_declick_start_frame = playhead_frame;
             } else {
                 // Transport just stopped.
                 self.start_stop_buf_state =
@@ -155,10 +154,10 @@ impl TransportDeclick {
 
                         frames_left: self.declick_frames,
                     };
-                    self.jump_in_playhead_next = playhead_frame.0 as i64;
-                    self.jump_out_playhead_next = info.seeked_from_playhead;
+                    self.jump_in_playhead_next_frame = playhead_frame as i64;
+                    self.jump_out_playhead_next_frame = info.seeked_from_playhead;
 
-                    self.jump_in_declick_start = self.jump_in_playhead_next;
+                    self.jump_in_declick_start_frame = self.jump_in_playhead_next_frame;
                 }
             }
             JumpInfo::Looped(info) => {
@@ -173,12 +172,12 @@ impl TransportDeclick {
                     in_frames_left: self.declick_frames,
                     out_frames_left: self.declick_frames,
 
-                    skip_frames: skip_frames.0 as usize,
+                    skip_frames: skip_frames as usize,
                 };
-                self.jump_in_playhead_next = info.loop_start.0 as i64 - skip_frames.0 as i64;
-                self.jump_out_playhead_next = playhead_frame;
+                self.jump_in_playhead_next_frame = info.loop_start as i64 - skip_frames as i64;
+                self.jump_out_playhead_next_frame = playhead_frame;
 
-                self.jump_in_declick_start = self.jump_in_playhead_next;
+                self.jump_in_declick_start_frame = self.jump_in_playhead_next_frame;
             }
             _ => {}
         }
@@ -254,10 +253,10 @@ impl TransportDeclick {
                     in_buf[declick_frames..frames].fill(1.0);
                 }
 
-                self.jump_in_playhead = self.jump_in_playhead_next;
-                self.jump_out_playhead = self.jump_out_playhead_next;
-                self.jump_in_playhead_next += frames as i64;
-                self.jump_out_playhead_next += frames.into();
+                self.jump_in_playhead_frame = self.jump_in_playhead_next_frame;
+                self.jump_out_playhead_frame = self.jump_out_playhead_next_frame;
+                self.jump_in_playhead_next_frame += frames as i64;
+                self.jump_out_playhead_next_frame += frames as u64;
 
                 self.jump_state = if frames_left > frames {
                     JumpDeclickState::DeclickingSeek {
@@ -292,10 +291,10 @@ impl TransportDeclick {
                         in_frames_left,
                         out_frames_left,
                     };
-                    self.jump_in_playhead = self.jump_in_playhead_next;
-                    self.jump_out_playhead = self.jump_out_playhead_next;
-                    self.jump_in_playhead_next += frames as i64;
-                    self.jump_out_playhead_next += frames.into();
+                    self.jump_in_playhead_frame = self.jump_in_playhead_next_frame;
+                    self.jump_out_playhead_frame = self.jump_out_playhead_next_frame;
+                    self.jump_in_playhead_next_frame += frames as i64;
+                    self.jump_out_playhead_next_frame += frames as u64;
 
                     return;
                 } else if skip_frames > 0 {
@@ -366,10 +365,10 @@ impl TransportDeclick {
                     in_buf.fill(1.0);
                 }
 
-                self.jump_in_playhead = self.jump_in_playhead_next;
-                self.jump_out_playhead = self.jump_out_playhead_next;
-                self.jump_in_playhead_next += frames as i64;
-                self.jump_out_playhead_next += frames.into();
+                self.jump_in_playhead_frame = self.jump_in_playhead_next_frame;
+                self.jump_out_playhead_frame = self.jump_out_playhead_next_frame;
+                self.jump_in_playhead_next_frame += frames as i64;
+                self.jump_out_playhead_next_frame += frames as u64;
 
                 self.jump_state = if in_frames_left > 0 || out_frames_left > 0 {
                     JumpDeclickState::DeclickingLoop {
@@ -392,10 +391,10 @@ impl TransportDeclick {
             Shared::clone(&self.buffers),
             self.start_stop_active,
             self.jump_active,
-            self.jump_in_playhead,
-            self.jump_out_playhead,
-            self.start_declick_start,
-            self.jump_in_declick_start,
+            self.jump_in_playhead_frame,
+            self.jump_out_playhead_frame,
+            self.start_declick_start_frame,
+            self.jump_in_declick_start_frame,
         )
     }
 }

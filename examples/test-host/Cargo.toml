@@ -6,9 +6,6 @@ publish = false
 
 [dependencies]
 dropseed = { path = "../../" }
-#noise-generator-dropseed = { git = "https://github.com/MeadowlarkDAW/meadowlark-plugins", package = "noise-generator-dropseed", branch = "main" }
-#noise-generator-dropseed = { path = "../meadowlark-plugins/noise-generator/noise-generator-dropseed" }
-meadowlark-core-types = { git = "https://github.com/MeadowlarkDAW/meadowlark-core-types.git", branch = "main" }
 egui_glow = { version = "0.19", features = ["winit"] }
 glutin = "0.29"
 cpal = "0.13"

@@ -6,11 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-meadowlark-core-types = { git = "https://github.com/MeadowlarkDAW/meadowlark-core-types.git", branch = "main" }
 clack-host = { git = "https://github.com/prokopyl/clack", rev = "31d247c00ddc228bc0a395c50f0738b3c91f409c" }
 clack-extensions = { git = "https://github.com/prokopyl/clack", features = ["clack-host", "audio-ports", "gui", "log", "note-ports", "params", "state", "thread-check", "latency", "timer"], rev = "31d247c00ddc228bc0a395c50f0738b3c91f409c" }
-#clack-host = { path = "../../clack/host" }
-#clack-extensions = { path = "../../clack/extensions", features = ["clack-host", "audio-ports", "gui", "log", "note-ports", "params", "state", "thread-check", "latency", "timer"] }
 basedrop = "0.1"
 smallvec = "1.7"
 bitflags = "1.3"

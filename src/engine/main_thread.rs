@@ -1,6 +1,6 @@
-use basedrop::{Collector, Shared, SharedCell};
+use basedrop::{Collector, Shared};
+use dropseed_plugin_api::transport::LoopState;
 use fnv::FnvHashSet;
-use meadowlark_core_types::time::{SampleRate, SecondsF64};
 use smallvec::SmallVec;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -14,10 +14,10 @@ use thread_priority::ThreadPriority;
 
 use dropseed_plugin_api::ext::gui::{GuiResizeHints, GuiSize};
 use dropseed_plugin_api::plugin_scanner::ScannedPluginKey;
-use dropseed_plugin_api::transport::TempoMap;
 use dropseed_plugin_api::{DSPluginSaveState, HostInfo, PluginFactory, PluginInstanceID};
 
 use crate::engine::audio_thread::DSEngineAudioThread;
+use crate::engine::DSTempoMap;
 use crate::graph::{AudioGraph, DSEdgeID, Edge};
 use crate::plugin_host::error::{ActivatePluginError, RescanParamListError};
 use crate::plugin_host::{ParamModifiedInfo, PluginHostMainThread};
@@ -34,7 +34,6 @@ struct ActivatedState {
     audio_graph: AudioGraph,
     run_process_thread: Arc<AtomicBool>,
     process_thread_handle: Option<JoinHandle<()>>,
-    tempo_map_shared: Shared<SharedCell<(Shared<TempoMap>, u64)>>,
 }
 
 impl Drop for ActivatedState {
@@ -138,23 +137,6 @@ impl DSEngineMainThread {
         &*self.host_info
     }
 
-    // TODO: multiple transports
-    /// Replace the old tempo map with this new one.
-    pub fn update_tempo_map(&mut self, new_tempo_map: TempoMap) {
-        if let Some(activated_state) = &mut self.activated_state {
-            let tempo_map_version = activated_state.tempo_map_shared.get().1;
-
-            let new_tempo_map_shared = Shared::new(&self.collector.handle(), new_tempo_map);
-
-            activated_state.tempo_map_shared.set(Shared::new(
-                &self.collector.handle(),
-                (Shared::clone(&new_tempo_map_shared), tempo_map_version + 1),
-            ));
-
-            activated_state.audio_graph.update_tempo_map(new_tempo_map_shared);
-        }
-    }
-
     /// Get an immutable reference to the host for a particular plugin.
     ///
     /// This will return `None` if a plugin with the given ID does not exist/
@@ -254,6 +236,9 @@ impl DSEngineMainThread {
     /// This will return `None` if the engine is already activated.
     pub fn activate_engine(
         &mut self,
+        seek_to_frame: u64,
+        loop_state: LoopState,
+        tempo_map: Box<dyn DSTempoMap>,
         settings: ActivateEngineSettings,
     ) -> Option<(ActivatedEngineInfo, DSEngineAudioThread)> {
         if self.activated_state.is_some() {
@@ -270,7 +255,7 @@ impl DSEngineMainThread {
         let sample_rate = settings.sample_rate;
         let note_buffer_size = settings.note_buffer_size;
         let event_buffer_size = settings.event_buffer_size;
-        let transport_declick_time = settings.transport_declick_time;
+        let transport_declick_seconds = settings.transport_declick_seconds;
 
         let (audio_graph, shared_schedule, transport_handle) = AudioGraph::new(
             self.collector.handle(),
@@ -282,7 +267,10 @@ impl DSEngineMainThread {
             note_buffer_size,
             event_buffer_size,
             self.thread_ids.clone(),
-            transport_declick_time,
+            seek_to_frame,
+            loop_state,
+            tempo_map,
+            transport_declick_seconds,
             &mut self.timer_wheel,
         );
 
@@ -309,9 +297,6 @@ impl DSEngineMainThread {
                 process_thread.run(run_process_thread_clone);
             });
 
-        let tempo_map_shared = transport_handle.tempo_map_shared();
-        let tempo_map = (*tempo_map_shared.get().0).clone();
-
         let info = ActivatedEngineInfo {
             graph_in_id: audio_graph.graph_in_id().clone(),
             graph_out_id: audio_graph.graph_out_id().clone(),
@@ -321,14 +306,12 @@ impl DSEngineMainThread {
             transport_handle,
             num_audio_in_channels,
             num_audio_out_channels,
-            tempo_map,
         };
 
         self.activated_state = Some(ActivatedState {
             audio_graph,
             run_process_thread,
             process_thread_handle: Some(process_thread_handle),
-            tempo_map_shared,
         });
 
         self.compile_audio_graph();
@@ -533,7 +516,7 @@ impl Drop for DSEngineMainThread {
 #[derive(Debug, Clone, Copy)]
 pub struct ActivateEngineSettings {
     /// The sample rate of the project.
-    pub sample_rate: SampleRate,
+    pub sample_rate: u32,
 
     /// The minimum number of frames (samples in a single audio channel)
     /// the can be processed in a single process cycle.
@@ -565,20 +548,20 @@ pub struct ActivateEngineSettings {
     /// Set this to `None` to have no transport declicking.
     ///
     /// By default this is set to `None`.
-    pub transport_declick_time: Option<SecondsF64>,
+    pub transport_declick_seconds: Option<f64>,
 }
 
 impl Default for ActivateEngineSettings {
     fn default() -> Self {
         Self {
-            sample_rate: SampleRate::default(),
+            sample_rate: 44_100,
             min_frames: 1,
             max_frames: 512,
             num_audio_in_channels: 2,
             num_audio_out_channels: 2,
             note_buffer_size: 256,
             event_buffer_size: 256,
-            transport_declick_time: None,
+            transport_declick_seconds: None,
         }
     }
 }
@@ -595,11 +578,8 @@ pub struct ActivatedEngineInfo {
     /// The handle to the tranport.
     pub transport_handle: TransportHandle,
 
-    /// The current tempo map of the transport.
-    pub tempo_map: TempoMap,
-
     /// The sample rate of the project.
-    pub sample_rate: SampleRate,
+    pub sample_rate: u32,
 
     /// The minimum number of frames (samples in a single audio channel)
     /// the can be processed in a single process cycle.
