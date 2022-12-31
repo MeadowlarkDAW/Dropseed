@@ -516,7 +516,7 @@ impl Drop for DSEngineMainThread {
 #[derive(Debug, Clone, Copy)]
 pub struct ActivateEngineSettings {
     /// The sample rate of the project.
-    pub sample_rate: f64,
+    pub sample_rate: u32,
 
     /// The minimum number of frames (samples in a single audio channel)
     /// the can be processed in a single process cycle.
@@ -554,7 +554,7 @@ pub struct ActivateEngineSettings {
 impl Default for ActivateEngineSettings {
     fn default() -> Self {
         Self {
-            sample_rate: 44_100.0,
+            sample_rate: 44_100,
             min_frames: 1,
             max_frames: 512,
             num_audio_in_channels: 2,
@@ -579,7 +579,7 @@ pub struct ActivatedEngineInfo {
     pub transport_handle: TransportHandle,
 
     /// The sample rate of the project.
-    pub sample_rate: f64,
+    pub sample_rate: u32,
 
     /// The minimum number of frames (samples in a single audio channel)
     /// the can be processed in a single process cycle.

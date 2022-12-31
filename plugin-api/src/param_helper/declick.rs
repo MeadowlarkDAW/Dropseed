@@ -64,7 +64,7 @@ where
         }
     }
 
-    pub fn set_speed(&mut self, sample_rate: f64, seconds: f64) {
+    pub fn set_speed(&mut self, sample_rate: u32, seconds: f64) {
         self.fade.set_speed(sample_rate, seconds);
     }
 

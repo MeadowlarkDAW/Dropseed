@@ -56,12 +56,12 @@ impl TransportDeclick {
     pub fn new(
         max_frames: usize,
         declick_seconds: f64,
-        sample_rate: f64,
+        sample_rate: u32,
         coll_handle: &basedrop::Handle,
     ) -> Self {
         assert!(declick_seconds > 0.0);
 
-        let declick_frames = (declick_seconds * sample_rate).round() as usize;
+        let declick_frames = (declick_seconds * f64::from(sample_rate)).round() as usize;
         let declick_inc = 1.0 / declick_frames as f32;
 
         let buffers = Shared::new(

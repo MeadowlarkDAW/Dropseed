@@ -120,7 +120,7 @@ impl TransportTask {
     pub fn new(
         seek_to_frame: u64,
         loop_state: LoopState,
-        sample_rate: f64,
+        sample_rate: u32,
         tempo_map: Box<dyn DSTempoMap>,
         max_frames: usize,
         declick_seconds: Option<f64>,

@@ -37,7 +37,7 @@ pub struct DSEngineAudioThread {
     graph_audio_in_channels: usize,
     graph_audio_out_channels: usize,
 
-    sample_rate: f64,
+    sample_rate: u32,
     sample_rate_recip: f64,
 }
 
@@ -57,15 +57,15 @@ impl Debug for DSEngineAudioThread {
 impl DSEngineAudioThread {
     pub(crate) fn new(
         schedule: SharedProcessorSchedule,
-        sample_rate: f64,
+        sample_rate: u32,
         graph_audio_in_channels: usize,
         graph_audio_out_channels: usize,
         max_frames: usize,
         coll_handle: &basedrop::Handle,
     ) -> (Self, DSEngineProcessThread) {
-        assert_ne!(sample_rate, 0.0);
+        assert_ne!(sample_rate, 0);
 
-        let sample_rate_recip = 1.0 / sample_rate;
+        let sample_rate_recip = 1.0 / f64::from(sample_rate);
 
         let (audio_to_process_tx, audio_to_process_rx) = if graph_audio_in_channels == 0 {
             let num_frames_wanted = Arc::new(AtomicUsize::new(0));

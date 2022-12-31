@@ -109,7 +109,7 @@ pub(crate) struct AudioGraph {
     edge_id_to_ds_edge_id: FnvHashMap<EdgeID, DSEdgeID>,
     next_ds_edge_id: u64,
 
-    sample_rate: f64,
+    sample_rate: u32,
     min_frames: u32,
     max_frames: u32,
 
@@ -127,7 +127,7 @@ impl AudioGraph {
         coll_handle: basedrop::Handle,
         graph_in_channels: usize,
         graph_out_channels: usize,
-        sample_rate: f64,
+        sample_rate: u32,
         min_frames: u32,
         max_frames: u32,
         note_buffer_size: usize,

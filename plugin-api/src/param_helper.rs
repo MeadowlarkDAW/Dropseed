@@ -161,7 +161,7 @@ impl ParamF32 {
         gradient: Gradient,
         unit: Unit,
         smooth_secs: f64,
-        sample_rate: f64,
+        sample_rate: u32,
         max_blocksize: usize,
     ) -> (Self, ParamF32Handle) {
         let normalized = value_to_normalized_f32(value, min, max, gradient);
@@ -220,7 +220,7 @@ impl ParamF32 {
         gradient: Gradient,
         unit: Unit,
         smooth_secs: f64,
-        sample_rate: f64,
+        sample_rate: u32,
         max_blocksize: usize,
     ) -> (Self, ParamF32Handle) {
         let normalized = normalized.clamp(0.0, 1.0);
@@ -347,7 +347,7 @@ impl ParamF32 {
     }
 
     /// Update the sample rate (used for the parameter smoothing LPF).
-    pub fn set_sample_rate(&mut self, sample_rate: f64) {
+    pub fn set_sample_rate(&mut self, sample_rate: u32) {
         self.smoothed.set_speed(sample_rate, self.smooth_secs);
     }
 
@@ -653,7 +653,7 @@ impl ParamF64 {
         gradient: Gradient,
         unit: Unit,
         smooth_secs: f64,
-        sample_rate: f64,
+        sample_rate: u32,
         max_blocksize: usize,
     ) -> (Self, ParamF64Handle) {
         let normalized = value_to_normalized_f64(value, min, max, gradient);
@@ -712,7 +712,7 @@ impl ParamF64 {
         gradient: Gradient,
         unit: Unit,
         smooth_secs: f64,
-        sample_rate: f64,
+        sample_rate: u32,
         max_blocksize: usize,
     ) -> (Self, ParamF64Handle) {
         let normalized = normalized.clamp(0.0, 1.0);
@@ -839,7 +839,7 @@ impl ParamF64 {
     }
 
     /// Update the sample rate (used for the parameter smoothing LPF).
-    pub fn set_sample_rate(&mut self, sample_rate: f64) {
+    pub fn set_sample_rate(&mut self, sample_rate: u32) {
         self.smoothed.set_speed(sample_rate, self.smooth_secs);
     }
 

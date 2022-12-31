@@ -22,7 +22,7 @@ pub trait PluginMainThread {
     /// `[main-thread & !active_state]`
     fn activate(
         &mut self,
-        sample_rate: f64,
+        sample_rate: u32,
         min_frames: u32,
         max_frames: u32,
         coll_handle: &basedrop::Handle,

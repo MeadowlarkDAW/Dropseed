@@ -687,7 +687,7 @@ impl PluginHostMainThread {
     // TODO: let the user manually activate an inactive plugin
     pub(crate) fn activate(
         &mut self,
-        sample_rate: f64,
+        sample_rate: u32,
         min_frames: u32,
         max_frames: u32,
         graph_helper: &mut AudioGraphHelper,
@@ -827,7 +827,8 @@ impl PluginHostMainThread {
 
                 // The number of frames to smooth/declick the audio outputs when
                 // bypassing/unbypassing the plugin.
-                let bypass_declick_frames = (BYPASS_DECLICK_SECS * sample_rate).round() as usize;
+                let bypass_declick_frames =
+                    (BYPASS_DECLICK_SECS * f64::from(sample_rate)).round() as usize;
 
                 // Send the new processor to the process thread.
                 self.channel.shared_state.set_active_state(PluginActiveState::Active);
@@ -1053,7 +1054,7 @@ impl PluginHostMainThread {
     /// that were modified inside the plugin's custom GUI.
     pub(crate) fn on_idle(
         &mut self,
-        sample_rate: f64,
+        sample_rate: u32,
         min_frames: u32,
         max_frames: u32,
         coll_handle: &basedrop::Handle,

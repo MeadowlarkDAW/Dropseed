@@ -22,7 +22,7 @@ impl MissingPluginMainThread {
 impl PluginMainThread for MissingPluginMainThread {
     fn activate(
         &mut self,
-        _sample_rate: f64,
+        _sample_rate: u32,
         _min_frames: u32,
         _max_frames: u32,
         _coll_handle: &basedrop::Handle,

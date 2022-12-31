@@ -27,7 +27,8 @@ pub struct DefaultTempoMap {
     bpm: f64,
     beats_per_second: f64,
 
-    sample_rate: u64,
+    sample_rate: u32,
+    sample_rate_u64: u64,
     sample_rate_recip: f64,
 }
 
@@ -43,7 +44,8 @@ impl DefaultTempoMap {
             beats_per_second: bpm / 60.0,
             tsig_num,
             tsig_denom,
-            sample_rate: u64::from(sample_rate),
+            sample_rate,
+            sample_rate_u64: u64::from(sample_rate),
             sample_rate_recip: 1.0 / f64::from(sample_rate),
         }
     }
@@ -56,7 +58,7 @@ impl DefaultTempoMap {
         self.beats_per_second
     }
 
-    pub fn sample_rate(&self) -> u64 {
+    pub fn sample_rate(&self) -> u32 {
         self.sample_rate
     }
 
@@ -74,7 +76,8 @@ impl DefaultTempoMap {
     pub fn set_sample_rate(&mut self, sample_rate: u32) {
         assert_ne!(sample_rate, 0);
 
-        self.sample_rate = u64::from(sample_rate);
+        self.sample_rate = sample_rate;
+        self.sample_rate_u64 = u64::from(sample_rate);
         self.sample_rate_recip = 1.0 / f64::from(sample_rate);
     }
 
@@ -89,8 +92,8 @@ impl DefaultTempoMap {
 
 impl DSTempoMap for DefaultTempoMap {
     fn frame_to_beat(&self, frame: u64) -> BeatTime {
-        let whole_seconds = frame / self.sample_rate;
-        let fract_frames = frame % self.sample_rate;
+        let whole_seconds = frame / self.sample_rate_u64;
+        let fract_frames = frame % self.sample_rate_u64;
 
         let whole_beats = whole_seconds as f64 * self.beats_per_second;
 
@@ -101,8 +104,8 @@ impl DSTempoMap for DefaultTempoMap {
     }
 
     fn frame_to_seconds(&self, frame: u64) -> SecondsTime {
-        let whole_seconds = frame / self.sample_rate;
-        let fract_frames = frame % self.sample_rate;
+        let whole_seconds = frame / self.sample_rate_u64;
+        let fract_frames = frame % self.sample_rate_u64;
 
         let fract_seconds = fract_frames as f64 * self.sample_rate_recip;
 
@@ -136,6 +139,7 @@ impl Default for DefaultTempoMap {
             tsig_num: 4,
             tsig_denom: 4,
             sample_rate: 44_100,
+            sample_rate_u64: 44_100,
             sample_rate_recip: 1.0 / 44_100.0,
         }
     }

@@ -227,13 +227,15 @@ impl ClapPluginMainThread {
 impl PluginMainThread for ClapPluginMainThread {
     fn activate(
         &mut self,
-        sample_rate: f64,
+        sample_rate: u32,
         min_frames: u32,
         max_frames: u32,
         _coll_handle: &basedrop::Handle,
     ) -> Result<PluginActivatedInfo, String> {
-        let configuration =
-            PluginAudioConfiguration { sample_rate, frames_count_range: min_frames..=max_frames };
+        let configuration = PluginAudioConfiguration {
+            sample_rate: f64::from(sample_rate),
+            frames_count_range: min_frames..=max_frames,
+        };
 
         log::trace!("clap plugin instance activate {}", self.id());
         let audio_processor = match self.instance.activate(

@@ -140,7 +140,7 @@ impl SmoothF32 {
         self.status.is_active()
     }
 
-    pub fn set_speed(&mut self, sample_rate: f64, seconds: f64) {
+    pub fn set_speed(&mut self, sample_rate: u32, seconds: f64) {
         self.b = (-1.0f32 / (seconds as f32 * sample_rate as f32)).exp();
         self.a = 1.0f32 - self.b;
     }
@@ -283,8 +283,8 @@ impl SmoothF64 {
         self.status.is_active()
     }
 
-    pub fn set_speed(&mut self, sample_rate: f64, seconds: f64) {
-        self.b = (-1.0f64 / (seconds * sample_rate)).exp();
+    pub fn set_speed(&mut self, sample_rate: u32, seconds: f64) {
+        self.b = (-1.0f64 / (seconds * f64::from(sample_rate))).exp();
         self.a = 1.0f64 - self.b;
     }
 
