@@ -21,8 +21,7 @@ pub struct TransportHandle {
     tempo_map_shared: Shared<SharedCell<(Box<dyn DSTempoMap>, u64)>>,
 
     playhead_frame_shared: Arc<AtomicU64>,
-    current_playhead_frame: u64,
-    playhead_beat: BeatTime,
+    latest_playhead_frame: u64,
 
     last_seeked_frame: u64,
 
@@ -51,17 +50,30 @@ impl TransportHandle {
         self.parameters.set(Shared::new(&self.coll_handle, params));
     }
 
-    pub fn current_playhead_position(&mut self) -> (BeatTime, u64) {
-        let new_pos_frame = self.playhead_frame_shared.load(Ordering::Relaxed);
-        if self.current_playhead_frame != new_pos_frame {
-            self.current_playhead_frame = new_pos_frame;
+    pub fn current_playhead_position_frames(&mut self) -> (u64, bool) {
+        let new_playhead_frame = self.playhead_frame_shared.load(Ordering::Relaxed);
+        if self.latest_playhead_frame != new_playhead_frame {
+            self.latest_playhead_frame = new_playhead_frame;
 
-            let tempo_map = self.tempo_map_shared.get();
-
-            self.playhead_beat = tempo_map.0.frame_to_beat(new_pos_frame);
+            (new_playhead_frame, true)
+        } else {
+            (new_playhead_frame, false)
         }
+    }
 
-        (self.playhead_beat, new_pos_frame)
+    pub fn current_playhead_position_beats(&mut self) -> (BeatTime, bool) {
+        let new_playhead_frame = self.playhead_frame_shared.load(Ordering::Relaxed);
+        let tempo_map = self.tempo_map_shared.get();
+
+        let playhead_beats = tempo_map.0.frame_to_beat(new_playhead_frame);
+
+        if self.latest_playhead_frame != new_playhead_frame {
+            self.latest_playhead_frame = new_playhead_frame;
+
+            (playhead_beats, true)
+        } else {
+            (playhead_beats, false)
+        }
     }
 
     pub fn last_seeked_frame(&self) -> u64 {
@@ -141,8 +153,6 @@ impl TransportTask {
         let playhead_frame = seek_to_frame;
         let playhead_frame_shared = Arc::new(AtomicU64::new(playhead_frame));
 
-        let playhead_beat = tempo_map.frame_to_beat(playhead_frame);
-
         let (loop_start_beats, loop_end_beats, loop_start_seconds, loop_end_seconds) =
             if let LoopState::Active { loop_start_frame, loop_end_frame } = &loop_state {
                 (
@@ -190,8 +200,7 @@ impl TransportTask {
                 tempo_map_shared,
                 coll_handle,
                 playhead_frame_shared,
-                current_playhead_frame: playhead_frame,
-                playhead_beat,
+                latest_playhead_frame: playhead_frame,
                 last_seeked_frame: playhead_frame,
             },
         )
