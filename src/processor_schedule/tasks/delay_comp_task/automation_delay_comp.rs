@@ -64,13 +64,13 @@ impl AutomationDelayCompNode {
     ) {
         let input_buf = input.borrow();
         let mut output_buf = output.borrow_mut();
-        output_buf.clear();
+        output_buf.data.clear();
 
         self.temp_buf.clear();
 
         for mut event in self.buf.drain(..) {
             if event.header.time < proc_info.frames as u32 {
-                output_buf.push(event);
+                output_buf.data.push(event);
             } else {
                 event.header.time -= proc_info.frames as u32;
                 self.temp_buf.push(event);
@@ -79,12 +79,12 @@ impl AutomationDelayCompNode {
 
         self.buf.append(&mut self.temp_buf);
 
-        for event in input_buf.iter() {
+        for event in input_buf.data.iter() {
             let mut event_delayed = *event;
             event_delayed.header.time += self.delay;
 
             if event_delayed.header.time < proc_info.frames as u32 {
-                output_buf.push(event_delayed);
+                output_buf.data.push(event_delayed);
             } else {
                 event_delayed.header.time -= proc_info.frames as u32;
                 self.buf.push(event_delayed);

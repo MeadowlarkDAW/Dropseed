@@ -196,7 +196,7 @@ impl PluginHostProcessor {
 
             let new_status =
                 if let Some(automation_out_buffer) = &mut event_buffers.automation_out_buffer {
-                    let automation_out_buffer = &mut *automation_out_buffer.borrow_mut();
+                    let automation_out_buffer = &mut automation_out_buffer.borrow_mut().data;
 
                     self.plugin_processor.process_with_automation_out(
                         proc_info,
@@ -238,14 +238,12 @@ impl PluginHostProcessor {
                 }
                 ProcessStatus::Error => {
                     // Discard all output buffers.
-                    buffers.clear_all_outputs(proc_info);
-                    buffers.set_constant_hint_on_all_outputs(true);
+                    buffers.clear_all_outputs_and_set_constant_hint(proc_info);
                     ProcessingState::Errored
                 }
             };
         } else {
-            buffers.clear_all_outputs(proc_info);
-            buffers.set_constant_hint_on_all_outputs(true);
+            buffers.clear_all_outputs_and_set_constant_hint(proc_info);
 
             if state.is_active() {
                 if has_param_in_event || param_flush_requested {
@@ -303,8 +301,7 @@ impl PluginHostProcessor {
         } else if self.bypassed {
             // If we didn't process, then the output buffers are already cleared.
             if do_process {
-                buffers.clear_all_outputs(proc_info);
-                buffers.set_constant_hint_on_all_outputs(true);
+                buffers.clear_all_outputs_and_set_constant_hint(proc_info);
             }
 
             // The plugin is currently bypassed and has finished smoothing/declicking.
@@ -323,61 +320,58 @@ impl PluginHostProcessor {
             let main_in_port = &buffers.audio_in[0];
             let main_out_port = &mut buffers.audio_out[0];
 
-            let in_port_iter = main_in_port._iter_raw_f32().unwrap();
-            let out_port_iter = main_out_port._iter_raw_f32_mut().unwrap();
+            let in_port_iter = main_in_port.iter_f32().unwrap();
+            let out_port_iter = main_out_port.iter_f32_mut().unwrap();
 
-            for (in_channel, out_channel) in in_port_iter.zip(out_port_iter) {
-                let in_channel_data = in_channel.borrow();
-                let mut out_channel_data = out_channel.borrow_mut();
+            for (in_channel, mut out_channel) in in_port_iter.zip(out_port_iter) {
                 let mut declick = self.bypass_declick;
 
                 if self.bypassed {
                     for i in 0..declick_frames {
                         declick -= self.bypass_declick_inc;
 
-                        out_channel_data[i] = (out_channel_data[i] * declick)
-                            + (in_channel_data[i] * (1.0 - declick));
+                        out_channel.data[i] = (out_channel.data[i] * declick)
+                            + (in_channel.data[i] * (1.0 - declick));
                     }
                     if declick_frames < proc_info.frames {
-                        out_channel_data[declick_frames..proc_info.frames]
-                            .copy_from_slice(&in_channel_data[declick_frames..proc_info.frames]);
+                        out_channel.data[declick_frames..proc_info.frames]
+                            .copy_from_slice(&in_channel.data[declick_frames..proc_info.frames]);
                     }
                 } else {
                     for i in 0..declick_frames {
                         declick += self.bypass_declick_inc;
 
-                        out_channel_data[i] = (out_channel_data[i] * declick)
-                            + (in_channel_data[i] * (1.0 - declick));
+                        out_channel.data[i] = (out_channel.data[i] * declick)
+                            + (in_channel.data[i] * (1.0 - declick));
                     }
                 }
 
-                out_channel.set_constant(false);
+                out_channel.is_constant = false;
             }
 
-            for out_channel in
-                main_out_port._iter_raw_f32_mut().unwrap().skip(main_in_port.channels())
+            for mut out_channel in
+                main_out_port.iter_f32_mut().unwrap().skip(main_in_port.channels())
             {
-                let mut out_channel_data = out_channel.borrow_mut();
                 let mut declick = self.bypass_declick;
 
                 if self.bypassed {
                     for i in 0..declick_frames {
                         declick -= self.bypass_declick_inc;
 
-                        out_channel_data[i] = out_channel_data[i] * declick;
+                        out_channel.data[i] = out_channel.data[i] * declick;
                     }
                     if declick_frames < proc_info.frames {
-                        out_channel_data[declick_frames..proc_info.frames].fill(0.0);
+                        out_channel.data[declick_frames..proc_info.frames].fill(0.0);
                     }
                 } else {
                     for i in 0..declick_frames {
                         declick += self.bypass_declick_inc;
 
-                        out_channel_data[i] = out_channel_data[i] * declick;
+                        out_channel.data[i] = out_channel.data[i] * declick;
                     }
                 }
 
-                out_channel.set_constant(false);
+                out_channel.is_constant = false;
             }
 
             1
@@ -386,28 +380,27 @@ impl PluginHostProcessor {
         };
 
         for out_port in buffers.audio_out.iter_mut().skip(skip_ports) {
-            for out_channel in out_port._iter_raw_f32_mut().unwrap() {
-                let mut out_channel_data = out_channel.borrow_mut();
+            for mut out_channel in out_port.iter_f32_mut().unwrap() {
                 let mut declick = self.bypass_declick;
 
                 if self.bypassed {
                     for i in 0..declick_frames {
                         declick -= self.bypass_declick_inc;
 
-                        out_channel_data[i] = out_channel_data[i] * declick;
+                        out_channel.data[i] = out_channel.data[i] * declick;
                     }
                     if declick_frames < proc_info.frames {
-                        out_channel_data[declick_frames..proc_info.frames].fill(0.0);
+                        out_channel.data[declick_frames..proc_info.frames].fill(0.0);
                     }
                 } else {
                     for i in 0..declick_frames {
                         declick += self.bypass_declick_inc;
 
-                        out_channel_data[i] = out_channel_data[i] * declick;
+                        out_channel.data[i] = out_channel.data[i] * declick;
                     }
                 }
 
-                out_channel.set_constant(false);
+                out_channel.is_constant = false;
             }
         }
 
@@ -426,17 +419,14 @@ impl PluginHostProcessor {
             let main_out_port = &mut buffers.audio_out[0];
 
             if !main_in_port.has_silent_hint() {
-                let in_port_iter = main_in_port._iter_raw_f32().unwrap();
-                let out_port_iter = main_out_port._iter_raw_f32_mut().unwrap();
+                let in_port_iter = main_in_port.iter_f32().unwrap();
+                let out_port_iter = main_out_port.iter_f32_mut().unwrap();
 
-                for (in_channel, out_channel) in in_port_iter.zip(out_port_iter) {
-                    let in_channel_data = out_channel.borrow();
-                    let mut out_channel_data = out_channel.borrow_mut();
+                for (in_channel, mut out_channel) in in_port_iter.zip(out_port_iter) {
+                    out_channel.data[0..proc_info.frames]
+                        .copy_from_slice(&in_channel.data[0..proc_info.frames]);
 
-                    out_channel_data[0..proc_info.frames]
-                        .copy_from_slice(&in_channel_data[0..proc_info.frames]);
-
-                    out_channel.set_constant(in_channel.is_constant());
+                    out_channel.is_constant = in_channel.is_constant;
                 }
             }
         }

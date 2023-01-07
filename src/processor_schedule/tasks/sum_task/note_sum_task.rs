@@ -12,11 +12,11 @@ pub(crate) struct NoteSumTask {
 impl NoteSumTask {
     pub fn process(&mut self) {
         let mut out_buf = self.note_out.borrow_mut();
-        out_buf.clear();
+        out_buf.data.clear();
 
         for in_buf in self.note_in.iter() {
             let in_buf = in_buf.borrow();
-            out_buf.extend_from_slice(in_buf.as_slice());
+            out_buf.data.extend_from_slice(in_buf.data.as_slice());
         }
     }
 }

@@ -112,6 +112,16 @@ impl ProcBuffers {
         }
     }
 
+    /// Clear all output buffers while also setting the constant hint to `true` on all
+    /// output buffers.
+    ///
+    /// All output buffers which have not already been filled manually must be cleared.
+    pub fn clear_all_outputs_and_set_constant_hint(&mut self, proc_info: &ProcInfo) {
+        for buf in self.audio_out.iter_mut() {
+            buf.clear_all_and_set_constant_hint(proc_info.frames);
+        }
+    }
+
     pub fn set_constant_hint_on_all_outputs(&mut self, is_constant: bool) {
         for buf in self.audio_out.iter_mut() {
             buf.set_constant_hint(is_constant);
@@ -132,25 +142,22 @@ impl ProcBuffers {
             let main_out_port = &mut self.audio_out[0];
 
             if !main_in_port.has_silent_hint() {
-                let in_port_iter = if let Some(i) = main_in_port._iter_raw_f32() {
+                let in_port_iter = if let Some(i) = main_in_port.iter_f32() {
                     i
                 } else {
                     return;
                 };
-                let out_port_iter = if let Some(i) = main_out_port._iter_raw_f32_mut() {
+                let out_port_iter = if let Some(i) = main_out_port.iter_f32_mut() {
                     i
                 } else {
                     return;
                 };
 
-                for (in_channel, out_channel) in in_port_iter.zip(out_port_iter) {
-                    let in_channel_data = in_channel.borrow();
-                    let mut out_channel_data = out_channel.borrow_mut();
+                for (in_channel, mut out_channel) in in_port_iter.zip(out_port_iter) {
+                    out_channel.data[0..proc_info.frames]
+                        .copy_from_slice(&in_channel.data[0..proc_info.frames]);
 
-                    out_channel_data[0..proc_info.frames]
-                        .copy_from_slice(&in_channel_data[0..proc_info.frames]);
-
-                    out_channel.set_constant(in_channel.is_constant());
+                    out_channel.is_constant = in_channel.is_constant;
                 }
             }
         }

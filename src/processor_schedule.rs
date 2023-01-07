@@ -141,7 +141,7 @@ impl ProcessorSchedule {
 
             // De-interlace the audio in stream to the graph input buffers.
             for (channel_i, buffer) in self.graph_in_task.audio_in.iter().enumerate() {
-                let buffer = &mut buffer.borrow_mut()[0..frames];
+                let buffer = &mut buffer.borrow_mut().data[0..frames];
 
                 // TODO: Check that the compiler is properly eliding bounds checking.
                 for i in 0..frames {
@@ -164,7 +164,7 @@ impl ProcessorSchedule {
 
             // Interlace the graph output buffers to the audio out stream.
             for (channel_i, buffer) in self.graph_out_task.audio_out.iter().enumerate() {
-                let buffer = &buffer.borrow()[0..frames];
+                let buffer = &buffer.borrow().data[0..frames];
 
                 // TODO: Check that the compiler is properly eliding bounds checking.
                 for i in 0..frames {

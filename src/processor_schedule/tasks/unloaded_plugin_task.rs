@@ -19,15 +19,15 @@ impl UnloadedPluginTask {
     pub fn process(&mut self, proc_info: &ProcInfo) {
         // Pass audio through the main ports.
         for (in_buf, out_buf) in self.audio_through.iter() {
-            out_buf.set_constant(in_buf.is_constant());
-
             let in_buf_ref = in_buf.borrow();
             let mut out_buf_ref = out_buf.borrow_mut();
 
-            let in_buf_part = &in_buf_ref[0..proc_info.frames];
-            let out_buf_part = &mut out_buf_ref[0..proc_info.frames];
+            let in_buf_part = &in_buf_ref.data[0..proc_info.frames];
+            let out_buf_part = &mut out_buf_ref.data[0..proc_info.frames];
 
             out_buf_part.copy_from_slice(in_buf_part);
+
+            out_buf_ref.is_constant = in_buf_ref.is_constant;
         }
 
         // Pass notes through the main ports.
@@ -35,14 +35,13 @@ impl UnloadedPluginTask {
             let in_buf_ref = in_buf.borrow();
             let mut out_buf_ref = out_buf.borrow_mut();
 
-            out_buf_ref.clear();
-            out_buf_ref.clone_from(&*in_buf_ref);
+            out_buf_ref.data.clear();
+            out_buf_ref.data.clone_from(&in_buf_ref.data);
         }
 
         // Make sure all output buffers are cleared.
         for out_buf in self.clear_audio_out.iter() {
-            out_buf.clear(proc_info.frames);
-            out_buf.set_constant(true);
+            out_buf.clear_and_set_constant_hint(proc_info.frames);
         }
         for out_buf in self.clear_note_out.iter() {
             out_buf.truncate();

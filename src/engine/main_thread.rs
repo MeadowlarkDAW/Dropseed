@@ -28,7 +28,9 @@ use crate::utils::thread_id::SharedThreadIDs;
 use super::error::{EngineCrashError, NewPluginInstanceError};
 use super::modify_request::{ModifyGraphRequest, PluginIDReq};
 use super::timer_wheel::{EngineTimerWheel, TimerEntry, TimerEntryKey};
-use super::{DEFAULT_GARBAGE_COLLECT_INTERVAL_MS, DEFAULT_IDLE_INTERVAL_MS};
+use super::{
+    ActivateEngineSettings, DEFAULT_GARBAGE_COLLECT_INTERVAL_MS, DEFAULT_IDLE_INTERVAL_MS,
+};
 
 struct ActivatedState {
     audio_graph: AudioGraph,
@@ -280,6 +282,7 @@ impl DSEngineMainThread {
             num_audio_in_channels as usize,
             num_audio_out_channels as usize,
             max_frames as usize,
+            settings.hard_clip_outputs,
             &self.collector.handle(),
         );
 
@@ -509,59 +512,6 @@ impl Drop for DSEngineMainThread {
             self.deactivate_engine();
         } else {
             self.collect_garbage();
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct ActivateEngineSettings {
-    /// The sample rate of the project.
-    pub sample_rate: u32,
-
-    /// The minimum number of frames (samples in a single audio channel)
-    /// the can be processed in a single process cycle.
-    pub min_frames: u32,
-
-    /// The maximum number of frames (samples in a single audio channel)
-    /// the can be processed in a single process cycle.
-    pub max_frames: u32,
-
-    /// The total number of input audio channels to the audio graph.
-    pub num_audio_in_channels: u16,
-
-    /// The total number of output audio channels from the audio graph.
-    pub num_audio_out_channels: u16,
-
-    /// The pre-allocated capacity for note buffers in the audio graph.
-    ///
-    /// By default this is set to `256`.
-    pub note_buffer_size: usize,
-
-    /// The pre-allocated capacity for parameter event buffers in the audio
-    /// graph.
-    ///
-    /// By default this is set to `256`.
-    pub event_buffer_size: usize,
-
-    /// The time window for the transport's declick buffers.
-    ///
-    /// Set this to `None` to have no transport declicking.
-    ///
-    /// By default this is set to `None`.
-    pub transport_declick_seconds: Option<f64>,
-}
-
-impl Default for ActivateEngineSettings {
-    fn default() -> Self {
-        Self {
-            sample_rate: 44_100,
-            min_frames: 1,
-            max_frames: 512,
-            num_audio_in_channels: 2,
-            num_audio_out_channels: 2,
-            note_buffer_size: 256,
-            event_buffer_size: 256,
-            transport_declick_seconds: None,
         }
     }
 }

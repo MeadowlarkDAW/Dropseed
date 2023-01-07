@@ -61,6 +61,7 @@ impl DSEngineAudioThread {
         graph_audio_in_channels: usize,
         graph_audio_out_channels: usize,
         max_frames: usize,
+        hard_clip_outputs: bool,
         coll_handle: &basedrop::Handle,
     ) -> (Self, DSEngineProcessThread) {
         assert_ne!(sample_rate, 0);
@@ -108,6 +109,7 @@ impl DSEngineAudioThread {
                 graph_audio_in_channels,
                 graph_audio_out_channels,
                 max_frames,
+                hard_clip_outputs,
                 schedule,
                 coll_handle,
             ),

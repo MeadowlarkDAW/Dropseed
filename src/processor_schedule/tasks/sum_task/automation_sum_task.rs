@@ -11,11 +11,11 @@ pub(crate) struct AutomationSumTask {
 impl AutomationSumTask {
     pub fn process(&mut self) {
         let mut out_buf = self.output.borrow_mut();
-        out_buf.clear();
+        out_buf.data.clear();
 
         for in_buf in self.input.iter() {
             let in_buf = in_buf.borrow();
-            out_buf.extend_from_slice(in_buf.as_slice());
+            out_buf.data.extend_from_slice(in_buf.data.as_slice());
         }
 
         // TODO: Sanitize buffers with `PluginEventOutputSanitizer`?

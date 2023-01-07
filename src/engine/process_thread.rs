@@ -20,6 +20,8 @@ pub(crate) struct DSEngineProcessThread {
     audio_in_temp_buffer: Owned<Vec<f32>>,
     audio_out_temp_buffer: Owned<Vec<f32>>,
 
+    hard_clip_outputs: bool,
+
     schedule: SharedProcessorSchedule,
 }
 
@@ -30,6 +32,7 @@ impl DSEngineProcessThread {
         graph_audio_in_channels: usize,
         graph_audio_out_channels: usize,
         max_frames: usize,
+        hard_clip_outputs: bool,
         schedule: SharedProcessorSchedule,
         coll_handle: &basedrop::Handle,
     ) -> Self {
@@ -46,6 +49,7 @@ impl DSEngineProcessThread {
                 coll_handle,
                 Vec::with_capacity(graph_audio_out_channels * max_frames),
             ),
+            hard_clip_outputs,
             schedule,
         }
     }
@@ -113,6 +117,12 @@ impl DSEngineProcessThread {
 
             self.schedule
                 .process_interleaved(&*self.audio_in_temp_buffer, &mut *self.audio_out_temp_buffer);
+
+            if self.hard_clip_outputs {
+                for smp in self.audio_out_temp_buffer.iter_mut() {
+                    *smp = smp.clamp(-1.0, 1.0);
+                }
+            }
 
             match self
                 .process_to_audio_channel

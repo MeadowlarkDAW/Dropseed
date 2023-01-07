@@ -59,7 +59,7 @@ impl AudioDelayCompNode {
         let (input_ref, mut output_ref) = (input.borrow(), output.borrow_mut());
 
         let (in_buf, out_buf) =
-            (&input_ref[0..proc_info.frames], &mut output_ref[0..proc_info.frames]);
+            (&input_ref.data[0..proc_info.frames], &mut output_ref.data[0..proc_info.frames]);
 
         if proc_info.frames > self.buf.len() {
             if self.read_pointer == 0 {
@@ -132,7 +132,7 @@ impl AudioDelayCompNode {
             }
         }
 
-        output.set_constant(is_constant);
+        output_ref.is_constant = is_constant;
     }
 
     pub fn delay(&self) -> u32 {

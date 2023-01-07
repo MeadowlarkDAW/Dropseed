@@ -2,7 +2,6 @@ use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut};
 use basedrop::Shared;
 use smallvec::SmallVec;
 use std::fmt::{Debug, Formatter};
-use std::sync::atomic::{AtomicBool, Ordering};
 
 pub use clack_host::events::io::{EventBuffer, EventBufferIter};
 
@@ -10,7 +9,6 @@ pub use clack_host::events::io::{EventBuffer, EventBufferIter};
 pub enum DebugBufferType {
     Audio32,
     Audio64,
-    IntermediaryAudio32,
     Event,
     Note,
 }
@@ -20,7 +18,6 @@ impl Debug for DebugBufferType {
         match self {
             DebugBufferType::Audio32 => f.write_str("fl"),
             DebugBufferType::Audio64 => f.write_str("db"),
-            DebugBufferType::IntermediaryAudio32 => f.write_str("ifl"),
             DebugBufferType::Event => f.write_str("ev"),
             DebugBufferType::Note => f.write_str("nt"),
         }
@@ -40,9 +37,25 @@ impl Debug for DebugBufferID {
     }
 }
 
+pub struct BufferInner<T: Clone + Copy + Send + Sync + 'static> {
+    pub data: Vec<T>,
+    pub is_constant: bool,
+}
+
+impl<T: Clone + Copy + Send + Sync + 'static> BufferInner<T> {
+    fn with_capacity(capacity: usize) -> Self {
+        Self { data: Vec::with_capacity(capacity), is_constant: false }
+    }
+}
+
+impl<T: Clone + Copy + Send + Sync + Default + 'static> BufferInner<T> {
+    fn new(max_frames: usize) -> Self {
+        Self { data: vec![T::default(); max_frames], is_constant: false }
+    }
+}
+
 struct Buffer<T: Clone + Copy + Send + Sync + 'static> {
-    data: AtomicRefCell<Vec<T>>,
-    is_constant: AtomicBool,
+    data: AtomicRefCell<BufferInner<T>>,
     debug_info: DebugBufferID,
 }
 
@@ -62,8 +75,7 @@ impl<T: Clone + Copy + Send + Sync + 'static> SharedBuffer<T> {
             buffer: Shared::new(
                 coll_handle,
                 Buffer {
-                    data: AtomicRefCell::new(Vec::with_capacity(capacity)),
-                    is_constant: AtomicBool::new(false),
+                    data: AtomicRefCell::new(BufferInner::with_capacity(capacity)),
                     debug_info,
                 },
             ),
@@ -71,23 +83,13 @@ impl<T: Clone + Copy + Send + Sync + 'static> SharedBuffer<T> {
     }
 
     #[inline]
-    pub fn borrow(&self) -> AtomicRef<Vec<T>> {
+    pub fn borrow(&self) -> AtomicRef<BufferInner<T>> {
         self.buffer.data.borrow()
     }
 
     #[inline]
-    pub fn borrow_mut(&self) -> AtomicRefMut<Vec<T>> {
+    pub fn borrow_mut(&self) -> AtomicRefMut<BufferInner<T>> {
         self.buffer.data.borrow_mut()
-    }
-
-    #[inline]
-    pub fn set_constant(&self, is_constant: bool) {
-        self.buffer.is_constant.store(is_constant, Ordering::SeqCst);
-    }
-
-    #[inline]
-    pub fn is_constant(&self) -> bool {
-        self.buffer.is_constant.load(Ordering::SeqCst)
     }
 
     #[inline]
@@ -96,7 +98,7 @@ impl<T: Clone + Copy + Send + Sync + 'static> SharedBuffer<T> {
     }
 
     pub fn truncate(&self) {
-        self.borrow_mut().truncate(0)
+        self.borrow_mut().data.truncate(0)
     }
 }
 
@@ -109,21 +111,24 @@ impl<T: Clone + Copy + Send + Sync + 'static + Default> SharedBuffer<T> {
         Self {
             buffer: Shared::new(
                 coll_handle,
-                Buffer {
-                    data: AtomicRefCell::new(vec![T::default(); max_frames]),
-                    is_constant: AtomicBool::new(false),
-                    debug_info,
-                },
+                Buffer { data: AtomicRefCell::new(BufferInner::new(max_frames)), debug_info },
             ),
         }
     }
+
     pub fn clear(&self, frames: usize) {
         let mut buf_ref = self.borrow_mut();
-        let frames = frames.min(buf_ref.len());
+        let frames = frames.min(buf_ref.data.len());
 
-        buf_ref[0..frames].fill(T::default());
+        buf_ref.data[0..frames].fill(T::default());
+    }
 
-        //self.set_constant(true);
+    pub fn clear_and_set_constant_hint(&self, frames: usize) {
+        let mut buf_ref = self.borrow_mut();
+        let frames = frames.min(buf_ref.data.len());
+
+        buf_ref.data[0..frames].fill(T::default());
+        buf_ref.is_constant = true;
     }
 }
 
@@ -133,7 +138,8 @@ impl<T: Copy + Default + PartialEq + Send + Sync + 'static> SharedBuffer<T> {
     /// This only relies on the `is_constant` flag and the first sample of the buffer, and thus
     /// may not be accurate.
     pub fn has_silent_hint(&self) -> bool {
-        self.is_constant() && self.borrow()[0] == T::default()
+        let b = self.borrow();
+        b.is_constant && b.data[0] == T::default()
     }
 }
 
@@ -215,7 +221,7 @@ impl AudioPortBuffer {
             RawAudioChannelBuffers::F32(buffers) => {
                 for buf in buffers.iter() {
                     let buf = buf.borrow();
-                    let buf = &buf[0..frames.min(buf.len())];
+                    let buf = &buf.data[0..frames.min(buf.data.len())];
                     for x in buf.iter() {
                         if *x != 0.0 {
                             return false;
@@ -226,7 +232,7 @@ impl AudioPortBuffer {
             RawAudioChannelBuffers::F64(buffers) => {
                 for buf in buffers.iter() {
                     let buf = buf.borrow();
-                    let buf = &buf[0..frames.min(buf.len())];
+                    let buf = &buf.data[0..frames.min(buf.data.len())];
                     for x in buf.iter() {
                         if *x != 0.0 {
                             return false;
@@ -239,21 +245,21 @@ impl AudioPortBuffer {
         true
     }
 
-    pub fn channel_f32(&self, index: usize) -> Option<AtomicRef<Vec<f32>>> {
+    pub fn channel_f32(&self, index: usize) -> Option<AtomicRef<BufferInner<f32>>> {
         match &self._raw_channels {
             RawAudioChannelBuffers::F32(b) => b.get(index).map(|b| b.borrow()),
             _ => None,
         }
     }
 
-    pub fn mono_f32(&self) -> Option<AtomicRef<Vec<f32>>> {
+    pub fn mono_f32(&self) -> Option<AtomicRef<BufferInner<f32>>> {
         match &self._raw_channels {
             RawAudioChannelBuffers::F32(b) => Some(b[0].borrow()),
             _ => None,
         }
     }
 
-    pub fn stereo_f32(&self) -> Option<(AtomicRef<Vec<f32>>, AtomicRef<Vec<f32>>)> {
+    pub fn stereo_f32(&self) -> Option<(AtomicRef<BufferInner<f32>>, AtomicRef<BufferInner<f32>>)> {
         match &self._raw_channels {
             RawAudioChannelBuffers::F32(b) => {
                 if b.len() > 1 {
@@ -266,7 +272,7 @@ impl AudioPortBuffer {
         }
     }
 
-    pub fn iter_f32(&self) -> Option<impl Iterator<Item = AtomicRef<'_, Vec<f32>>>> {
+    pub fn iter_f32(&self) -> Option<impl Iterator<Item = AtomicRef<'_, BufferInner<f32>>>> {
         if let RawAudioChannelBuffers::F32(b) = &self._raw_channels {
             Some(b.iter().map(|b| b.borrow()))
         } else {
@@ -274,6 +280,7 @@ impl AudioPortBuffer {
         }
     }
 
+    /*
     pub fn _iter_raw_f32(&self) -> Option<impl Iterator<Item = &'_ SharedBuffer<f32>>> {
         if let RawAudioChannelBuffers::F32(b) = &self._raw_channels {
             Some(b.iter())
@@ -281,6 +288,7 @@ impl AudioPortBuffer {
             None
         }
     }
+    */
 
     // TODO: Helper methods to retrieve more than 2 channels at once
 }
@@ -312,35 +320,35 @@ impl AudioPortBufferMut {
         self.channels
     }
 
-    pub fn channel_f32(&self, index: usize) -> Option<AtomicRef<Vec<f32>>> {
+    pub fn channel_f32(&self, index: usize) -> Option<AtomicRef<BufferInner<f32>>> {
         match &self._raw_channels {
             RawAudioChannelBuffers::F32(b) => b.get(index).map(|b| b.borrow()),
             _ => None,
         }
     }
 
-    pub fn channel_f32_mut(&mut self, index: usize) -> Option<AtomicRefMut<Vec<f32>>> {
+    pub fn channel_f32_mut(&mut self, index: usize) -> Option<AtomicRefMut<BufferInner<f32>>> {
         match &mut self._raw_channels {
             RawAudioChannelBuffers::F32(b) => b.get(index).map(|b| b.borrow_mut()),
             _ => None,
         }
     }
 
-    pub fn mono_f32(&self) -> Option<AtomicRef<Vec<f32>>> {
+    pub fn mono_f32(&self) -> Option<AtomicRef<BufferInner<f32>>> {
         match &self._raw_channels {
             RawAudioChannelBuffers::F32(b) => Some(b[0].borrow()),
             _ => None,
         }
     }
 
-    pub fn mono_f32_mut(&mut self) -> Option<AtomicRefMut<Vec<f32>>> {
+    pub fn mono_f32_mut(&mut self) -> Option<AtomicRefMut<BufferInner<f32>>> {
         match &mut self._raw_channels {
             RawAudioChannelBuffers::F32(b) => Some(b[0].borrow_mut()),
             _ => None,
         }
     }
 
-    pub fn stereo_f32(&self) -> Option<(AtomicRef<Vec<f32>>, AtomicRef<Vec<f32>>)> {
+    pub fn stereo_f32(&self) -> Option<(AtomicRef<BufferInner<f32>>, AtomicRef<BufferInner<f32>>)> {
         match &self._raw_channels {
             RawAudioChannelBuffers::F32(b) => {
                 if b.len() > 1 {
@@ -353,7 +361,9 @@ impl AudioPortBufferMut {
         }
     }
 
-    pub fn stereo_f32_mut(&mut self) -> Option<(AtomicRefMut<Vec<f32>>, AtomicRefMut<Vec<f32>>)> {
+    pub fn stereo_f32_mut(
+        &mut self,
+    ) -> Option<(AtomicRefMut<BufferInner<f32>>, AtomicRefMut<BufferInner<f32>>)> {
         match &mut self._raw_channels {
             RawAudioChannelBuffers::F32(b) => {
                 if b.len() > 1 {
@@ -382,7 +392,7 @@ impl AudioPortBufferMut {
             RawAudioChannelBuffers::F32(buffers) => {
                 for buf in buffers {
                     let buf = buf.borrow();
-                    let buf = &buf[0..frames.min(buf.len())];
+                    let buf = &buf.data[0..frames.min(buf.data.len())];
                     for x in buf.iter() {
                         if *x != 0.0 {
                             return false;
@@ -393,7 +403,7 @@ impl AudioPortBufferMut {
             RawAudioChannelBuffers::F64(buffers) => {
                 for buf in buffers {
                     let buf = buf.borrow();
-                    let buf = &buf[0..frames.min(buf.len())];
+                    let buf = &buf.data[0..frames.min(buf.data.len())];
                     for x in buf.iter() {
                         if *x != 0.0 {
                             return false;
@@ -406,6 +416,7 @@ impl AudioPortBufferMut {
         true
     }
 
+    /*
     /// Set the constant hint for a specific channel.
     pub fn set_constant_hint_for_channel(&mut self, channel: usize, is_constant: bool) {
         match &self._raw_channels {
@@ -421,22 +432,25 @@ impl AudioPortBufferMut {
             }
         }
     }
+    */
 
+    /*
     /// Set the constant hint for all channels.
     pub fn set_constant_hint(&mut self, is_constant: bool) {
         match &self._raw_channels {
             RawAudioChannelBuffers::F32(buffers) => {
                 for buf in buffers {
-                    buf.set_constant(is_constant)
+                    buf.borrow_mut().is_constant = is_constant;
                 }
             }
             RawAudioChannelBuffers::F64(buffers) => {
                 for buf in buffers {
-                    buf.set_constant(is_constant)
+                    buf.borrow_mut().is_constant = is_constant;
                 }
             }
         }
     }
+    */
 
     /// Clear the number of frames in all channels.
     ///
@@ -456,7 +470,39 @@ impl AudioPortBufferMut {
         }
     }
 
-    pub fn iter_f32(&self) -> Option<impl Iterator<Item = AtomicRef<'_, Vec<f32>>>> {
+    /// Clear the number of frames in all channels, and also
+    /// set the constant hint to `true` for all channels.
+    pub fn clear_all_and_set_constant_hint(&mut self, frames: usize) {
+        match &self._raw_channels {
+            RawAudioChannelBuffers::F32(buffers) => {
+                for buf in buffers {
+                    buf.clear_and_set_constant_hint(frames);
+                }
+            }
+            RawAudioChannelBuffers::F64(buffers) => {
+                for buf in buffers {
+                    buf.clear_and_set_constant_hint(frames);
+                }
+            }
+        }
+    }
+
+    pub fn set_constant_hint(&mut self, is_constant: bool) {
+        match &self._raw_channels {
+            RawAudioChannelBuffers::F32(buffers) => {
+                for buf in buffers {
+                    buf.borrow_mut().is_constant = is_constant;
+                }
+            }
+            RawAudioChannelBuffers::F64(buffers) => {
+                for buf in buffers {
+                    buf.borrow_mut().is_constant = is_constant;
+                }
+            }
+        }
+    }
+
+    pub fn iter_f32(&self) -> Option<impl Iterator<Item = AtomicRef<'_, BufferInner<f32>>>> {
         if let RawAudioChannelBuffers::F32(b) = &self._raw_channels {
             Some(b.iter().map(|b| b.borrow()))
         } else {
@@ -464,7 +510,9 @@ impl AudioPortBufferMut {
         }
     }
 
-    pub fn iter_f32_mut(&mut self) -> Option<impl Iterator<Item = AtomicRefMut<'_, Vec<f32>>>> {
+    pub fn iter_f32_mut(
+        &mut self,
+    ) -> Option<impl Iterator<Item = AtomicRefMut<'_, BufferInner<f32>>>> {
         if let RawAudioChannelBuffers::F32(b) = &mut self._raw_channels {
             Some(b.iter_mut().map(|b| b.borrow_mut()))
         } else {
@@ -472,6 +520,7 @@ impl AudioPortBufferMut {
         }
     }
 
+    /*
     pub fn _iter_raw_f32(&self) -> Option<impl Iterator<Item = &'_ SharedBuffer<f32>>> {
         if let RawAudioChannelBuffers::F32(b) = &self._raw_channels {
             Some(b.iter())
@@ -487,6 +536,7 @@ impl AudioPortBufferMut {
             None
         }
     }
+    */
 
     // TODO: Helper methods to retrieve more than 2 channels at once
 }

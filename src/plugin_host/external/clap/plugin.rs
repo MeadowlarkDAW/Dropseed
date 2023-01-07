@@ -6,7 +6,7 @@ use clack_extensions::timer::TimerId;
 use clack_host::events::io::{InputEvents, OutputEvents};
 use clack_host::instance::processor::PluginAudioProcessor;
 use clack_host::instance::{PluginAudioConfiguration, PluginInstance};
-use dropseed_plugin_api::buffer::RawAudioChannelBuffers;
+use dropseed_plugin_api::buffer::{BufferInner, RawAudioChannelBuffers};
 use dropseed_plugin_api::ext::audio_ports::{AudioPortInfo, MainPortsLayout, PluginAudioPortsExt};
 use dropseed_plugin_api::ext::gui::{EmbeddedGuiInfo, GuiSize};
 use dropseed_plugin_api::ext::note_ports::{NotePortInfo, PluginNotePortsExt};
@@ -698,13 +698,15 @@ impl PluginProcessor for ClapPluginProcessor {
             // In debug mode, borrow all of the atomic ref cells to properly use the
             // safety checks, since external plugins just use the raw pointer to each
             // buffer.
-            #[cfg(debug_assertions)]
+            //#[cfg(debug_assertions)]
             let (mut input_refs_f32, mut input_refs_f64, mut output_refs_f32, mut output_refs_f64) = {
-                let mut input_refs_f32: SmallVec<[AtomicRef<'_, Vec<f32>>; 32]> = SmallVec::new();
-                let mut input_refs_f64: SmallVec<[AtomicRef<'_, Vec<f64>>; 32]> = SmallVec::new();
-                let mut output_refs_f32: SmallVec<[AtomicRefMut<'_, Vec<f32>>; 32]> =
+                let mut input_refs_f32: SmallVec<[AtomicRef<'_, BufferInner<f32>>; 32]> =
                     SmallVec::new();
-                let mut output_refs_f64: SmallVec<[AtomicRefMut<'_, Vec<f64>>; 32]> =
+                let mut input_refs_f64: SmallVec<[AtomicRef<'_, BufferInner<f64>>; 32]> =
+                    SmallVec::new();
+                let mut output_refs_f32: SmallVec<[AtomicRefMut<'_, BufferInner<f32>>; 32]> =
+                    SmallVec::new();
+                let mut output_refs_f64: SmallVec<[AtomicRefMut<'_, BufferInner<f64>>; 32]> =
                     SmallVec::new();
 
                 for in_port in buffers.audio_in.iter() {
@@ -757,7 +759,7 @@ impl PluginProcessor for ClapPluginProcessor {
 
             // TODO: Sync audio output constant flags.
 
-            #[cfg(debug_assertions)]
+            //#[cfg(debug_assertions)]
             {
                 input_refs_f32.clear();
                 input_refs_f64.clear();

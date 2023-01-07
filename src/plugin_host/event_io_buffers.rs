@@ -63,7 +63,7 @@ impl PluginEventIoBuffers {
         let mut wrote_note_event = false;
 
         for (note_port_index, buffer) in self.note_in_buffers.iter().enumerate() {
-            for event in buffer.borrow().iter() {
+            for event in buffer.borrow().data.iter() {
                 let event = PluginIoEvent::NoteEvent {
                     note_port_index: note_port_index as i16,
                     event: *event,
@@ -84,7 +84,7 @@ impl PluginEventIoBuffers {
         let mut wrote_event = false;
 
         if let Some((in_buf, _)) = &self.automation_in_buffer {
-            for event in in_buf.borrow().iter() {
+            for event in in_buf.borrow().data.iter() {
                 if event.plugin_instance_id == plugin_instance_id {
                     let event = PluginIoEvent::AutomationEvent { event: *event };
                     event.write_to_clap_buffer(raw_event_buffer);
@@ -112,7 +112,7 @@ impl PluginEventIoBuffers {
             match event {
                 PluginIoEvent::NoteEvent { note_port_index, event } => {
                     if let Some(b) = self.note_out_buffers.get(note_port_index as usize) {
-                        b.borrow_mut().push(event)
+                        b.borrow_mut().data.push(event)
                     }
                 }
                 PluginIoEvent::AutomationEvent { event } => {
@@ -142,8 +142,8 @@ impl PluginEventIoBuffers {
             let in_buf = self.note_in_buffers[0].borrow();
             let mut out_buf = self.note_out_buffers[0].borrow_mut();
 
-            for event in in_buf.iter() {
-                out_buf.push(*event);
+            for event in in_buf.data.iter() {
+                out_buf.data.push(*event);
             }
         }
     }

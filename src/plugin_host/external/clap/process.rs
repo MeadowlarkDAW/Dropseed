@@ -5,27 +5,29 @@ use clack_host::instance::processor::audio::{
 };
 use std::ops::{Deref, DerefMut};
 
-use dropseed_plugin_api::buffer::RawAudioChannelBuffers;
+use dropseed_plugin_api::buffer::{BufferInner, RawAudioChannelBuffers};
 use dropseed_plugin_api::ProcBuffers;
 
 use super::plugin::AudioPortChannels;
 
 // Deref coercion struggles to go from AtomicRefMut<Vec<T>> to [T]
-struct BorrowedBuffer<'a, T>(AtomicRefMut<'a, Vec<T>>);
+struct BorrowedBuffer<'a, T: Copy + Clone + Send + Sync + 'static>(
+    AtomicRefMut<'a, BufferInner<T>>,
+);
 
-impl<'a, T> Deref for BorrowedBuffer<'a, T> {
+impl<'a, T: Copy + Clone + Send + Sync + 'static> Deref for BorrowedBuffer<'a, T> {
     type Target = [T];
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        self.0.deref().deref()
+        self.0.data.as_ref()
     }
 }
 
-impl<'a, T> DerefMut for BorrowedBuffer<'a, T> {
+impl<'a, T: Copy + Clone + Send + Sync + 'static> DerefMut for BorrowedBuffer<'a, T> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.0.as_mut_slice()
+        self.0.data.as_mut_slice()
     }
 }
 
@@ -61,15 +63,19 @@ impl ClapProcess {
             latency: port.latency(),
             channels: match &port._raw_channels {
                 RawAudioChannelBuffers::F32(channels) => {
-                    AudioPortBufferType::F32(channels.iter().map(|channel| ChannelBuffer {
-                        data: BorrowedBuffer(channel.borrow_mut()),
-                        is_constant: channel.is_constant(),
+                    AudioPortBufferType::F32(channels.iter().map(|channel| {
+                        let buf = channel.borrow_mut();
+                        let is_constant = buf.is_constant;
+
+                        ChannelBuffer { data: BorrowedBuffer(buf), is_constant }
                     }))
                 }
                 RawAudioChannelBuffers::F64(channels) => {
-                    AudioPortBufferType::F64(channels.iter().map(|channel| ChannelBuffer {
-                        data: BorrowedBuffer(channel.borrow_mut()),
-                        is_constant: channel.is_constant(),
+                    AudioPortBufferType::F64(channels.iter().map(|channel| {
+                        let buf = channel.borrow_mut();
+                        let is_constant = buf.is_constant;
+
+                        ChannelBuffer { data: BorrowedBuffer(buf), is_constant }
                     }))
                 }
             },
@@ -79,15 +85,19 @@ impl ClapProcess {
             latency: port.latency(),
             channels: match &port._raw_channels {
                 RawAudioChannelBuffers::F32(channels) => {
-                    AudioPortBufferType::F32(channels.iter().map(|channel| ChannelBuffer {
-                        data: BorrowedBuffer(channel.borrow_mut()),
-                        is_constant: channel.is_constant(),
+                    AudioPortBufferType::F32(channels.iter().map(|channel| {
+                        let buf = channel.borrow_mut();
+                        let is_constant = buf.is_constant;
+
+                        ChannelBuffer { data: BorrowedBuffer(buf), is_constant }
                     }))
                 }
                 RawAudioChannelBuffers::F64(channels) => {
-                    AudioPortBufferType::F64(channels.iter().map(|channel| ChannelBuffer {
-                        data: BorrowedBuffer(channel.borrow_mut()),
-                        is_constant: channel.is_constant(),
+                    AudioPortBufferType::F64(channels.iter().map(|channel| {
+                        let buf = channel.borrow_mut();
+                        let is_constant = buf.is_constant;
+
+                        ChannelBuffer { data: BorrowedBuffer(buf), is_constant }
                     }))
                 }
             },
