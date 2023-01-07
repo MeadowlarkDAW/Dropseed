@@ -8,9 +8,6 @@ use std::hash::Hash;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-pub static DEFAULT_IDLE_INTERVAL_MS: u32 = 16;
-pub static DEFAULT_GARBAGE_COLLECT_INTERVAL_MS: u32 = 3_000;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum TimerEntryKey {
     MainIdle,

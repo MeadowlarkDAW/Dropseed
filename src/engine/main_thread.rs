@@ -28,9 +28,7 @@ use crate::utils::thread_id::SharedThreadIDs;
 use super::error::{EngineCrashError, NewPluginInstanceError};
 use super::modify_request::{ModifyGraphRequest, PluginIDReq};
 use super::timer_wheel::{EngineTimerWheel, TimerEntry, TimerEntryKey};
-use super::{
-    ActivateEngineSettings, DEFAULT_GARBAGE_COLLECT_INTERVAL_MS, DEFAULT_IDLE_INTERVAL_MS,
-};
+use super::{ActivateEngineSettings, EngineSettings};
 
 struct ActivatedState {
     audio_graph: AudioGraph,
@@ -47,21 +45,6 @@ impl Drop for ActivatedState {
             if let Err(e) = process_thread_handle.join() {
                 log::error!("Failed to join process thread handle: {:?}", e);
             }
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EngineSettings {
-    pub main_idle_interval_ms: u32,
-    pub garbage_collect_interval_ms: u32,
-}
-
-impl Default for EngineSettings {
-    fn default() -> Self {
-        Self {
-            main_idle_interval_ms: DEFAULT_IDLE_INTERVAL_MS,
-            garbage_collect_interval_ms: DEFAULT_GARBAGE_COLLECT_INTERVAL_MS,
         }
     }
 }

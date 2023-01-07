@@ -1,3 +1,21 @@
+pub static DEFAULT_IDLE_INTERVAL_MS: u32 = 16;
+pub static DEFAULT_GARBAGE_COLLECT_INTERVAL_MS: u32 = 3_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EngineSettings {
+    pub main_idle_interval_ms: u32,
+    pub garbage_collect_interval_ms: u32,
+}
+
+impl Default for EngineSettings {
+    fn default() -> Self {
+        Self {
+            main_idle_interval_ms: DEFAULT_IDLE_INTERVAL_MS,
+            garbage_collect_interval_ms: DEFAULT_GARBAGE_COLLECT_INTERVAL_MS,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ActivateEngineSettings {
     /// The sample rate of the project.
