@@ -178,6 +178,9 @@ pub enum AudioBufferTypeMut<'a> {
     F64(AtomicRefMut<'a, Vec<f64>>),
 }
 
+pub type BufferRef<'a, T> = AtomicRef<'a, BufferInner<T>>;
+pub type BufferRefMut<'a, T> = AtomicRefMut<'a, BufferInner<T>>;
+
 pub struct AudioPortBuffer {
     pub _raw_channels: RawAudioChannelBuffers,
     channels: usize,
@@ -245,21 +248,21 @@ impl AudioPortBuffer {
         true
     }
 
-    pub fn channel_f32(&self, index: usize) -> Option<AtomicRef<BufferInner<f32>>> {
+    pub fn channel_f32(&self, index: usize) -> Option<BufferRef<f32>> {
         match &self._raw_channels {
             RawAudioChannelBuffers::F32(b) => b.get(index).map(|b| b.borrow()),
             _ => None,
         }
     }
 
-    pub fn mono_f32(&self) -> Option<AtomicRef<BufferInner<f32>>> {
+    pub fn mono_f32(&self) -> Option<BufferRef<f32>> {
         match &self._raw_channels {
             RawAudioChannelBuffers::F32(b) => Some(b[0].borrow()),
             _ => None,
         }
     }
 
-    pub fn stereo_f32(&self) -> Option<(AtomicRef<BufferInner<f32>>, AtomicRef<BufferInner<f32>>)> {
+    pub fn stereo_f32(&self) -> Option<(BufferRef<f32>, BufferRef<f32>)> {
         match &self._raw_channels {
             RawAudioChannelBuffers::F32(b) => {
                 if b.len() > 1 {
@@ -279,16 +282,6 @@ impl AudioPortBuffer {
             None
         }
     }
-
-    /*
-    pub fn _iter_raw_f32(&self) -> Option<impl Iterator<Item = &'_ SharedBuffer<f32>>> {
-        if let RawAudioChannelBuffers::F32(b) = &self._raw_channels {
-            Some(b.iter())
-        } else {
-            None
-        }
-    }
-    */
 
     // TODO: Helper methods to retrieve more than 2 channels at once
 }
@@ -320,35 +313,35 @@ impl AudioPortBufferMut {
         self.channels
     }
 
-    pub fn channel_f32(&self, index: usize) -> Option<AtomicRef<BufferInner<f32>>> {
+    pub fn channel_f32(&self, index: usize) -> Option<BufferRef<f32>> {
         match &self._raw_channels {
             RawAudioChannelBuffers::F32(b) => b.get(index).map(|b| b.borrow()),
             _ => None,
         }
     }
 
-    pub fn channel_f32_mut(&mut self, index: usize) -> Option<AtomicRefMut<BufferInner<f32>>> {
+    pub fn channel_f32_mut(&mut self, index: usize) -> Option<BufferRefMut<f32>> {
         match &mut self._raw_channels {
             RawAudioChannelBuffers::F32(b) => b.get(index).map(|b| b.borrow_mut()),
             _ => None,
         }
     }
 
-    pub fn mono_f32(&self) -> Option<AtomicRef<BufferInner<f32>>> {
+    pub fn mono_f32(&self) -> Option<BufferRef<f32>> {
         match &self._raw_channels {
             RawAudioChannelBuffers::F32(b) => Some(b[0].borrow()),
             _ => None,
         }
     }
 
-    pub fn mono_f32_mut(&mut self) -> Option<AtomicRefMut<BufferInner<f32>>> {
+    pub fn mono_f32_mut(&mut self) -> Option<BufferRefMut<f32>> {
         match &mut self._raw_channels {
             RawAudioChannelBuffers::F32(b) => Some(b[0].borrow_mut()),
             _ => None,
         }
     }
 
-    pub fn stereo_f32(&self) -> Option<(AtomicRef<BufferInner<f32>>, AtomicRef<BufferInner<f32>>)> {
+    pub fn stereo_f32(&self) -> Option<(BufferRef<f32>, BufferRef<f32>)> {
         match &self._raw_channels {
             RawAudioChannelBuffers::F32(b) => {
                 if b.len() > 1 {
@@ -361,9 +354,7 @@ impl AudioPortBufferMut {
         }
     }
 
-    pub fn stereo_f32_mut(
-        &mut self,
-    ) -> Option<(AtomicRefMut<BufferInner<f32>>, AtomicRefMut<BufferInner<f32>>)> {
+    pub fn stereo_f32_mut(&mut self) -> Option<(BufferRefMut<f32>, BufferRefMut<f32>)> {
         match &mut self._raw_channels {
             RawAudioChannelBuffers::F32(b) => {
                 if b.len() > 1 {
@@ -415,42 +406,6 @@ impl AudioPortBufferMut {
 
         true
     }
-
-    /*
-    /// Set the constant hint for a specific channel.
-    pub fn set_constant_hint_for_channel(&mut self, channel: usize, is_constant: bool) {
-        match &self._raw_channels {
-            RawAudioChannelBuffers::F32(buffers) => {
-                if let Some(buf) = buffers.get(channel) {
-                    buf.set_constant(is_constant);
-                }
-            }
-            RawAudioChannelBuffers::F64(buffers) => {
-                if let Some(buf) = buffers.get(channel) {
-                    buf.set_constant(is_constant);
-                }
-            }
-        }
-    }
-    */
-
-    /*
-    /// Set the constant hint for all channels.
-    pub fn set_constant_hint(&mut self, is_constant: bool) {
-        match &self._raw_channels {
-            RawAudioChannelBuffers::F32(buffers) => {
-                for buf in buffers {
-                    buf.borrow_mut().is_constant = is_constant;
-                }
-            }
-            RawAudioChannelBuffers::F64(buffers) => {
-                for buf in buffers {
-                    buf.borrow_mut().is_constant = is_constant;
-                }
-            }
-        }
-    }
-    */
 
     /// Clear the number of frames in all channels.
     ///
@@ -519,24 +474,6 @@ impl AudioPortBufferMut {
             None
         }
     }
-
-    /*
-    pub fn _iter_raw_f32(&self) -> Option<impl Iterator<Item = &'_ SharedBuffer<f32>>> {
-        if let RawAudioChannelBuffers::F32(b) = &self._raw_channels {
-            Some(b.iter())
-        } else {
-            None
-        }
-    }
-
-    pub fn _iter_raw_f32_mut(&mut self) -> Option<impl Iterator<Item = &'_ mut SharedBuffer<f32>>> {
-        if let RawAudioChannelBuffers::F32(b) = &mut self._raw_channels {
-            Some(b.iter_mut())
-        } else {
-            None
-        }
-    }
-    */
 
     // TODO: Helper methods to retrieve more than 2 channels at once
 }

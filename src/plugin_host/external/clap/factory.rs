@@ -95,7 +95,7 @@ pub(crate) fn entry_init(
         ));
     }
 
-    let mut factories: Vec<ClapPluginFactory> = Vec::with_capacity(num_plugins as usize);
+    let mut factories: Vec<ClapPluginFactory> = Vec::with_capacity(num_plugins);
 
     for i in 0..num_plugins {
         // Safe because this is the correct format of this function as described in the

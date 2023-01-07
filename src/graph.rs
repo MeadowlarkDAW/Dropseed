@@ -123,6 +123,7 @@ pub(crate) struct AudioGraph {
 }
 
 impl AudioGraph {
+    #[allow(clippy::too_many_arguments)] // Fix this?
     pub fn new(
         coll_handle: basedrop::Handle,
         graph_in_channels: usize,
@@ -252,8 +253,8 @@ impl AudioGraph {
 
         let activation_status = match plugin_host.activate(
             self.sample_rate,
-            self.min_frames as u32,
-            self.max_frames as u32,
+            self.min_frames,
+            self.max_frames,
             &mut self.graph_helper,
             &mut self.edge_id_to_ds_edge_id,
             self.thread_ids.clone(),

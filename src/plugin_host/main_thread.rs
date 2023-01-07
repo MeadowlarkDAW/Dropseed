@@ -398,7 +398,7 @@ impl PluginHostMainThread {
 
         let res = self.plug_main_thread.create_new_floating_gui(suggested_title);
 
-        if let Ok(_) = &res {
+        if res.is_ok() {
             self.gui_active = true;
             self.gui_visible = false;
         }
@@ -444,7 +444,7 @@ impl PluginHostMainThread {
 
         let res = self.plug_main_thread.create_new_embedded_gui(scale, size, parent_window);
 
-        if let Ok(_) = &res {
+        if res.is_ok() {
             self.gui_active = true;
             self.gui_visible = false;
         }
@@ -555,7 +555,7 @@ impl PluginHostMainThread {
         }
 
         let res = self.plug_main_thread.hide_gui();
-        self.gui_visible = !res.is_ok();
+        self.gui_visible = res.is_err();
         res
     }
 
@@ -685,6 +685,7 @@ impl PluginHostMainThread {
     }
 
     // TODO: let the user manually activate an inactive plugin
+    #[allow(clippy::too_many_arguments)] // Fix this?
     pub(crate) fn activate(
         &mut self,
         sample_rate: u32,
@@ -1008,38 +1009,35 @@ impl PluginHostMainThread {
             let events_iter = deactivated_event_buffers.sanitizer.sanitize(events_iter, None);
 
             for event in events_iter {
-                match event {
-                    PluginIoEvent::AutomationEvent { event } => {
-                        if let Some(new_value) =
-                            ProcToMainParamValue::from_param_event(event.event_type)
-                        {
-                            let param_id = ParamID::new(event.parameter_id);
-                            if let Some(param_state) = self.param_states.get_mut(&param_id) {
-                                if let Some(gesture) = new_value.gesture {
-                                    param_state.is_gesturing = gesture.is_begin;
+                if let PluginIoEvent::AutomationEvent { event } = event {
+                    if let Some(new_value) =
+                        ProcToMainParamValue::from_param_event(event.event_type)
+                    {
+                        let param_id = ParamID::new(event.parameter_id);
+                        if let Some(param_state) = self.param_states.get_mut(&param_id) {
+                            if let Some(gesture) = new_value.gesture {
+                                param_state.is_gesturing = gesture.is_begin;
 
-                                    if !gesture.is_begin {
-                                        // Only mark the state dirty once the user has finished adjusting
-                                        // the parameter.
-                                        self.save_state_dirty = true;
-                                    }
-                                } else {
+                                if !gesture.is_begin {
+                                    // Only mark the state dirty once the user has finished adjusting
+                                    // the parameter.
                                     self.save_state_dirty = true;
-                                };
-
-                                if let Some(v) = new_value.value {
-                                    param_state.value = v;
                                 }
+                            } else {
+                                self.save_state_dirty = true;
+                            };
 
-                                modified_params.push(ParamModifiedInfo {
-                                    param_id,
-                                    new_value: new_value.value,
-                                    is_gesturing: param_state.is_gesturing,
-                                })
+                            if let Some(v) = new_value.value {
+                                param_state.value = v;
                             }
+
+                            modified_params.push(ParamModifiedInfo {
+                                param_id,
+                                new_value: new_value.value,
+                                is_gesturing: param_state.is_gesturing,
+                            })
                         }
                     }
-                    _ => {}
                 }
             }
         }
@@ -1052,6 +1050,7 @@ impl PluginHostMainThread {
     ///
     /// Returns the status of this plugin, along with a list of any parameters
     /// that were modified inside the plugin's custom GUI.
+    #[allow(clippy::too_many_arguments)] // Fix this?
     pub(crate) fn on_idle(
         &mut self,
         sample_rate: u32,

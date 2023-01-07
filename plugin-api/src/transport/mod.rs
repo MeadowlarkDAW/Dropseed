@@ -32,6 +32,7 @@ impl std::fmt::Debug for TransportInfo {
 }
 
 impl TransportInfo {
+    #[allow(clippy::too_many_arguments)]
     pub fn _new(
         playhead_frame: u64,
         is_playing: bool,

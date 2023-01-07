@@ -136,7 +136,7 @@ impl DSEngineMainThread {
 
     /// Retrieve the info about this host
     pub fn host_info(&self) -> &HostInfo {
-        &*self.host_info
+        &self.host_info
     }
 
     /// Get an immutable reference to the host for a particular plugin.
@@ -176,7 +176,7 @@ impl DSEngineMainThread {
 
         for elapsed_entry in elapsed_entries.drain(..) {
             match elapsed_entry.key {
-                TimerEntryKey::MainIdleTimer => {
+                TimerEntryKey::MainIdle => {
                     if let Some(activated_state) = &mut self.activated_state {
                         let recompile = activated_state
                             .audio_graph
@@ -187,10 +187,10 @@ impl DSEngineMainThread {
                         }
                     }
                 }
-                TimerEntryKey::GarbageCollectTimer => {
+                TimerEntryKey::GarbageCollect => {
                     self.collect_garbage();
                 }
-                TimerEntryKey::PluginRegisteredTimer { plugin_unique_id, timer_id } => {
+                TimerEntryKey::PluginRegistered { plugin_unique_id, timer_id } => {
                     if let Some(activated_state) = &mut self.activated_state {
                         if let Some(plugin_host) = activated_state
                             .audio_graph

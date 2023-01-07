@@ -13,9 +13,9 @@ pub static DEFAULT_GARBAGE_COLLECT_INTERVAL_MS: u32 = 3_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum TimerEntryKey {
-    MainIdleTimer,
-    GarbageCollectTimer,
-    PluginRegisteredTimer { plugin_unique_id: u64, timer_id: TimerID },
+    MainIdle,
+    GarbageCollect,
+    PluginRegistered { plugin_unique_id: u64, timer_id: TimerID },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -46,12 +46,12 @@ impl EngineTimerWheel {
 
         let main_idle_interval = Duration::from_millis(u64::from(main_idle_interval_ms));
         let main_idle_entry =
-            Rc::new(TimerEntry { key: TimerEntryKey::MainIdleTimer, interval: main_idle_interval });
+            Rc::new(TimerEntry { key: TimerEntryKey::MainIdle, interval: main_idle_interval });
 
         let garbage_collect_interval =
             Duration::from_millis(u64::from(garbage_collect_interval_ms));
         let garbage_collect_entry = Rc::new(TimerEntry {
-            key: TimerEntryKey::GarbageCollectTimer,
+            key: TimerEntryKey::GarbageCollect,
             interval: garbage_collect_interval,
         });
 
@@ -81,7 +81,7 @@ impl EngineTimerWheel {
     ) {
         assert_ne!(interval_ms, 0);
 
-        let key = TimerEntryKey::PluginRegisteredTimer { plugin_unique_id, timer_id };
+        let key = TimerEntryKey::PluginRegistered { plugin_unique_id, timer_id };
         let interval = Duration::from_millis(u64::from(interval_ms));
         let new_entry = Rc::new(TimerEntry { key, interval });
 
@@ -98,7 +98,7 @@ impl EngineTimerWheel {
     }
 
     pub fn unregister_plugin_timer(&mut self, plugin_unique_id: u64, timer_id: TimerID) {
-        let key = TimerEntryKey::PluginRegisteredTimer { plugin_unique_id, timer_id };
+        let key = TimerEntryKey::PluginRegistered { plugin_unique_id, timer_id };
 
         if self.registered_plugin_entries.remove(&key).is_some() {
             if let Err(e) = self.wheel.cancel(&key) {
@@ -112,7 +112,7 @@ impl EngineTimerWheel {
             .registered_plugin_entries
             .iter()
             .filter_map(|(key, _)| {
-                if let TimerEntryKey::PluginRegisteredTimer {
+                if let TimerEntryKey::PluginRegistered {
                     plugin_unique_id: key_plugin_unique_id,
                     ..
                 } = key
@@ -129,7 +129,7 @@ impl EngineTimerWheel {
             .collect();
 
         for key in entries_to_remove.drain(..) {
-            if let TimerEntryKey::PluginRegisteredTimer {
+            if let TimerEntryKey::PluginRegistered {
                 plugin_unique_id: key_plugin_unique_id,
                 timer_id,
             } = key

@@ -160,15 +160,16 @@ impl PluginHostProcessor {
                 self.processing_state
             {
                 if self.processing_state == ProcessingState::Stopped && !has_note_in_event {
-                    if buffers.audio_in.is_empty() {
+                    // Check if all audio inputs are silent.
+
+                    // First do a quick check using the constant flags.
+                    if buffers.audio_inputs_have_silent_hint() {
                         do_process = false;
                     }
-                    // Check if all audio inputs are silent.
-                    //
-                    // First do a quick check using the constant flags.
-                    else if buffers.audio_inputs_have_silent_hint() {
-                        do_process = false;
-                    } else {
+
+                    if do_process {
+                        // If quick check didn't tell us that the buffer was silent,
+                        // then do a slow thorough check.
                         if buffers.audio_inputs_silent(proc_info.frames) {
                             do_process = false;
                         }
@@ -245,10 +246,8 @@ impl PluginHostProcessor {
         } else {
             buffers.clear_all_outputs_and_set_constant_hint(proc_info);
 
-            if state.is_active() {
-                if has_param_in_event || param_flush_requested {
-                    self.plugin_processor.param_flush(&self.in_events, &mut self.out_events);
-                }
+            if state.is_active() && (has_param_in_event || param_flush_requested) {
+                self.plugin_processor.param_flush(&self.in_events, &mut self.out_events);
             }
         }
 
@@ -358,7 +357,7 @@ impl PluginHostProcessor {
                     for i in 0..declick_frames {
                         declick -= self.bypass_declick_inc;
 
-                        out_channel.data[i] = out_channel.data[i] * declick;
+                        out_channel.data[i] *= declick;
                     }
                     if declick_frames < proc_info.frames {
                         out_channel.data[declick_frames..proc_info.frames].fill(0.0);
@@ -367,7 +366,7 @@ impl PluginHostProcessor {
                     for i in 0..declick_frames {
                         declick += self.bypass_declick_inc;
 
-                        out_channel.data[i] = out_channel.data[i] * declick;
+                        out_channel.data[i] *= declick;
                     }
                 }
 
@@ -387,7 +386,7 @@ impl PluginHostProcessor {
                     for i in 0..declick_frames {
                         declick -= self.bypass_declick_inc;
 
-                        out_channel.data[i] = out_channel.data[i] * declick;
+                        out_channel.data[i] *= declick;
                     }
                     if declick_frames < proc_info.frames {
                         out_channel.data[declick_frames..proc_info.frames].fill(0.0);
@@ -396,7 +395,7 @@ impl PluginHostProcessor {
                     for i in 0..declick_frames {
                         declick += self.bypass_declick_inc;
 
-                        out_channel.data[i] = out_channel.data[i] * declick;
+                        out_channel.data[i] *= declick;
                     }
                 }
 

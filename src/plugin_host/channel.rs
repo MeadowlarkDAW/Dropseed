@@ -38,6 +38,7 @@ impl PlugHostChannelMainThread {
     }
 
     /// Send the new processor to the process thread.
+    #[allow(clippy::too_many_arguments)] // Fix this?
     pub fn new_processor(
         &mut self,
         plugin_processor: Box<dyn PluginProcessor>,

@@ -40,7 +40,7 @@ impl ClapPluginMainThread {
 
     #[inline]
     fn id(&self) -> &str {
-        &*self.instance.shared_host_data().id
+        &self.instance.shared_host_data().id
     }
 
     fn parse_audio_ports_extension(
@@ -543,11 +543,11 @@ impl PluginMainThread for ClapPluginMainThread {
 
         let resizable = gui_ext.can_resize(instance);
 
-        if size.is_some() && resizable {
-            let size = size.unwrap();
-
-            if let Err(e) = gui_ext.set_size(instance, size) {
-                log::warn!("CLAP plugin failed to set its width and height to {:?} for its new embedded GUI: {}", size, e);
+        if resizable {
+            if let Some(size) = size {
+                if let Err(e) = gui_ext.set_size(instance, size) {
+                    log::warn!("CLAP plugin failed to set its width and height to {:?} for its new embedded GUI: {}", size, e);
+                }
             }
         }
 

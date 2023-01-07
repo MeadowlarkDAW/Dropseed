@@ -1,5 +1,6 @@
 use bitflags::bitflags;
 use clack_extensions::gui::GuiSize;
+use std::fmt;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -167,7 +168,7 @@ impl HostRequestChannelSender {
     /// Request the host to register a timer for this plugin.
     ///
     /// This will return an error if not called on the main thread.
-    pub fn register_timer(&self, period_ms: u32) -> Result<TimerID, ()> {
+    pub fn register_timer(&self, period_ms: u32) -> Result<TimerID, MainThreadError> {
         if std::thread::current().id() == self.main_thread_id {
             let timer_id = TimerID(self.next_timer_id.load(Ordering::SeqCst));
             self.next_timer_id.store(timer_id.0 + 1, Ordering::SeqCst);
@@ -181,7 +182,7 @@ impl HostRequestChannelSender {
 
             Ok(timer_id)
         } else {
-            Err(())
+            Err(MainThreadError)
         }
     }
 
@@ -224,3 +225,16 @@ pub struct HostTimerRequest {
     /// `true` = register, `false` = unregister
     pub register: bool,
 }
+
+/// This error is returned if a method that is meant to only be called
+/// on the main thread is not called on the main thread.
+#[derive(Debug, Clone, Copy)]
+pub struct MainThreadError;
+
+impl fmt::Display for MainThreadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Method was not called on the main thread")
+    }
+}
+
+impl std::error::Error for MainThreadError {}

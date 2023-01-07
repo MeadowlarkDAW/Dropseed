@@ -87,7 +87,7 @@ where
     }
 
     pub fn dest(&self) -> &T {
-        self.staged.as_ref().or_else(|| self.next.as_ref()).unwrap_or(&self.current)
+        self.staged.as_ref().or(self.next.as_ref()).unwrap_or(&self.current)
     }
 
     pub fn is_active(&self) -> bool {

@@ -119,8 +119,8 @@ impl Unit {
 
 /// An auto-smoothed parameter with an `f32` value.
 pub struct ParamF32 {
-    min: f32,
-    max: f32,
+    min_value: f32,
+    max_value: f32,
     gradient: Gradient,
     unit: Unit,
 
@@ -139,8 +139,8 @@ impl ParamF32 {
     ///
     /// * value - The initial (de-normalized) value of the parameter.
     /// * default_value - The default (de-normalized) value of the parameter.
-    /// * min - The minimum (de-normalized) value of the parameter.
-    /// * max - The maximum (de-normalized) value of the parameter.
+    /// * min_value - The minimum (de-normalized) value of the parameter.
+    /// * max_value - The maximum (de-normalized) value of the parameter.
     /// * gradient - The [`Gradient`] mapping used when converting from the normalized value
     /// in the range `[0.0, 1.0]` to the desired value. If this parameter deals with decibels,
     /// you may use `ParamF32::DEFAULT_SMOOTH_SECS` as a good default.
@@ -153,20 +153,21 @@ impl ParamF32 {
     ///
     /// [`Gradient`]: enum.Gradient.html
     /// [`Unit`]: enum.Unit.html
+    #[allow(clippy::too_many_arguments)] // Fix this?
     pub fn from_value(
         value: f32,
         default_value: f32,
-        min: f32,
-        max: f32,
+        min_value: f32,
+        max_value: f32,
         gradient: Gradient,
         unit: Unit,
         smooth_secs: f64,
         sample_rate: u32,
         max_blocksize: usize,
     ) -> (Self, ParamF32Handle) {
-        let normalized = value_to_normalized_f32(value, min, max, gradient);
+        let normalized = value_to_normalized_f32(value, min_value, max_value, gradient);
 
-        let handle_value = normalized_to_value_f32(normalized, min, max, gradient);
+        let handle_value = normalized_to_value_f32(normalized, min_value, max_value, gradient);
         let rt_value = match unit {
             Unit::Decibels => db_to_coeff_clamped_neg_90_db_f32(handle_value),
             _ => handle_value,
@@ -179,8 +180,8 @@ impl ParamF32 {
 
         (
             Self {
-                min,
-                max,
+                min_value,
+                max_value,
                 gradient,
                 unit,
                 shared_normalized: Arc::clone(&shared_normalized),
@@ -190,7 +191,14 @@ impl ParamF32 {
                 smoothed,
                 smooth_secs,
             },
-            ParamF32Handle { min, max, gradient, unit, default_value, shared_normalized },
+            ParamF32Handle {
+                min_value,
+                max_value,
+                gradient,
+                unit,
+                default_value,
+                shared_normalized,
+            },
         )
     }
 
@@ -198,8 +206,8 @@ impl ParamF32 {
     ///
     /// * normalized - The initial normalized value of the parameter in the range `[0.0, 1.0]`.
     /// * default_value - The default (de-normalized) value of the parameter.
-    /// * min - The minimum (de-normalized) value of the parameter.
-    /// * max - The maximum (de-normalized) value of the parameter.
+    /// * min_value - The minimum (de-normalized) value of the parameter.
+    /// * max_value - The maximum (de-normalized) value of the parameter.
     /// * gradient - The [`Gradient`] mapping used when converting from the normalized value
     /// in the range `[0.0, 1.0]` to the desired value. If this parameter deals with decibels,
     /// you may use `ParamF32::DEFAULT_SMOOTH_SECS` as a good default.
@@ -212,6 +220,7 @@ impl ParamF32 {
     ///
     /// [`Gradient`]: enum.Gradient.html
     /// [`Unit`]: enum.Unit.html
+    #[allow(clippy::too_many_arguments)] // Fix this?
     pub fn from_normalized(
         normalized: f32,
         default_value: f32,
@@ -238,8 +247,8 @@ impl ParamF32 {
 
         (
             Self {
-                min: min_value,
-                max: max_value,
+                min_value,
+                max_value,
                 gradient,
                 unit,
                 shared_normalized: Arc::clone(&shared_normalized),
@@ -250,8 +259,8 @@ impl ParamF32 {
                 smooth_secs,
             },
             ParamF32Handle {
-                min: min_value,
-                max: max_value,
+                min_value,
+                max_value,
                 gradient,
                 unit,
                 default_value,
@@ -263,10 +272,16 @@ impl ParamF32 {
     /// Set the (de-normalized) value of this parameter.
     pub fn set_value(&mut self, value: f32) {
         if self.value != value {
-            self.normalized = value_to_normalized_f32(value, self.min, self.max, self.gradient);
+            self.normalized =
+                value_to_normalized_f32(value, self.min_value, self.max_value, self.gradient);
             self.shared_normalized.set(self.normalized);
 
-            let v = normalized_to_value_f32(self.normalized, self.min, self.max, self.gradient);
+            let v = normalized_to_value_f32(
+                self.normalized,
+                self.min_value,
+                self.max_value,
+                self.gradient,
+            );
             self.value = match self.unit {
                 Unit::Decibels => db_to_coeff_clamped_neg_90_db_f32(v),
                 _ => v,
@@ -282,7 +297,12 @@ impl ParamF32 {
             self.normalized = normalized.clamp(0.0, 1.0);
             self.shared_normalized.set(self.normalized);
 
-            let v = normalized_to_value_f32(self.normalized, self.min, self.max, self.gradient);
+            let v = normalized_to_value_f32(
+                self.normalized,
+                self.min_value,
+                self.max_value,
+                self.gradient,
+            );
             self.value = match self.unit {
                 Unit::Decibels => db_to_coeff_clamped_neg_90_db_f32(v),
                 _ => v,
@@ -294,10 +314,12 @@ impl ParamF32 {
 
     /// Reset this parameter (without any smoothing) to the given (de-normalized) value.
     pub fn reset_from_value(&mut self, value: f32) {
-        self.normalized = value_to_normalized_f32(value, self.min, self.max, self.gradient);
+        self.normalized =
+            value_to_normalized_f32(value, self.min_value, self.max_value, self.gradient);
         self.shared_normalized.set(self.normalized);
 
-        let v = normalized_to_value_f32(self.normalized, self.min, self.max, self.gradient);
+        let v =
+            normalized_to_value_f32(self.normalized, self.min_value, self.max_value, self.gradient);
         self.value = match self.unit {
             Unit::Decibels => db_to_coeff_clamped_neg_90_db_f32(v),
             _ => v,
@@ -311,7 +333,8 @@ impl ParamF32 {
         self.normalized = normalized.clamp(0.0, 1.0);
         self.shared_normalized.set(self.normalized);
 
-        let v = normalized_to_value_f32(self.normalized, self.min, self.max, self.gradient);
+        let v =
+            normalized_to_value_f32(self.normalized, self.min_value, self.max_value, self.gradient);
         self.value = match self.unit {
             Unit::Decibels => db_to_coeff_clamped_neg_90_db_f32(v),
             _ => v,
@@ -331,7 +354,12 @@ impl ParamF32 {
         if self.normalized != new_normalized {
             self.normalized = new_normalized;
 
-            let v = normalized_to_value_f32(self.normalized, self.min, self.max, self.gradient);
+            let v = normalized_to_value_f32(
+                self.normalized,
+                self.min_value,
+                self.max_value,
+                self.gradient,
+            );
             self.value = match self.unit {
                 Unit::Decibels => db_to_coeff_clamped_neg_90_db_f32(v),
                 _ => v,
@@ -352,13 +380,13 @@ impl ParamF32 {
     }
 
     /// The minimum value of this parameter.
-    pub fn min(&self) -> f32 {
-        self.min
+    pub fn min_value(&self) -> f32 {
+        self.min_value
     }
 
     /// The maximum value of this parameter.
-    pub fn max(&self) -> f32 {
-        self.max
+    pub fn max_value(&self) -> f32 {
+        self.max_value
     }
 
     /// The [`Gradient`] mapping used when converting from the normalized value
@@ -380,13 +408,13 @@ impl ParamF32 {
     /// Convert the given value to the corresponding normalized range `[0.0, 1.0]`
     /// of this parameter.
     pub fn value_to_normalized(&self, value: f32) -> f32 {
-        value_to_normalized_f32(value, self.min, self.max, self.gradient)
+        value_to_normalized_f32(value, self.min_value, self.max_value, self.gradient)
     }
 
     /// Convert the given normalized value in the range `[0.0, 1.0]` into the
     /// corresponding value of this parameter.
     pub fn normalized_to_value(&self, normalized: f32) -> f32 {
-        normalized_to_value_f32(normalized, self.min, self.max, self.gradient)
+        normalized_to_value_f32(normalized, self.min_value, self.max_value, self.gradient)
     }
 
     /// The current normalized value in the range `[0.0, 1.0]`. This is only meant for
@@ -439,8 +467,8 @@ impl ParamF32 {
 ///
 /// [`ParamF32`]: struct.ParamF32.html
 pub struct ParamF32Handle {
-    min: f32,
-    max: f32,
+    min_value: f32,
+    max_value: f32,
     gradient: Gradient,
     unit: Unit,
     default_value: f32,
@@ -459,7 +487,12 @@ impl ParamF32Handle {
     /// Please note that this is calculated from the shared normalized value every time, so
     /// avoid calling this every frame if you can.
     pub fn value(&self) -> f32 {
-        normalized_to_value_f32(self.shared_normalized.get(), self.min, self.max, self.gradient)
+        normalized_to_value_f32(
+            self.shared_normalized.get(),
+            self.min_value,
+            self.max_value,
+            self.gradient,
+        )
     }
 
     /// The (un-normalized) default value of the parameter.
@@ -487,18 +520,19 @@ impl ParamF32Handle {
     /// if you are using this inside a plugin spec such as VST. It is intended for you use your
     /// own method for achieving this.
     pub fn set_value(&self, value: f32) {
-        let normalized = value_to_normalized_f32(value, self.min, self.max, self.gradient);
+        let normalized =
+            value_to_normalized_f32(value, self.min_value, self.max_value, self.gradient);
         self.set_normalized(normalized);
     }
 
     /// The minimum value of this parameter.
-    pub fn min(&self) -> f32 {
-        self.min
+    pub fn min_value(&self) -> f32 {
+        self.min_value
     }
 
     /// The maximum value of this parameter.
-    pub fn max(&self) -> f32 {
-        self.max
+    pub fn max_value(&self) -> f32 {
+        self.max_value
     }
 
     /// The [`Gradient`] mapping used when converting from the normalized value
@@ -520,13 +554,13 @@ impl ParamF32Handle {
     /// Convert the given value to the corresponding normalized range `[0.0, 1.0]`
     /// of this parameter.
     pub fn value_to_normalized(&self, value: f32) -> f32 {
-        value_to_normalized_f32(value, self.min, self.max, self.gradient)
+        value_to_normalized_f32(value, self.min_value, self.max_value, self.gradient)
     }
 
     /// Convert the given normalized value in the range `[0.0, 1.0]` into the
     /// corresponding value of this parameter.
     pub fn normalized_to_value(&self, normalized: f32) -> f32 {
-        normalized_to_value_f32(normalized, self.min, self.max, self.gradient)
+        normalized_to_value_f32(normalized, self.min_value, self.max_value, self.gradient)
     }
 
     /// Get the shared normalized float value.
@@ -540,8 +574,8 @@ impl ParamF32Handle {
 impl Clone for ParamF32Handle {
     fn clone(&self) -> Self {
         Self {
-            min: self.min,
-            max: self.max,
+            min_value: self.min_value,
+            max_value: self.max_value,
             gradient: self.gradient,
             unit: self.unit,
             default_value: self.default_value,
@@ -551,12 +585,17 @@ impl Clone for ParamF32Handle {
     }
 }
 
-pub fn normalized_to_value_f32(normalized: f32, min: f32, max: f32, gradient: Gradient) -> f32 {
+pub fn normalized_to_value_f32(
+    normalized: f32,
+    min_value: f32,
+    max_value: f32,
+    gradient: Gradient,
+) -> f32 {
     let normalized = normalized.clamp(0.0, 1.0);
 
     let map = |x: f32| -> f32 {
-        let range = max - min;
-        (x * range) + min
+        let range = max_value - min_value;
+        (x * range) + min_value
     };
 
     match gradient {
@@ -566,32 +605,37 @@ pub fn normalized_to_value_f32(normalized: f32, min: f32, max: f32, gradient: Gr
 
         Gradient::Exponential => {
             if normalized == 0.0 {
-                return min;
+                return min_value;
             }
 
             if normalized == 1.0 {
-                return max;
+                return max_value;
             }
 
-            let minl = min.log2();
-            let range = max.log2() - minl;
+            let minl = min_value.log2();
+            let range = max_value.log2() - minl;
             2.0f32.powf((normalized * range) + minl)
         }
     }
 }
 
-pub fn value_to_normalized_f32(value: f32, min: f32, max: f32, gradient: Gradient) -> f32 {
-    if value <= min {
+pub fn value_to_normalized_f32(
+    value: f32,
+    min_value: f32,
+    max_value: f32,
+    gradient: Gradient,
+) -> f32 {
+    if value <= min_value {
         return 0.0;
     }
 
-    if value >= max {
+    if value >= max_value {
         return 1.0;
     }
 
     let unmap = |x: f32| -> f32 {
-        let range = max - min;
-        (x - min) / range
+        let range = max_value - min_value;
+        (x - min_value) / range
     };
 
     match gradient {
@@ -600,8 +644,8 @@ pub fn value_to_normalized_f32(value: f32, min: f32, max: f32, gradient: Gradien
         Gradient::Power(exponent) => unmap(value).powf(1.0 / exponent),
 
         Gradient::Exponential => {
-            let minl = min.log2();
-            let range = max.log2() - minl;
+            let minl = min_value.log2();
+            let range = max_value.log2() - minl;
             (value.log2() - minl) / range
         }
     }
@@ -611,8 +655,8 @@ pub fn value_to_normalized_f32(value: f32, min: f32, max: f32, gradient: Gradien
 
 /// An auto-smoothed parameter with an `f64` value.
 pub struct ParamF64 {
-    min: f64,
-    max: f64,
+    min_value: f64,
+    max_value: f64,
     gradient: Gradient,
     unit: Unit,
 
@@ -631,8 +675,8 @@ impl ParamF64 {
     ///
     /// * value - The initial (de-normalized) value of the parameter.
     /// * default_value - The default (de-normalized) value of the parameter.
-    /// * min - The minimum (de-normalized) value of the parameter.
-    /// * max - The maximum (de-normalized) value of the parameter.
+    /// * min_value - The minimum (de-normalized) value of the parameter.
+    /// * max_value - The maximum (de-normalized) value of the parameter.
     /// * gradient - The [`Gradient`] mapping used when converting from the normalized value
     /// in the range `[0.0, 1.0]` to the desired value. If this parameter deals with decibels,
     /// you may use `ParamF64::DEFAULT_SMOOTH_SECS` as a good default.
@@ -645,20 +689,21 @@ impl ParamF64 {
     ///
     /// [`Gradient`]: enum.Gradient.html
     /// [`Unit`]: enum.Unit.html
+    #[allow(clippy::too_many_arguments)] // Fix this?
     pub fn from_value(
         value: f64,
         default_value: f64,
-        min: f64,
-        max: f64,
+        min_value: f64,
+        max_value: f64,
         gradient: Gradient,
         unit: Unit,
         smooth_secs: f64,
         sample_rate: u32,
         max_blocksize: usize,
     ) -> (Self, ParamF64Handle) {
-        let normalized = value_to_normalized_f64(value, min, max, gradient);
+        let normalized = value_to_normalized_f64(value, min_value, max_value, gradient);
 
-        let handle_value = normalized_to_value_f64(normalized, min, max, gradient);
+        let handle_value = normalized_to_value_f64(normalized, min_value, max_value, gradient);
         let rt_value = match unit {
             Unit::Decibels => db_to_coeff_clamped_neg_90_db_f64(handle_value),
             _ => handle_value,
@@ -671,8 +716,8 @@ impl ParamF64 {
 
         (
             Self {
-                min,
-                max,
+                min_value,
+                max_value,
                 gradient,
                 unit,
                 shared_normalized: Arc::clone(&shared_normalized),
@@ -682,7 +727,14 @@ impl ParamF64 {
                 smoothed,
                 smooth_secs,
             },
-            ParamF64Handle { min, max, gradient, unit, default_value, shared_normalized },
+            ParamF64Handle {
+                min_value,
+                max_value,
+                gradient,
+                unit,
+                default_value,
+                shared_normalized,
+            },
         )
     }
 
@@ -690,8 +742,8 @@ impl ParamF64 {
     ///
     /// * normalized - The initial normalized value of the parameter in the range `[0.0, 1.0]`.
     /// * default_value - The default (de-normalized) value of the parameter.
-    /// * min - The minimum (de-normalized) value of the parameter.
-    /// * max - The maximum (de-normalized) value of the parameter.
+    /// * min_value - The minimum (de-normalized) value of the parameter.
+    /// * max_value - The maximum (de-normalized) value of the parameter.
     /// * gradient - The [`Gradient`] mapping used when converting from the normalized value
     /// in the range `[0.0, 1.0]` to the desired value. If this parameter deals with decibels,
     /// you may use `ParamF64::DEFAULT_SMOOTH_SECS` as a good default.
@@ -704,6 +756,7 @@ impl ParamF64 {
     ///
     /// [`Gradient`]: enum.Gradient.html
     /// [`Unit`]: enum.Unit.html
+    #[allow(clippy::too_many_arguments)] // Fix this?
     pub fn from_normalized(
         normalized: f64,
         default_value: f64,
@@ -730,8 +783,8 @@ impl ParamF64 {
 
         (
             Self {
-                min: min_value,
-                max: max_value,
+                min_value,
+                max_value,
                 gradient,
                 unit,
                 shared_normalized: Arc::clone(&shared_normalized),
@@ -742,8 +795,8 @@ impl ParamF64 {
                 smooth_secs,
             },
             ParamF64Handle {
-                min: min_value,
-                max: max_value,
+                min_value,
+                max_value,
                 gradient,
                 unit,
                 default_value,
@@ -755,10 +808,16 @@ impl ParamF64 {
     /// Set the (de-normalized) value of this parameter.
     pub fn set_value(&mut self, value: f64) {
         if self.value != value {
-            self.normalized = value_to_normalized_f64(value, self.min, self.max, self.gradient);
+            self.normalized =
+                value_to_normalized_f64(value, self.min_value, self.max_value, self.gradient);
             self.shared_normalized.set(self.normalized);
 
-            let v = normalized_to_value_f64(self.normalized, self.min, self.max, self.gradient);
+            let v = normalized_to_value_f64(
+                self.normalized,
+                self.min_value,
+                self.max_value,
+                self.gradient,
+            );
             self.value = match self.unit {
                 Unit::Decibels => db_to_coeff_clamped_neg_90_db_f64(v),
                 _ => v,
@@ -774,7 +833,12 @@ impl ParamF64 {
             self.normalized = normalized.clamp(0.0, 1.0);
             self.shared_normalized.set(self.normalized);
 
-            let v = normalized_to_value_f64(self.normalized, self.min, self.max, self.gradient);
+            let v = normalized_to_value_f64(
+                self.normalized,
+                self.min_value,
+                self.max_value,
+                self.gradient,
+            );
             self.value = match self.unit {
                 Unit::Decibels => db_to_coeff_clamped_neg_90_db_f64(v),
                 _ => v,
@@ -786,10 +850,12 @@ impl ParamF64 {
 
     /// Reset this parameter (without any smoothing) to the given (de-normalized) value.
     pub fn reset_from_value(&mut self, value: f64) {
-        self.normalized = value_to_normalized_f64(value, self.min, self.max, self.gradient);
+        self.normalized =
+            value_to_normalized_f64(value, self.min_value, self.max_value, self.gradient);
         self.shared_normalized.set(self.normalized);
 
-        let v = normalized_to_value_f64(self.normalized, self.min, self.max, self.gradient);
+        let v =
+            normalized_to_value_f64(self.normalized, self.min_value, self.max_value, self.gradient);
         self.value = match self.unit {
             Unit::Decibels => db_to_coeff_clamped_neg_90_db_f64(v),
             _ => v,
@@ -803,7 +869,8 @@ impl ParamF64 {
         self.normalized = normalized.clamp(0.0, 1.0);
         self.shared_normalized.set(self.normalized);
 
-        let v = normalized_to_value_f64(self.normalized, self.min, self.max, self.gradient);
+        let v =
+            normalized_to_value_f64(self.normalized, self.min_value, self.max_value, self.gradient);
         self.value = match self.unit {
             Unit::Decibels => db_to_coeff_clamped_neg_90_db_f64(v),
             _ => v,
@@ -823,7 +890,12 @@ impl ParamF64 {
         if self.normalized != new_normalized {
             self.normalized = new_normalized;
 
-            let v = normalized_to_value_f64(self.normalized, self.min, self.max, self.gradient);
+            let v = normalized_to_value_f64(
+                self.normalized,
+                self.min_value,
+                self.max_value,
+                self.gradient,
+            );
             self.value = match self.unit {
                 Unit::Decibels => db_to_coeff_clamped_neg_90_db_f64(v),
                 _ => v,
@@ -844,13 +916,13 @@ impl ParamF64 {
     }
 
     /// The minimum value of this parameter.
-    pub fn min(&self) -> f64 {
-        self.min
+    pub fn min_value(&self) -> f64 {
+        self.min_value
     }
 
     /// The maximum value of this parameter.
-    pub fn max(&self) -> f64 {
-        self.max
+    pub fn max_value(&self) -> f64 {
+        self.max_value
     }
 
     /// The [`Gradient`] mapping used when converting from the normalized value
@@ -872,13 +944,13 @@ impl ParamF64 {
     /// Convert the given value to the corresponding normalized range `[0.0, 1.0]`
     /// of this parameter.
     pub fn value_to_normalized(&self, value: f64) -> f64 {
-        value_to_normalized_f64(value, self.min, self.max, self.gradient)
+        value_to_normalized_f64(value, self.min_value, self.max_value, self.gradient)
     }
 
     /// Convert the given normalized value in the range `[0.0, 1.0]` into the
     /// corresponding value of this parameter.
     pub fn normalized_to_value(&self, normalized: f64) -> f64 {
-        normalized_to_value_f64(normalized, self.min, self.max, self.gradient)
+        normalized_to_value_f64(normalized, self.min_value, self.max_value, self.gradient)
     }
 
     /// The current normalized value in the range `[0.0, 1.0]`. This is only meant for
@@ -931,8 +1003,8 @@ impl ParamF64 {
 ///
 /// [`ParamF64`]: struct.ParamF64.html
 pub struct ParamF64Handle {
-    min: f64,
-    max: f64,
+    min_value: f64,
+    max_value: f64,
     gradient: Gradient,
     unit: Unit,
     default_value: f64,
@@ -951,7 +1023,12 @@ impl ParamF64Handle {
     /// Please note that this is calculated from the shared normalized value every time, so
     /// avoid calling this every frame if you can.
     pub fn value(&self) -> f64 {
-        normalized_to_value_f64(self.shared_normalized.get(), self.min, self.max, self.gradient)
+        normalized_to_value_f64(
+            self.shared_normalized.get(),
+            self.min_value,
+            self.max_value,
+            self.gradient,
+        )
     }
 
     /// The (un-normalized) default value of the parameter.
@@ -979,18 +1056,19 @@ impl ParamF64Handle {
     /// if you are using this inside a plugin spec such as VST. It is intended for you use your
     /// own method for achieving this.
     pub fn set_value(&self, value: f64) {
-        let normalized = value_to_normalized_f64(value, self.min, self.max, self.gradient);
+        let normalized =
+            value_to_normalized_f64(value, self.min_value, self.max_value, self.gradient);
         self.set_normalized(normalized);
     }
 
     /// The minimum value of this parameter.
-    pub fn min(&self) -> f64 {
-        self.min
+    pub fn min_value(&self) -> f64 {
+        self.min_value
     }
 
     /// The maximum value of this parameter.
-    pub fn max(&self) -> f64 {
-        self.max
+    pub fn max_value(&self) -> f64 {
+        self.max_value
     }
 
     /// The [`Gradient`] mapping used when converting from the normalized value
@@ -1012,13 +1090,13 @@ impl ParamF64Handle {
     /// Convert the given value to the corresponding normalized range `[0.0, 1.0]`
     /// of this parameter.
     pub fn value_to_normalized(&self, value: f64) -> f64 {
-        value_to_normalized_f64(value, self.min, self.max, self.gradient)
+        value_to_normalized_f64(value, self.min_value, self.max_value, self.gradient)
     }
 
     /// Convert the given normalized value in the range `[0.0, 1.0]` into the
     /// corresponding value of this parameter.
     pub fn normalized_to_value(&self, normalized: f64) -> f64 {
-        normalized_to_value_f64(normalized, self.min, self.max, self.gradient)
+        normalized_to_value_f64(normalized, self.min_value, self.max_value, self.gradient)
     }
 
     /// Get the shared normalized float value.
@@ -1032,8 +1110,8 @@ impl ParamF64Handle {
 impl Clone for ParamF64Handle {
     fn clone(&self) -> Self {
         Self {
-            min: self.min,
-            max: self.max,
+            min_value: self.min_value,
+            max_value: self.max_value,
             gradient: self.gradient,
             unit: self.unit,
             default_value: self.default_value,
@@ -1043,12 +1121,17 @@ impl Clone for ParamF64Handle {
     }
 }
 
-pub fn normalized_to_value_f64(normalized: f64, min: f64, max: f64, gradient: Gradient) -> f64 {
+pub fn normalized_to_value_f64(
+    normalized: f64,
+    min_value: f64,
+    max_value: f64,
+    gradient: Gradient,
+) -> f64 {
     let normalized = normalized.clamp(0.0, 1.0);
 
     let map = |x: f64| -> f64 {
-        let range = max - min;
-        (x * range) + min
+        let range = max_value - min_value;
+        (x * range) + min_value
     };
 
     match gradient {
@@ -1058,32 +1141,37 @@ pub fn normalized_to_value_f64(normalized: f64, min: f64, max: f64, gradient: Gr
 
         Gradient::Exponential => {
             if normalized == 0.0 {
-                return min;
+                return min_value;
             }
 
             if normalized == 1.0 {
-                return max;
+                return max_value;
             }
 
-            let minl = min.log2();
-            let range = max.log2() - minl;
+            let minl = min_value.log2();
+            let range = max_value.log2() - minl;
             2.0f64.powf((normalized * range) + minl)
         }
     }
 }
 
-pub fn value_to_normalized_f64(value: f64, min: f64, max: f64, gradient: Gradient) -> f64 {
-    if value <= min {
+pub fn value_to_normalized_f64(
+    value: f64,
+    min_value: f64,
+    max_value: f64,
+    gradient: Gradient,
+) -> f64 {
+    if value <= min_value {
         return 0.0;
     }
 
-    if value >= max {
+    if value >= max_value {
         return 1.0;
     }
 
     let unmap = |x: f64| -> f64 {
-        let range = max - min;
-        (x - min) / range
+        let range = max_value - min_value;
+        (x - min_value) / range
     };
 
     match gradient {
@@ -1092,8 +1180,8 @@ pub fn value_to_normalized_f64(value: f64, min: f64, max: f64, gradient: Gradien
         Gradient::Power(exponent) => unmap(value).powf(1.0 / f64::from(exponent)),
 
         Gradient::Exponential => {
-            let minl = min.log2();
-            let range = max.log2() - minl;
+            let minl = min_value.log2();
+            let range = max_value.log2() - minl;
             (value.log2() - minl) / range
         }
     }
@@ -1101,8 +1189,8 @@ pub fn value_to_normalized_f64(value: f64, min: f64, max: f64, gradient: Gradien
 
 /// A parameter with an `i32` value.
 pub struct ParamI32 {
-    min: i32,
-    max: i32,
+    min_value: i32,
+    max_value: i32,
     default_value: i32,
 
     shared: Arc<AtomicI32>,
@@ -1113,21 +1201,21 @@ impl ParamI32 {
     ///
     /// * value - The initial (de-normalized) value of the parameter.
     /// * default_value - The (de-normalized) default value of the parameter.
-    /// * min - The minimum (de-normalized) value of the parameter.
-    /// * max - The maximum (de-normalized) value of the parameter.
+    /// * min_value - The minimum (de-normalized) value of the parameter.
+    /// * max_value - The maximum (de-normalized) value of the parameter.
     pub fn from_value(
         value: i32,
         default_value: i32,
-        min: i32,
-        max: i32,
+        min_value: i32,
+        max_value: i32,
     ) -> (Self, ParamI32Handle) {
-        let value = value.clamp(min, max);
+        let value = value.clamp(min_value, max_value);
 
         let shared = Arc::new(AtomicI32::new(value));
 
         (
-            Self { min, max, default_value, shared: Arc::clone(&shared) },
-            ParamI32Handle { min, max, default_value, shared },
+            Self { min_value, max_value, default_value, shared: Arc::clone(&shared) },
+            ParamI32Handle { min_value, max_value, default_value, shared },
         )
     }
 
@@ -1138,28 +1226,29 @@ impl ParamI32 {
     /// * min - The minimum (de-normalized) value of the parameter.
     /// * max - The maximum (de-normalized) value of the parameter.
     pub fn from_normalized(
-        normalized: f32,
+        normalized: f64,
         default_value: i32,
         min_value: i32,
         max_value: i32,
     ) -> (Self, ParamI32Handle) {
         let normalized = normalized.clamp(0.0, 1.0);
-        let value = ((normalized * (max_value as f32 - min_value as f32)) + min_value as f32)
-            .round() as i32;
+        let value =
+            ((normalized * f64::from(max_value - min_value)) + f64::from(min_value)).round() as i32;
 
         Self::from_value(value, default_value, min_value, max_value)
     }
 
     /// Set the (de-normalized) value of this parameter.
     pub fn set_value(&mut self, value: i32) {
-        self.shared.store(value.clamp(self.min, self.max), Ordering::Relaxed);
+        self.shared.store(value.clamp(self.min_value, self.max_value), Ordering::Relaxed);
     }
 
     /// Set the normalized value of this parameter in the range `[0.0, 1.0]`.
-    pub fn set_normalized(&mut self, normalized: f32) {
+    pub fn set_normalized(&mut self, normalized: f64) {
         let normalized = normalized.clamp(0.0, 1.0);
-        let value =
-            ((normalized * (self.max as f32 - self.min as f32)) + self.max as f32).round() as i32;
+        let value = ((normalized * f64::from(self.max_value - self.min_value))
+            + f64::from(self.max_value))
+        .round() as i32;
 
         self.set_value(value);
     }
@@ -1175,32 +1264,33 @@ impl ParamI32 {
     }
 
     /// The normalized default value of the parameter in the range `[0.0, 1.0]`.
-    pub fn default_normalized(&self) -> f32 {
+    pub fn default_normalized(&self) -> f64 {
         self.value_to_normalized(self.default_value)
     }
 
     /// The minimum value of this parameter.
-    pub fn min(&self) -> i32 {
-        self.min
+    pub fn min_value(&self) -> i32 {
+        self.min_value
     }
 
     /// The maximum value of this parameter.
-    pub fn max(&self) -> i32 {
-        self.max
+    pub fn max_value(&self) -> i32 {
+        self.max_value
     }
 
     /// Convert the given value to the corresponding normalized range `[0.0, 1.0]`
     /// of this parameter.
-    pub fn value_to_normalized(&self, value: i32) -> f32 {
-        let value = value.clamp(self.min, self.max);
-        (value - self.min) as f32 / (self.max as f32 - self.min as f32)
+    pub fn value_to_normalized(&self, value: i32) -> f64 {
+        let value = value.clamp(self.min_value, self.max_value);
+        f64::from(value - self.min_value) / f64::from(self.max_value - self.min_value)
     }
 
     /// Convert the given normalized value in the range `[0.0, 1.0]` into the
     /// corresponding value of this parameter.
-    pub fn normalized_to_value(&self, normalized: f32) -> i32 {
+    pub fn normalized_to_value(&self, normalized: f64) -> i32 {
         let normalized = normalized.clamp(0.0, 1.0);
-        ((normalized * (self.max as f32 - self.min as f32)) + self.max as f32).round() as i32
+        ((normalized * f64::from(self.max_value - self.min_value)) + f64::from(self.max_value))
+            .round() as i32
     }
 }
 
@@ -1208,8 +1298,8 @@ impl ParamI32 {
 ///
 /// [`ParamI32`]: struct.ParamI32.html
 pub struct ParamI32Handle {
-    min: i32,
-    max: i32,
+    min_value: i32,
+    max_value: i32,
     default_value: i32,
 
     shared: Arc<AtomicI32>,
@@ -1227,54 +1317,51 @@ impl ParamI32Handle {
     }
 
     /// The normalized default value of the parameter in the range `[0.0, 1.0]`.
-    pub fn default_normalized(&self) -> f32 {
+    pub fn default_normalized(&self) -> f64 {
         self.value_to_normalized(self.default_value)
     }
 
     /// Set the (de-normalized) value of this parameter.
     pub fn set_value(&mut self, value: i32) {
-        self.shared.store(value.clamp(self.min, self.max), Ordering::Relaxed);
+        self.shared.store(value.clamp(self.min_value, self.max_value), Ordering::Relaxed);
     }
 
     /// Set the normalized value of this parameter in the range `[0.0, 1.0]`.
-    pub fn set_normalized(&mut self, normalized: f32) {
-        let normalized = normalized.clamp(0.0, 1.0);
-        let value =
-            ((normalized * (self.max as f32 - self.min as f32)) + self.max as f32).round() as i32;
-
-        self.set_value(value);
+    pub fn set_normalized(&mut self, normalized: f64) {
+        self.set_value(self.normalized_to_value(normalized));
     }
 
     /// The minimum value of this parameter.
-    pub fn min(&self) -> i32 {
-        self.min
+    pub fn min_value(&self) -> i32 {
+        self.min_value
     }
 
     /// The maximum value of this parameter.
-    pub fn max(&self) -> i32 {
-        self.max
+    pub fn max_value(&self) -> i32 {
+        self.max_value
     }
 
     /// Convert the given value to the corresponding normalized range `[0.0, 1.0]`
     /// of this parameter.
-    pub fn value_to_normalized(&self, value: i32) -> f32 {
-        let value = value.clamp(self.min, self.max);
-        (value - self.min) as f32 / (self.max as f32 - self.min as f32)
+    pub fn value_to_normalized(&self, value: i32) -> f64 {
+        let value = value.clamp(self.min_value, self.max_value);
+        f64::from(value - self.min_value) / f64::from(self.max_value - self.min_value)
     }
 
     /// Convert the given normalized value in the range `[0.0, 1.0]` into the
     /// corresponding value of this parameter.
-    pub fn normalized_to_value(&self, normalized: f32) -> i32 {
+    pub fn normalized_to_value(&self, normalized: f64) -> i32 {
         let normalized = normalized.clamp(0.0, 1.0);
-        ((normalized * (self.max as f32 - self.min as f32)) + self.max as f32).round() as i32
+        ((normalized * f64::from(self.max_value - self.min_value)) + f64::from(self.max_value))
+            .round() as i32
     }
 }
 
 impl Clone for ParamI32Handle {
     fn clone(&self) -> Self {
         Self {
-            min: self.min,
-            max: self.max,
+            min_value: self.min_value,
+            max_value: self.max_value,
             default_value: self.default_value,
             shared: Arc::clone(&self.shared),
         }

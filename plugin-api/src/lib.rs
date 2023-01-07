@@ -17,7 +17,7 @@ mod process_info;
 mod processor;
 mod save_state;
 
-pub use buffer::{AudioPortBuffer, AudioPortBufferMut};
+pub use buffer::{AudioPortBuffer, AudioPortBufferMut, BufferInner, BufferRef, BufferRefMut};
 pub use descriptor::PluginDescriptor;
 pub use ext::params::ParamID;
 pub use factory::PluginFactory;

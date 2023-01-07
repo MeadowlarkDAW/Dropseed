@@ -26,6 +26,7 @@ pub(crate) struct DSEngineProcessThread {
 }
 
 impl DSEngineProcessThread {
+    #[allow(clippy::too_many_arguments)] // Fix this?
     pub(super) fn new(
         audio_to_process_channel: AudioToProcessChannelRX,
         process_to_audio_channel: ProcessToAudioChannelTX,
@@ -116,7 +117,7 @@ impl DSEngineProcessThread {
             self.audio_out_temp_buffer.resize(num_frames * self.graph_audio_out_channels, 0.0);
 
             self.schedule
-                .process_interleaved(&*self.audio_in_temp_buffer, &mut *self.audio_out_temp_buffer);
+                .process_interleaved(&self.audio_in_temp_buffer, &mut self.audio_out_temp_buffer);
 
             if self.hard_clip_outputs {
                 for smp in self.audio_out_temp_buffer.iter_mut() {

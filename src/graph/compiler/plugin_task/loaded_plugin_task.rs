@@ -15,6 +15,7 @@ use super::super::super::error::GraphCompilerError;
 use super::super::super::shared_pools::GraphSharedPools;
 use super::super::super::{PortChannelID, PortType};
 
+#[allow(clippy::too_many_arguments)] // Fix this?
 pub(super) fn construct_loaded_plugin_task(
     scheduled_node: &ScheduledNode,
     shared_pool: &GraphSharedPools,

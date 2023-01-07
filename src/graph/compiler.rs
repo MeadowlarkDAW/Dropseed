@@ -17,6 +17,7 @@ use super::error::GraphCompilerError;
 use super::shared_pools::GraphSharedPools;
 use super::{PluginInstanceID, PortType, ProcessorSchedule};
 
+#[allow(clippy::too_many_arguments)] // Fix this?
 pub(super) fn compile_graph(
     shared_pool: &mut GraphSharedPools,
     graph_helper: &mut AudioGraphHelper,
