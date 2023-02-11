@@ -1,4 +1,4 @@
-use atomic_refcell::{AtomicRef, AtomicRefMut};
+use crate::plugin_host::external::clap::process::BorrowedClapAudioBuffers;
 use clack_extensions::audio_ports::{AudioPortFlags, AudioPortInfoBuffer, PluginAudioPorts};
 use clack_extensions::gui::GuiApiType;
 use clack_extensions::note_ports::{NotePortInfoBuffer, PluginNotePorts};
@@ -6,7 +6,6 @@ use clack_extensions::timer::TimerId;
 use clack_host::events::io::{InputEvents, OutputEvents};
 use clack_host::instance::processor::PluginAudioProcessor;
 use clack_host::instance::{PluginAudioConfiguration, PluginInstance};
-use dropseed_plugin_api::buffer::{BufferInner, RawAudioChannelBuffers};
 use dropseed_plugin_api::ext::audio_ports::{AudioPortInfo, MainPortsLayout, PluginAudioPortsExt};
 use dropseed_plugin_api::ext::gui::{EmbeddedGuiInfo, GuiSize};
 use dropseed_plugin_api::ext::note_ports::{NotePortInfo, PluginNotePortsExt};
@@ -16,13 +15,12 @@ use dropseed_plugin_api::{
     ProcInfo, ProcessStatus,
 };
 use raw_window_handle::RawWindowHandle;
-use smallvec::SmallVec;
 use std::error::Error;
 use std::ffi::{CStr, CString};
 use std::io::Cursor;
 use std::mem::MaybeUninit;
 
-use super::process::ClapProcess;
+use super::process::ClapAudioPorts;
 use super::*;
 
 #[derive(Default)]
@@ -252,7 +250,7 @@ impl PluginMainThread for ClapPluginMainThread {
                 // `PluginHostMainThread` will always call
                 // `ClapPluginMainThread::audio_ports_ext()` before activating
                 // a plugin, so `audio_port_channels` info should be correct.
-                process: ClapProcess::new(&self.audio_port_channels),
+                audio_ports: ClapAudioPorts::new(&self.audio_port_channels),
             }),
             internal_handle: None,
         })
@@ -656,7 +654,7 @@ impl PluginMainThread for ClapPluginMainThread {
 
 struct ClapPluginProcessor {
     audio_processor: PluginAudioProcessor<ClapHost>,
-    process: ClapProcess,
+    audio_ports: ClapAudioPorts,
 }
 
 impl PluginProcessor for ClapPluginProcessor {
@@ -666,7 +664,8 @@ impl PluginProcessor for ClapPluginProcessor {
             &*self.audio_processor.shared_host_data().id
         );
 
-        self.audio_processor.start_processing().map_err(|e| e.into())
+        self.audio_processor.start_processing()?;
+        Ok(())
     }
 
     fn stop_processing(&mut self) {
@@ -689,86 +688,25 @@ impl PluginProcessor for ClapPluginProcessor {
         in_events: &EventBuffer,
         out_events: &mut EventBuffer,
     ) -> ProcessStatus {
-        let (audio_in, mut audio_out) = self.process.update_buffers(buffers);
+        let mut borrowed = BorrowedClapAudioBuffers::borrow_all(buffers);
 
-        let mut in_events = InputEvents::from_buffer(in_events);
+        let (audio_in, mut audio_out) = self.audio_ports.create_inout_buffers(&mut borrowed);
+
+        let in_events = InputEvents::from_buffer(in_events);
         let mut out_events = OutputEvents::from_buffer(out_events);
 
-        let res = {
-            // In debug mode, borrow all of the atomic ref cells to properly use the
-            // safety checks, since external plugins just use the raw pointer to each
-            // buffer.
-            //#[cfg(debug_assertions)]
-            let (mut input_refs_f32, mut input_refs_f64, mut output_refs_f32, mut output_refs_f64) = {
-                let mut input_refs_f32: SmallVec<[AtomicRef<'_, BufferInner<f32>>; 32]> =
-                    SmallVec::new();
-                let mut input_refs_f64: SmallVec<[AtomicRef<'_, BufferInner<f64>>; 32]> =
-                    SmallVec::new();
-                let mut output_refs_f32: SmallVec<[AtomicRefMut<'_, BufferInner<f32>>; 32]> =
-                    SmallVec::new();
-                let mut output_refs_f64: SmallVec<[AtomicRefMut<'_, BufferInner<f64>>; 32]> =
-                    SmallVec::new();
+        // TODO: handle transport & timer
+        let res = self.audio_processor.ensure_processing_started().unwrap().process(
+            &audio_in,
+            &mut audio_out,
+            &in_events,
+            &mut out_events,
+            proc_info.steady_time,
+            Some(proc_info.frames),
+            None,
+        );
 
-                for in_port in buffers.audio_in.iter() {
-                    match &in_port._raw_channels {
-                        RawAudioChannelBuffers::F32(buffers) => {
-                            for b in buffers.iter() {
-                                input_refs_f32.push(b.borrow());
-                            }
-                        }
-                        RawAudioChannelBuffers::F64(buffers) => {
-                            for b in buffers.iter() {
-                                input_refs_f64.push(b.borrow());
-                            }
-                        }
-                    }
-                }
-
-                for out_port in buffers.audio_out.iter() {
-                    match &out_port._raw_channels {
-                        RawAudioChannelBuffers::F32(buffers) => {
-                            for b in buffers.iter() {
-                                output_refs_f32.push(b.borrow_mut());
-                            }
-                        }
-                        RawAudioChannelBuffers::F64(buffers) => {
-                            for b in buffers.iter() {
-                                output_refs_f64.push(b.borrow_mut());
-                            }
-                        }
-                    }
-                }
-
-                (input_refs_f32, input_refs_f64, output_refs_f32, output_refs_f64)
-            };
-
-            // TODO: handle transport & timer
-            let res = self
-                .audio_processor
-                .as_started_mut()
-                .expect("Audio Processor is not started")
-                .process(
-                    &audio_in,
-                    &mut audio_out,
-                    &mut in_events,
-                    &mut out_events,
-                    proc_info.steady_time,
-                    Some(proc_info.frames),
-                    None,
-                );
-
-            // TODO: Sync audio output constant flags.
-
-            //#[cfg(debug_assertions)]
-            {
-                input_refs_f32.clear();
-                input_refs_f64.clear();
-                output_refs_f32.clear();
-                output_refs_f64.clear();
-            }
-
-            res
-        };
+        self.audio_ports.update_output_constant_flags(&mut borrowed);
 
         use clack_host::process::ProcessStatus::*;
         match res {

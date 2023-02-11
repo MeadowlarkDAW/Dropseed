@@ -9,11 +9,11 @@ use dropseed_plugin_api::HostRequestChannelSender;
 use dropseed_plugin_api::{
     HostInfo, PluginDescriptor, PluginFactory, PluginInstanceID, PluginMainThread,
 };
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::path::PathBuf;
 
 pub(crate) struct ClapPluginFactory {
-    pub clap_version: clack_host::version::ClapVersion,
+    pub clap_version: clack_host::utils::ClapVersion,
 
     bundle: PluginBundle,
     descriptor: PluginDescriptor,
@@ -47,6 +47,7 @@ impl PluginFactory for ClapPluginFactory {
 
         // TODO: this is a little wasteful, the PluginHost should be able to fit somewhere else
         let host = host_info.clack_host_info.clone();
+        let clap_plugin_id = CString::new(self.id.as_bytes()).map_err(|e| e.to_string())?;
 
         let raw_plugin = match PluginInstance::new(
             |_| {
@@ -60,11 +61,11 @@ impl PluginFactory for ClapPluginFactory {
             },
             |shared| ClapHostMainThread::new(shared),
             &self.bundle,
-            self.id.as_bytes(),
+            &clap_plugin_id,
             &host,
         ) {
             Ok(plugin) => plugin,
-            Err(e) => return Err(format!("{}", e)),
+            Err(e) => return Err(e.to_string()),
         };
 
         Ok(Box::new(ClapPluginMainThread::new(raw_plugin)?))
@@ -127,7 +128,7 @@ pub(crate) fn entry_init(
 }
 
 fn parse_clap_plugin_descriptor(
-    raw: Option<clack_host::bundle::PluginDescriptor>,
+    raw: Option<clack_host::factory::PluginDescriptor>,
     plugin_path: &PathBuf,
     plugin_index: usize,
 ) -> Result<PluginDescriptor, String> {

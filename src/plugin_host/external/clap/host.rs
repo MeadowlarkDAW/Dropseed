@@ -3,28 +3,25 @@ use basedrop::Shared;
 use clack_extensions::audio_ports::HostAudioPorts;
 use clack_extensions::gui::{HostGui, PluginGui};
 use clack_extensions::latency::{HostLatency, PluginLatency};
-use clack_extensions::log::Log;
+use clack_extensions::log::HostLog;
 use clack_extensions::params::{HostParams, PluginParams};
 use clack_extensions::state::PluginState;
 use clack_extensions::thread_check::ThreadCheck;
 use clack_extensions::timer::{HostTimer, PluginTimer};
-use clack_host::events::io::{EventBuffer, InputEvents, OutputEvents};
-use clack_host::extensions::HostExtensions;
-use clack_host::host::{Host, HostAudioProcessor, HostMainThread, HostShared};
-use clack_host::plugin::{PluginAudioProcessorHandle, PluginMainThreadHandle, PluginSharedHandle};
+use clack_host::prelude::*;
 use dropseed_plugin_api::HostRequestChannelSender;
 use dropseed_plugin_api::{HostRequestFlags, PluginInstanceID};
 
 pub struct ClapHost;
 
 impl<'a> Host<'a> for ClapHost {
-    type AudioProcessor = ClapHostAudioProcessor<'a>;
     type Shared = ClapHostShared<'a>;
     type MainThread = ClapHostMainThread<'a>;
+    type AudioProcessor = ClapHostAudioProcessor<'a>;
 
     fn declare_extensions(builder: &mut HostExtensions<Self>, _shared: &Self::Shared) {
         builder
-            .register::<Log>()
+            .register::<HostLog>()
             .register::<ThreadCheck>()
             .register::<HostAudioPorts>()
             .register::<HostParams>()

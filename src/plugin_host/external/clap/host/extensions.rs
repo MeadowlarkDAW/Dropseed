@@ -1,13 +1,13 @@
 use clack_extensions::audio_ports::{HostAudioPortsImplementation, RescanType};
 use clack_extensions::gui::{GuiError, GuiSize, HostGuiImplementation};
 use clack_extensions::latency::HostLatencyImpl;
-use clack_extensions::log::implementation::HostLog;
+use clack_extensions::log::HostLogImpl;
 use clack_extensions::log::LogSeverity;
 use clack_extensions::note_ports::{
     HostNotePortsImplementation, NoteDialects, NotePortRescanFlags,
 };
 use clack_extensions::params::{
-    HostParamsImplementation, HostParamsImplementationMainThread, ParamClearFlags, ParamRescanFlags,
+    HostParamsImplMainThread, HostParamsImplShared, ParamClearFlags, ParamRescanFlags,
 };
 use clack_extensions::thread_check::host::ThreadCheckImplementation;
 use clack_extensions::timer::{HostTimerImpl, TimerError, TimerId};
@@ -15,7 +15,7 @@ use dropseed_plugin_api::HostRequestFlags;
 
 use super::{ClapHostMainThread, ClapHostShared};
 
-impl<'a> HostLog for ClapHostShared<'a> {
+impl<'a> HostLogImpl for ClapHostShared<'a> {
     fn log(&self, severity: LogSeverity, message: &str) {
         // TODO: Make sure that the log and print methods don't allocate on the current thread.
         // If they do, then we need to come up with a realtime-safe way to print to the terminal.
@@ -97,14 +97,14 @@ impl<'a> HostNotePortsImplementation for ClapHostMainThread<'a> {
     }
 }
 
-impl<'a> HostParamsImplementation for ClapHostShared<'a> {
+impl<'a> HostParamsImplShared for ClapHostShared<'a> {
     #[inline]
     fn request_flush(&self) {
         self.host_request.request(HostRequestFlags::FLUSH_PARAMS);
     }
 }
 
-impl<'a> HostParamsImplementationMainThread for ClapHostMainThread<'a> {
+impl<'a> HostParamsImplMainThread for ClapHostMainThread<'a> {
     fn rescan(&mut self, flags: ParamRescanFlags) {
         if !self.shared.thread_ids.is_main_thread() {
             log::warn!("Plugin called clap_host_params->rescan() not in the main thread");
