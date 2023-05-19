@@ -1,0 +1,11 @@
+[package]
+name = "dropseed_graph"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+dropseed_core = { path = "../dropseed_core" }
+log = "0.4"
+rtrb = "0.2"

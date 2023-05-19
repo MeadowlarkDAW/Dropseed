@@ -14,6 +14,13 @@ readme = "README.md"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [workspace]
+members = [
+    "dropseed_core",
+    "dropseed_daw_nodes",
+    "dropseed_graph",
+    "dropseed_io",
+    "examples/host-example"
+]
 
 [features]
 
