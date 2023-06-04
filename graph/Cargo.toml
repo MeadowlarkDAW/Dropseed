@@ -1,0 +1,22 @@
+[package]
+name = "dropseed_graph"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+default = ["note-data"]
+note-data = []
+c-bindings = []
+clap-hosting = []
+external-plugin-guis = []
+
+[dependencies]
+dropseed_core = { path = "../core" }
+clap-sys = { git = "https://github.com/glowcoil/clap-sys.git", rev = "f1e9adff750fc5a5606200a039e9894f9c3b26ab" }
+log = "0.4"
+rtrb = "0.2"
+bitflags = "2.3"
+smallvec = "1.10"
+basedrop = "0.1"

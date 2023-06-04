@@ -8,9 +8,7 @@ pub struct DsGraphAudioThr {
 
 impl DsGraphAudioThr {
     pub(crate) fn new(from_main_rx: Consumer<MainToAudioMsg>) -> Self {
-        Self {
-            from_main_rx,
-        }
+        Self { from_main_rx }
     }
 
     /// Returns `true` if the corresponding `DsGraphMainThr` struct was dropped.

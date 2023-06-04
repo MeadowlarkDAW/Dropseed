@@ -1,19 +1,16 @@
 use crate::channel::MainToAudioMsg;
 
+use dropseed_core::RtGCHandle;
 use rtrb::Producer;
-use dropseed_core::GCHandle;
 
 pub struct DsGraphMainThr {
     to_audio_tx: Producer<MainToAudioMsg>,
-    gc_handle: GCHandle,
+    gc: RtGCHandle,
 }
 
 impl DsGraphMainThr {
-    pub(crate) fn new(to_audio_tx: Producer<MainToAudioMsg>, gc_handle: GCHandle) -> Self {
-        Self {
-            to_audio_tx,
-            gc_handle
-        }
+    pub(crate) fn new(to_audio_tx: Producer<MainToAudioMsg>, gc: RtGCHandle) -> Self {
+        Self { to_audio_tx, gc }
     }
 
     /// Returns `true` if the corresponding `DsGraphAudioThr` struct was dropped.

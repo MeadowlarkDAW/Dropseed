@@ -15,10 +15,9 @@ readme = "README.md"
 
 [workspace]
 members = [
-    "dropseed_core",
-    "dropseed_daw_nodes",
-    "dropseed_graph",
-    "dropseed_io",
+    "core",
+    "graph",
+    "host",
     "examples/host-example"
 ]
 

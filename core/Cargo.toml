@@ -1,11 +1,12 @@
 [package]
-name = "dropseed_graph"
+name = "dropseed_core"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-dropseed_core = { path = "../dropseed_core" }
+clap-sys = { git = "https://github.com/robbert-vdh/clap-sys.git", branch = "master" }
+basedrop = "0.1"
 log = "0.4"
-rtrb = "0.2"
+bitflags = "2.3"
